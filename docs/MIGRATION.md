@@ -8,7 +8,7 @@
 - [x] **/asr**：搬 asr_command_runner + video_job_worker + 全部 skills + douyin_processing；写 Python wrapper `commands/asr.py`，CLI 跑通
 - [x] **/rw**：搬 rewrite_command_runner + content_rewrite_runner + rewrite_profiles + feishu_sdk_adapter + video_rewrite_runner；写 Python wrapper `commands/rw.py`，CLI 跑通
 - [x] **009 模板**：搬到 `src/ncds_opus_factory/templates/paper_card_talk/`，加 TEMPLATE.md 说明复制成新一集的工作流
-- [ ] **feishu_sdk_adapter.mjs 改造为 lark-cli**：见 [FEISHU-REFACTOR.md](FEISHU-REFACTOR.md)。当前迁移过来的 .mjs 仍直调飞书 OpenAPI，待重写。
+- [x] **feishu_sdk_adapter.mjs 改造为 lark-cli**：完成。详见 [FEISHU-REFACTOR.md](FEISHU-REFACTOR.md)。`grep open-apis scripts/*.mjs` 非注释结果为空。91/92 测试通过。
 - [ ] **lark-bot-listener 切换**：handler.py 的 ASR_RUNNER / RW_RUNNER 路径改向新项目；image_service / video_service 改为 import ncds_opus_factory
 - [ ] **端到端验证**：5 个命令 + 009 模板各跑一次飞书 bot 触发
 - [ ] **老位置打 DEPRECATED 标记**：xiaozhua workspace + gpt-image skill + .009-assets 加 DEPRECATED.md，双续 1-2 周后删

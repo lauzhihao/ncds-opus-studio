@@ -1,23 +1,31 @@
-import { access } from 'node:fs/promises';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+// feishu_sdk_adapter — 仅作为兼容层存在。
+//
+// 本项目硬约束：不直接调用任何飞书 OpenAPI；所有飞书 IO 都走 `lark-cli` 子进程。
+// 历史代码里大量调用本模块导出的函数（createDoc / createDriveFolder / addMemberPermission
+// 等等），为减少调用方改动，这些导出名都保留下来，内部实现委托给 ./lark_cli.mjs。
+//
+// 关键变化：
+//   - createFeishuClient(...) 不再创建 Lark.Client 实例；返回一个仅含 {asIdentity, domain}
+//     的轻对象。后续所有 SDK 方法（client.drive.*）都不再使用——业务函数自己 spawn lark-cli。
+//   - 老 SDK 调用的入参里那些 appId / appSecret 等飞书凭据**不会被使用**：lark-cli 自管账号
+//     凭据（通过 lark-cli auth login）。如果需要切换 bot 身份，配置 lark-cli 而非传 client。
+//
+// 兼容性优先：所有函数保留原签名（含 client 参数）和返回结构。
 
-const GLOBAL_NODE_MODULE_CANDIDATES = [
-  process.env.OPENCLAW_GLOBAL_NODE_MODULES,
-  '/opt/homebrew/lib/node_modules',
-  '/usr/local/lib/node_modules',
-].filter(Boolean);
-
-const SDK_ENTRY_SUFFIXES = [
-  ['lib', 'index.js'],
-  ['es', 'index.js'],
-];
-
-const SDK_PACKAGE_ROOT_CANDIDATES = [
-  ['openclaw', 'dist', 'extensions', 'feishu', 'node_modules', '@larksuiteoapi', 'node-sdk'],
-  ['@openclaw', 'feishu', 'node_modules', '@larksuiteoapi', 'node-sdk'],
-  ['openclaw', 'node_modules', '@larksuiteoapi', 'node-sdk'],
-];
+import {
+  larkCli,
+  sendImTextMessage,
+  createDocxDocument,
+  appendMarkdownToDocx,
+  fetchDocxContent,
+  createDriveFolder as createDriveFolderCli,
+  uploadFileToDrive,
+  listDriveFolder as listDriveFolderCli,
+  patchPublicPermission,
+  addMemberPermission as addMemberPermissionCli,
+  createTask as createTaskCli,
+  patchTask as patchTaskCli,
+} from './lark_cli.mjs';
 
 const PUBLIC_PERMISSION_TYPES = new Set([
   'doc',
@@ -30,6 +38,8 @@ const PUBLIC_PERMISSION_TYPES = new Set([
   'minutes',
   'slides',
 ]);
+
+// ---------------- 纯函数（无副作用，方便单测） ----------------
 
 export function resolveFeishuApiBase(domain) {
   if (domain === 'lark') {
@@ -75,195 +85,165 @@ export function normalizePublicPermissionType(type) {
   return PUBLIC_PERMISSION_TYPES.has(type) ? type : null;
 }
 
-export function buildSdkEntryCandidates(globalNodeModuleRoots = GLOBAL_NODE_MODULE_CANDIDATES) {
-  return [...new Set(globalNodeModuleRoots.flatMap((root) => (
-    SDK_PACKAGE_ROOT_CANDIDATES.flatMap((segments) => (
-      SDK_ENTRY_SUFFIXES.map((suffix) => path.join(root, ...segments, ...suffix))
-    ))
-  )))];
+// 历史兼容：原本用于定位 @larksuiteoapi/node-sdk 入口；现在不再加载 SDK，返回空数组。
+export function buildSdkEntryCandidates(_globalNodeModuleRoots = []) {
+  return [];
 }
 
-async function resolveSdkEntry() {
-  const candidates = buildSdkEntryCandidates();
+// ---------------- "客户端"（实际是个无状态描述符） ----------------
 
-  for (const candidate of candidates) {
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {}
-  }
-
-  throw new Error('Unable to locate @larksuiteoapi/node-sdk from the OpenClaw installation');
-}
-
-let larkSdkPromise;
-
-async function loadLarkSdk() {
-  if (!larkSdkPromise) {
-    larkSdkPromise = resolveSdkEntry().then((entry) => import(pathToFileURL(entry).href));
-  }
-  return larkSdkPromise;
-}
-
-function resolveSdkDomain(Lark, domain) {
-  if (domain === 'lark') {
-    return Lark.Domain.Lark;
-  }
-  if (domain === 'feishu' || !domain) {
-    return Lark.Domain.Feishu;
-  }
-  return domain.replace(/\/+$/, '');
-}
-
-export async function createFeishuClient(options) {
-  const Lark = await loadLarkSdk();
-  return new Lark.Client({
-    appId: options.appId,
-    appSecret: options.appSecret,
-    appType: Lark.AppType.SelfBuild,
-    domain: resolveSdkDomain(Lark, options.domain),
-  });
-}
-
-export async function getRootFolderToken(client) {
-  const domain = client.domain ?? 'https://open.feishu.cn';
-  const res = await client.httpInstance.get(`${domain}/open-apis/drive/explorer/v2/root_folder/meta`);
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? 'Failed to get root folder');
-  }
-  const token = res.data?.token;
-  if (!token) {
-    throw new Error('Root folder token not found');
-  }
-  return token;
-}
-
-export async function createDriveFolder(client, name, folderToken) {
-  const effectiveToken = folderToken && folderToken !== '0' ? folderToken : '0';
-  const res = await client.drive.file.createFolder({
-    data: {
-      name,
-      folder_token: effectiveToken,
-    },
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? 'Failed to create drive folder');
-  }
+export async function createFeishuClient(options = {}) {
   return {
-    token: res.data?.token,
-    url: res.data?.url,
+    asIdentity: options.asIdentity || 'bot',
+    domain: resolveFeishuApiBase(options.domain),
+    docBase: resolveFeishuDocBase(options.domain),
+    // 保留入参用于审计；lark-cli 不会用这些去鉴权。
+    appId: options.appId ?? null,
+    accountId: options.accountId ?? null,
   };
 }
 
-export async function listDriveFolder(client, folderToken) {
-  const res = await client.drive.file.list({
-    params: folderToken ? { folder_token: folderToken } : {},
+function clientIdentity(client) {
+  return (client && client.asIdentity) || 'bot';
+}
+
+// ---------------- 业务函数（与老 API 同签名） ----------------
+
+export async function getRootFolderToken(client) {
+  const list = await listDriveFolderCli({ asIdentity: clientIdentity(client) });
+  // 注意：lark-cli +file-list 返回当前用户/机器人的根目录内容；
+  // 老 SDK 的 root_folder/meta 返回的是 root folder token 本身（不同语义）。
+  // 上游 worker 调用此函数仅是为了拿到一个 fallback token，这里返回 '0' 表示「root」更稳。
+  // 真实 token 可在 lark-cli +file-list 输出的 parent_token 字段里找，但这里保持原行为。
+  return list?.parent_token || '0';
+}
+
+export async function createDriveFolder(client, name, folderToken) {
+  const res = await createDriveFolderCli({
+    name,
+    parentFolderToken: folderToken,
+    asIdentity: clientIdentity(client),
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? 'Failed to list drive folder');
+  const token = res?.token || res?.data?.token;
+  const url = res?.url || res?.data?.url;
+  if (!token) {
+    throw new Error('Failed to create drive folder (no token in response)');
   }
-  return res.data?.files || [];
+  return { token, url };
+}
+
+export async function listDriveFolder(client, folderToken) {
+  const res = await listDriveFolderCli({
+    folderToken,
+    asIdentity: clientIdentity(client),
+  });
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res?.files)) return res.files;
+  if (Array.isArray(res?.data?.files)) return res.data.files;
+  return [];
 }
 
 export async function getUploadedFileInfo(client, folderToken, fileToken) {
   const files = await listDriveFolder(client, folderToken);
-  return files.find((item) => item.token === fileToken) || null;
+  return files.find((item) => item.token === fileToken || item.file_token === fileToken) || null;
 }
 
 export async function setOrgReadablePermission(client, token, type) {
   const normalizedType = normalizePublicPermissionType(type);
   if (!normalizedType) {
-    return {
-      skipped: true,
-      reason: `public permission unsupported for type: ${type}`,
-    };
+    return { skipped: true, reason: `public permission unsupported for type: ${type}` };
   }
-
-  const res = await client.drive.permissionPublic.patch({
-    path: { token },
-    params: { type: normalizedType },
+  const res = await patchPublicPermission({
+    token,
+    type: normalizedType,
     data: buildPublicPermissionData(),
+    asIdentity: clientIdentity(client),
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? `Failed to update public permission for ${normalizedType}`);
-  }
-  return {
-    skipped: false,
-    permission: res.data?.permission_public,
-  };
+  return { skipped: false, permission: res?.permission_public ?? res?.data?.permission_public };
 }
 
 export async function setOrgEditablePermission(client, token, type) {
   const normalizedType = normalizePublicPermissionType(type);
   if (!normalizedType) {
-    return {
-      skipped: true,
-      reason: `public permission unsupported for type: ${type}`,
-    };
+    return { skipped: true, reason: `public permission unsupported for type: ${type}` };
   }
-
-  const res = await client.drive.permissionPublic.patch({
-    path: { token },
-    params: { type: normalizedType },
+  const res = await patchPublicPermission({
+    token,
+    type: normalizedType,
     data: buildOrgEditablePermissionData(),
+    asIdentity: clientIdentity(client),
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? `Failed to update editable permission for ${normalizedType}`);
-  }
-  return {
-    skipped: false,
-    permission: res.data?.permission_public,
-  };
+  return { skipped: false, permission: res?.permission_public ?? res?.data?.permission_public };
 }
 
 export async function addMemberPermission(client, token, fileType, memberId, perm = 'edit') {
-  const res = await client.drive.permissionMember.create({
-    path: { token },
-    params: { type: fileType, need_notification: false },
-    data: {
-      member_type: 'openid',
-      member_id: memberId,
-      perm,
-    },
+  const res = await addMemberPermissionCli({
+    token,
+    type: fileType,
+    memberId,
+    perm,
+    asIdentity: clientIdentity(client),
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? 'Failed to add member permission');
-  }
-  return res.data?.member || null;
+  return res?.member ?? res?.data?.member ?? null;
 }
 
 export async function createDoc(client, title, folderToken) {
-  const res = await client.docx.document.create({
-    data: { title, folder_token: folderToken },
+  const res = await createDocxDocument({
+    title,
+    folderToken,
+    asIdentity: clientIdentity(client),
   });
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? 'Failed to create docx document');
-  }
-  const doc = res.data?.document;
-  if (!doc?.document_id) {
+  // lark-cli 输出结构兼容多种 shape
+  const documentId = res?.document?.document_id ?? res?.document_id ?? res?.data?.document?.document_id;
+  if (!documentId) {
     throw new Error('Document creation succeeded but no document_id was returned');
   }
   return {
-    documentId: doc.document_id,
-    title: doc.title,
+    documentId,
+    title: res?.document?.title ?? res?.title ?? title,
   };
 }
 
 export async function createTask(client, payload) {
-  const res = await client.task.v2.task.create(payload);
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? 'Failed to create task');
-  }
-  return res.data ?? {};
+  const data = payload?.data ?? payload;
+  const res = await createTaskCli({ data, asIdentity: clientIdentity(client) });
+  return res?.data ?? res ?? {};
 }
 
 export async function patchTask(client, taskGuid, payload) {
-  const res = await client.task.v2.task.patch({
-    path: { task_guid: taskGuid },
-    ...payload,
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg ?? 'Failed to update task');
-  }
-  return res.data ?? {};
+  const data = payload?.data ?? payload;
+  const res = await patchTaskCli({ taskGuid, data, asIdentity: clientIdentity(client) });
+  return res?.data ?? res ?? {};
 }
+
+// ---------------- 新增导出：worker 直调 feishuApi 的场景 ----------------
+// 这些是为了让 video_job_worker.mjs 把直调改为「通过 adapter」。
+
+export async function sendImMessage({ chatId, userId, text, asIdentity = 'bot', idempotencyKey } = {}) {
+  return sendImTextMessage({ chatId, userId, text, asIdentity, idempotencyKey });
+}
+
+export async function uploadDriveFile({ filePath, parentFolderToken, name, asIdentity = 'bot' } = {}) {
+  return uploadFileToDrive({ filePath, parentFolderToken, name, asIdentity });
+}
+
+export async function writeMarkdownToDocx({ docId, markdown, mode = 'append', asIdentity = 'bot' } = {}) {
+  return appendMarkdownToDocx({ docId, markdown, mode, asIdentity });
+}
+
+export async function readDocxContent({ docId, asIdentity = 'bot' } = {}) {
+  const res = await fetchDocxContent({ docId, asIdentity });
+  // lark-cli docs +fetch v2 输出形如 { content: "..." } 或 { data: { content: "..." } }，
+  // 兼容多种 shape。
+  const content =
+    (typeof res === 'string' ? res : null) ||
+    res?.content ||
+    res?.markdown ||
+    res?.data?.content ||
+    res?.data?.markdown ||
+    '';
+  return content;
+}
+
+// 透出底层 helper，便于个别场景拼装定制命令
+export { larkCli };

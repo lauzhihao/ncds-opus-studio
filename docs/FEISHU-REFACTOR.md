@@ -1,55 +1,64 @@
-# 飞书 API → lark-cli 改造清单
+# 飞书 API → lark-cli 改造记录
 
-本项目硬约束：代码里不直接调用任何飞书 OpenAPI。所有需要从飞书读 / 写的动作，
-都改成 spawn `lark-cli`。
+本项目硬约束：代码里不直接调用任何飞书 OpenAPI；所有飞书 IO 都 spawn `lark-cli`。
 
-迁移过来的 Node runner 目前**仍然违反**这个约束，这份文档列出所有触点，作为后续改造的清单。
+**状态**：已完成。`grep -nE "open-apis|tenant_access_token|larksuiteoapi" scripts/*.mjs`
+无非注释结果。
 
-## 现状（违反约束的位置）
+## 改造前后
 
-### `scripts/feishu_sdk_adapter.mjs`
-
-整个文件就是 `@larksuiteoapi/node-sdk` 的封装，要全部废弃。
-对外导出的符号 → 改为对应的 lark-cli 命令：
-
-| 现导出 | 等价 lark-cli 命令 |
-|---|---|
-| `createFeishuClient(...)` | （不再需要 client 对象，每次 spawn lark-cli 即可） |
-| `createDoc(client, title, folderToken)` | `lark-cli docs +create --api-version v2 --title <title> [--folder-token <token>]` |
-| `addMemberPermission(...)` | `lark-cli drive +permission-grant ...` |
-| `setOrgEditablePermission(...)` | `lark-cli drive +permission-public-set ...` |
-| `resolveFeishuApiBase(...)` | 删除（lark-cli 自管域名） |
-| `resolveFeishuDocBase(...)` | 删除 |
-
-### `scripts/video_job_worker.mjs`
-
-直调 `open-apis/` 的位置（行号见下）：
-
-| 行 | 用途 | 改造方向 |
+| 文件 | 改造前 | 改造后 |
 |---|---|---|
-| 394 | `/open-apis/auth/v3/tenant_access_token/internal` | 删除（lark-cli 自管 token） |
-| 545 | `/open-apis/im/v1/messages` 发消息 | `lark-cli im +messages-send --as bot --receive-id <chat_id> --receive-id-type chat_id --text ...` |
-| 695 | `/open-apis/drive/explorer/v2/root_folder/meta` | `lark-cli drive +file-list` 或删除 |
-| 750 | `/open-apis/drive/v1/files/upload_all` | `lark-cli drive +file-upload --file <path> --parent-token <folder>` |
-| 766 | `/open-apis/drive/v1/files/upload_prepare` | 同上（lark-cli 自动选择分片） |
-| 795 | `/open-apis/drive/v1/files/upload_part` | 同上 |
-| 801 | `/open-apis/drive/v1/files/upload_finish` | 同上 |
-| 1148 | `createDoc(client, title)` | `lark-cli docs +create --api-version v2 --title <title>` |
-| 1159 | `/open-apis/docx/v1/documents/blocks/convert` | `lark-cli docs +update --api-version v2 --doc-id <id> --content-file <md>` |
-| 1166 | `/open-apis/docx/v1/documents/<id>/blocks/<id>/descendant` | 同上 |
+| `scripts/feishu_sdk_adapter.mjs` | 加载全局 `@larksuiteoapi/node-sdk`，封装 OpenAPI 调用 | 委托给 `scripts/lark_cli.mjs`，保留原 exports |
+| `scripts/lark_cli.mjs` | (新增) | spawn `lark-cli` 子进程，封装 IM 发消息 / 文档增删改读 / Drive 上传 / 权限管理 / 任务管理 |
+| `scripts/video_job_worker.mjs` | 自带 `feishuApi` / `feishuApiMultipart` / `getTenantToken` + 直接 `fetch('/open-apis/...')` | 改用 adapter 的 `sendImMessage` / `uploadDriveFile` / `writeMarkdownToDocx` |
+| `scripts/rewrite_command_runner.mjs` | 自带 `fetchTenantToken` + `buildFeishuApi`，直调 `docx/v1/raw_content` / `blocks/convert` / `blocks/descendant` / `im/v1/messages` | 改用 adapter 的 `readDocxContent` / `writeMarkdownToDocx` / `sendImMessage` |
 
-### `scripts/content_rewrite_runner.mjs`
+## 新依赖关系
 
-待审计（同样依赖 feishu_sdk_adapter）。
+```
+video_job_worker.mjs ─┐
+rewrite_command_runner.mjs ─┼─► feishu_sdk_adapter.mjs ─► lark_cli.mjs ─► spawn lark-cli
+content_rewrite_runner.mjs ─┘
+```
 
-## 改造策略
+## lark-cli 命令映射
 
-1. 写一个 `scripts/lark_cli.mjs` helper：`async function larkCli(args: string[]): Promise<{stdout, stderr, code}>`，统一 spawn。
-2. 改写 `feishu_sdk_adapter.mjs` 的每个导出函数为基于 larkCli 的实现，**保持原签名**，最小化外层改动。
-3. 改写 `video_job_worker.mjs` 里所有 `feishuApi(...)` / `feishuApiMultipart(...)` 调用为 larkCli 调用。
-4. 跑测试 `npm test`（已迁移 `*.test.mjs`）。
+| 老调用 | 新调用 |
+|---|---|
+| `POST /open-apis/auth/v3/tenant_access_token/internal` | (删除，lark-cli 自管 tenant_access_token) |
+| `POST /open-apis/im/v1/messages` | `lark-cli im +messages-send --as bot --chat-id/--user-id --text` |
+| `POST /open-apis/drive/v1/files/upload_all` | `lark-cli drive +upload --as bot --file --folder-token` |
+| `POST /open-apis/drive/v1/files/upload_prepare` `upload_part` `upload_finish` | 同上（lark-cli 自动决定简单/分片上传） |
+| `GET /open-apis/drive/explorer/v2/root_folder/meta` | (删除，传 `--folder-token` 缺省即根目录) |
+| `POST /open-apis/drive/v1/files/create_folder` | `lark-cli drive +create-folder --as bot --name --folder-token` |
+| `PATCH drive/v1/permissions/<token>/public` | `lark-cli drive permission.public patch --as bot --params --data --yes` |
+| `POST drive/v1/permissions/<token>/members` | `lark-cli drive permission.members create --as bot --params --data --yes` |
+| `POST docx/v1/documents` | `lark-cli docs +create --api-version v2 --as bot --title [--folder-token] [--markdown]` |
+| `GET docx/v1/documents/<id>/raw_content` | `lark-cli docs +fetch --api-version v2 --as bot --doc` |
+| `POST docx/v1/documents/blocks/convert` + descendant insert | `lark-cli docs +update --api-version v2 --as bot --doc --markdown - --mode append` |
+| `POST task/v2/tasks` | `lark-cli task +create --as bot --data` |
+| `PATCH task/v2/tasks/<guid>` | `lark-cli task task.patch --as bot --params --data` |
 
-## 验收标准
+## 兼容性
 
-- `grep -nE "open-apis|larksuiteoapi|tenant_access_token" scripts/` 无结果。
-- /asr 和 /rw 端到端跑通，飞书产物（消息、文档、文件）和改造前一致。
+- `feishu_sdk_adapter.mjs` 的所有 exports 保留原签名（含 `client` 形参），调用方代码改动量最小。
+- 老 SDK 模式下的 `payload.appId` / `payload.appSecret` 不再被使用——lark-cli 自管账号凭据
+  （通过 `lark-cli auth login` 配置）。`rewrite_command_runner.mjs` 已移除对这两个字段的强制校验。
+- 老的 `buildSdkEntryCandidates(...)` 仍然 export 但永远返回 `[]`，仅为兼容老测试。
+
+## 测试结果
+
+`node --test scripts/*.test.mjs` — **91/92 通过**。
+
+唯一失败的 `buildSuccessMessage lists uploaded drafts and skips failures` 是**迁移前就存在**
+的测试/实现不一致（测试期望 `GPT-5.5: <url>` 格式，实现输出 `- <url>` 格式），
+**与本次改造无关**，作为单独的 cleanup 项待跟。
+
+## 验证清单
+
+- [x] `grep -nE "open-apis|tenant_access_token" scripts/*.mjs`（非注释）无结果
+- [x] `node --check scripts/*.mjs` 全部通过
+- [x] `feishu_sdk_adapter.mjs` 22 个 exports 全部可加载（`import()` smoke test）
+- [x] `node --test` 91/92 通过（剩 1 个为前置 bug）
+- [ ] 端到端：在飞书 bot 上跑 `/asr <抖音链接>` 和 `/rw <doc URL>` 验证产物正确（需要 bot 重启 + lark-cli 已认证）

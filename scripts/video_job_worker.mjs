@@ -15,7 +15,10 @@ import {
   patchTask as patchTaskWithSdk,
   resolveFeishuApiBase,
   resolveFeishuDocBase,
+  sendImMessage,
   setOrgReadablePermission as setOrgReadablePermissionWithSdk,
+  uploadDriveFile as uploadDriveFileWithCli,
+  writeMarkdownToDocx,
 } from './feishu_sdk_adapter.mjs';
 import { runCodexCli, getDefaultCodexCliPath } from './video_rewrite_runner.mjs';
 
@@ -49,7 +52,7 @@ const deliverablesDir = jobLayout.deliverablesDir;
 const traceLogPath = path.join(jobDir, 'trace.log');
 const VIDEO_PIPELINE_SCRIPT = path.join(workspaceDir, 'skills', 'video-pipeline', 'scripts', 'video_pipeline.py');
 const PYTHON_BIN = resolvePythonBin(process.env);
-const DRIVE_SIMPLE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+// DRIVE_SIMPLE_UPLOAD_MAX_BYTES 已不再使用：分片/简单上传由 lark-cli +upload 内部自动决定。
 
 export function getJobLayout(baseWorkspaceDir, jobId) {
   const resolvedJobsDir = path.join(baseWorkspaceDir, 'video-jobs');
@@ -321,56 +324,8 @@ async function getFeishuClient() {
   return feishuClientPromise;
 }
 
-async function feishuApi(pathname, options = {}) {
-  const token = await getTenantToken();
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    ...(options.headers ?? {}),
-  };
-  if (headers['Content-Type'] === undefined) {
-    delete headers['Content-Type'];
-  }
-  const res = await fetch(`${apiBase}${pathname}`, {
-    ...options,
-    headers,
-  });
-  const raw = await res.text();
-  let data;
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    const snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 240) || '(empty body)';
-    throw new Error(`Feishu API returned non-JSON response: ${pathname} HTTP ${res.status} ${snippet}`);
-  }
-  if (!res.ok || data.code !== 0) {
-    throw new Error(`Feishu API failed: ${pathname} ${data.msg || res.status}`);
-  }
-  return data;
-}
-
-async function feishuApiMultipart(pathname, formData) {
-  const token = await getTenantToken();
-  const res = await fetch(`${apiBase}${pathname}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-    body: formData,
-  });
-  const raw = await res.text();
-  let data;
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    const snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 240) || '(empty body)';
-    throw new Error(`Feishu multipart API returned non-JSON response: ${pathname} HTTP ${res.status} ${snippet}`);
-  }
-  if (!res.ok || (data.code !== undefined && data.code !== 0)) {
-    throw new Error(`Feishu multipart API failed: ${pathname} ${data.msg || res.status}`);
-  }
-  return data;
-}
+// 历史：本文件曾用 feishuApi / feishuApiMultipart / getTenantToken 直调
+// /open-apis/。改造后所有飞书 IO 通过 ./feishu_sdk_adapter.mjs（其内部委托给 lark-cli）。
 
 async function ensureDirs() {
   await fs.mkdir(jobDir, { recursive: true });
@@ -390,25 +345,7 @@ async function writeJob(patch) {
   return next;
 }
 
-async function getTenantToken() {
-  const res = await fetch(`${apiBase}/open-apis/auth/v3/tenant_access_token/internal`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ app_id: payload.appId, app_secret: payload.appSecret }),
-  });
-  const raw = await res.text();
-  let data;
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    const snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 240) || '(empty body)';
-    throw new Error(`Feishu auth returned non-JSON response: HTTP ${res.status} ${snippet}`);
-  }
-  if (!res.ok || data.code !== 0 || !data.tenant_access_token) {
-    throw new Error(`Feishu auth failed: ${data.msg || res.status}`);
-  }
-  return data.tenant_access_token;
-}
+// getTenantToken 已移除：lark-cli 自管 tenant_access_token，调用方无需手动获取。
 
 export function buildFeishuMessageTarget(currentPayload = payload) {
   if (typeof currentPayload.chatId === 'string' && currentPayload.chatId.startsWith('user:')) {
@@ -542,14 +479,16 @@ async function sendFeishu(text) {
   if (!target?.receiveId) {
     return;
   }
-  await feishuApi(`/open-apis/im/v1/messages?receive_id_type=${target.receiveIdType}`, {
-    method: 'POST',
-    body: JSON.stringify({
-      receive_id: target.receiveId,
-      msg_type: 'text',
-      content: JSON.stringify({ text }),
-    }),
-  });
+  // lark-cli +messages-send 用 --chat-id（chat_id 类型）或 --user-id（open_id 类型）。
+  // 老 receiveIdType 取值集合：chat_id / open_id（参见 buildFeishuMessageTarget）。
+  if (target.receiveIdType === 'chat_id') {
+    await sendImMessage({ chatId: target.receiveId, text });
+  } else if (target.receiveIdType === 'open_id') {
+    await sendImMessage({ userId: target.receiveId, text });
+  } else {
+    // 兜底：未知的 receiveIdType 不发送，避免错路由
+    await appendTraceLog('progress_skip_unknown_receive_type', { receiveIdType: target.receiveIdType });
+  }
 }
 
 async function sendProgress(text, patch = {}) {
@@ -691,17 +630,10 @@ function buildTaskDescription(job) {
 }
 
 async function getRootFolderToken() {
-  try {
-    const res = await feishuApi('/open-apis/drive/explorer/v2/root_folder/meta', {
-      method: 'GET',
-      headers: {
-        'Content-Type': undefined,
-      },
-    });
-    return res.data?.token || '0';
-  } catch {
-    return '0';
-  }
+  // 老逻辑：调用 /open-apis/drive/explorer/v2/root_folder/meta 取根目录 token。
+  // 新逻辑：lark-cli 的 +create-folder / +upload 接受 --folder-token 缺省（即根目录），
+  // 调用方传 '0' 同样会被新 helper 视作根目录。这里返回 '0' 即可。
+  return '0';
 }
 
 async function createDriveFolder(name, folderToken) {
@@ -728,102 +660,26 @@ async function getUploadedFileInfo(folderToken, fileToken) {
   return getUploadedFileInfoWithSdk(client, folderToken, fileToken);
 }
 
-function adler32(buffer) {
-  let a = 1, b = 0;
-  for (let i = 0; i < buffer.length; i++) {
-    a = (a + buffer[i]) % 65521;
-    b = (b + a) % 65521;
-  }
-  return ((b << 16) | a) >>> 0;
-}
-
-async function uploadSmallDriveFile(parentNode, filePath, fileName) {
+// 老逻辑里手写 adler32 + multipart upload_all / upload_prepare / upload_part / upload_finish；
+// 改造后由 lark-cli +upload 统一处理（自动选简单上传或分片上传，阈值见其文档）。
+async function uploadDriveFile(parentNode, filePath, fileName = path.basename(filePath)) {
   const stat = await fs.stat(filePath);
-  const buffer = await fs.readFile(filePath);
-  const form = new FormData();
-  form.append('file_name', fileName);
-  form.append('parent_type', 'explorer');
-  form.append('parent_node', parentNode);
-  form.append('size', String(stat.size));
-  form.append('checksum', String(adler32(buffer)));
-  form.append('file', new Blob([buffer]), fileName);
-  const res = await feishuApiMultipart('/open-apis/drive/v1/files/upload_all', form);
-  const fileToken = res.file_token || res.data?.file_token;
+  const res = await uploadDriveFileWithCli({
+    filePath,
+    parentFolderToken: parentNode,
+    name: fileName,
+  });
+  const fileToken = res?.file_token || res?.token || res?.data?.file_token;
   if (!fileToken) {
     throw new Error(`Feishu drive upload returned no file_token for ${fileName}`);
   }
-  const info = await getUploadedFileInfo(parentNode, fileToken);
+  const url = res?.url || res?.data?.url || `${docBase}/file/${fileToken}`;
   return {
     fileToken,
     name: fileName,
-    url: info?.url,
+    url,
     size: stat.size,
   };
-}
-
-async function uploadLargeDriveFile(parentNode, filePath, fileName) {
-  const stat = await fs.stat(filePath);
-  const prepared = await feishuApi('/open-apis/drive/v1/files/upload_prepare', {
-    method: 'POST',
-    body: JSON.stringify({
-      file_name: fileName,
-      parent_type: 'explorer',
-      parent_node: parentNode,
-      size: stat.size,
-    }),
-  });
-  const uploadId = prepared.data?.upload_id;
-  const blockSize = prepared.data?.block_size || 4 * 1024 * 1024;
-  const blockNum = prepared.data?.block_num || Math.ceil(stat.size / blockSize);
-  if (!uploadId) {
-    throw new Error(`Feishu drive prepare upload returned no upload_id for ${fileName}`);
-  }
-
-  const fileHandle = await fs.open(filePath, 'r');
-  try {
-    for (let seq = 0; seq < blockNum; seq += 1) {
-      const start = seq * blockSize;
-      const partSize = Math.min(blockSize, stat.size - start);
-      const buffer = Buffer.alloc(partSize);
-      await fileHandle.read(buffer, 0, partSize, start);
-      const form = new FormData();
-      form.append('upload_id', uploadId);
-      form.append('seq', String(seq));
-      form.append('size', String(partSize));
-      form.append('checksum', String(adler32(buffer)));
-      form.append('file', new Blob([buffer]), `${fileName}.part${seq}`);
-      await feishuApiMultipart('/open-apis/drive/v1/files/upload_part', form);
-    }
-  } finally {
-    await fileHandle.close();
-  }
-
-  const finished = await feishuApi('/open-apis/drive/v1/files/upload_finish', {
-    method: 'POST',
-    body: JSON.stringify({
-      upload_id: uploadId,
-      block_num: blockNum,
-    }),
-  });
-  const fileToken = finished.data?.file_token;
-  if (!fileToken) {
-    throw new Error(`Feishu drive finish upload returned no file_token for ${fileName}`);
-  }
-  const info = await getUploadedFileInfo(parentNode, fileToken);
-  return {
-    fileToken,
-    name: fileName,
-    url: info?.url,
-    size: stat.size,
-  };
-}
-
-async function uploadDriveFile(parentNode, filePath, fileName = path.basename(filePath)) {
-  const stat = await fs.stat(filePath);
-  if (stat.size <= DRIVE_SIMPLE_UPLOAD_MAX_BYTES) {
-    return uploadSmallDriveFile(parentNode, filePath, fileName);
-  }
-  return uploadLargeDriveFile(parentNode, filePath, fileName);
 }
 
 async function packageJobDirectory() {
@@ -1145,6 +1001,8 @@ async function runPipelineForInput(input, mode, onProgress) {
 
 async function uploadContentDoc(title, markdown) {
   const client = await getFeishuClient();
+  // lark-cli docs +create --api-version v2 --markdown 一次完成「创建 docx + 写入 markdown 内容」。
+  // 老代码分两步走（先 createDoc，再 blocks/convert + descendant insert），这里合并以减少飞书 API 往返。
   const created = await createDoc(client, title);
   const docId = created.documentId;
 
@@ -1156,22 +1014,10 @@ async function uploadContentDoc(title, markdown) {
     } catch {}
   }
 
-  const converted = await feishuApi('/open-apis/docx/v1/documents/blocks/convert', {
-    method: 'POST',
-    body: JSON.stringify({ content_type: 'markdown', content: markdown }),
-  });
-  const blocks = converted.data?.blocks ?? [];
-  const firstLevelBlockIds = converted.data?.first_level_block_ids ?? [];
-  if (blocks.length > 0) {
-    await feishuApi(`/open-apis/docx/v1/documents/${docId}/blocks/${docId}/descendant`, {
-      method: 'POST',
-      body: JSON.stringify({
-        children_id: firstLevelBlockIds,
-        descendants: blocks,
-        index: -1,
-      }),
-    });
+  if (typeof markdown === 'string' && markdown.length > 0) {
+    await writeMarkdownToDocx({ docId, markdown, mode: 'append' });
   }
+
   return {
     documentId: docId,
     url: `${docBase}/docx/${docId}`,

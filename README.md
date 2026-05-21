@@ -51,3 +51,31 @@ state/                      # 任务产物（gitignored）
 ## 状态
 
 迁移进行中。`docs/MIGRATION.md` 跟踪进度。
+
+## Git 推送说明
+
+本仓库的远端是 `git@github.com:lauzhihao/ncds-opus-studio.git`。但本机默认的 SSH key
+（`~/.ssh/id_ed25519`）是 `lauzhihao/sub2api` 的 deploy key，不能推到本仓库。
+
+`.git/config` 已经把 remote 改写成 SSH 别名形式：
+
+```
+[remote "origin"]
+    url = git@github-lauzhihao:lauzhihao/ncds-opus-studio.git
+```
+
+`github-lauzhihao` 在 `~/.ssh/config` 里指向 `~/.ssh/id_ed25519_github_lauzhihao`：
+
+```ssh-config
+Host github-lauzhihao
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/id_ed25519_github_lauzhihao
+  IdentitiesOnly yes
+```
+
+正常 `git push origin main` 就能跑通。如果有人 clone 本仓库到别的机器，需要：
+1. 同时拥有这把 user key
+2. 在自己的 `~/.ssh/config` 里也配 `github-lauzhihao` 别名
+
+或者直接把 remote 改成 HTTPS + PAT（`git remote set-url origin https://github.com/lauzhihao/ncds-opus-studio.git`）。

@@ -9,9 +9,11 @@ import {
   addMemberPermission,
   createDoc,
   createFeishuClient,
-  resolveFeishuApiBase,
+  readDocxContent,
   resolveFeishuDocBase,
+  sendImMessage,
   setOrgEditablePermission,
+  writeMarkdownToDocx,
 } from './feishu_sdk_adapter.mjs';
 import { runContentRewrite } from './content_rewrite_runner.mjs';
 
@@ -80,73 +82,18 @@ async function appendTrace(jobId, stage, detail, workspaceDir = defaultWorkspace
   await appendFile(logPath, `[${timestamp}] [rw-runner] ${stage}\n${body}\n\n`, 'utf8');
 }
 
-async function fetchTenantToken({ apiBase, appId, appSecret }) {
-  const res = await fetch(`${apiBase}/open-apis/auth/v3/tenant_access_token/internal`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-  });
-  const raw = await res.text();
-  let data;
-  try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    throw new Error(`Feishu auth returned non-JSON: HTTP ${res.status} ${raw.slice(0, 200)}`);
-  }
-  if (!res.ok || data.code !== 0 || !data.tenant_access_token) {
-    throw new Error(`Feishu auth failed: ${data.msg || res.status}`);
-  }
-  return data.tenant_access_token;
-}
+// 老逻辑里 fetchTenantToken / buildFeishuApi / readDocxRawContent / buildDocBlocks 都是
+// 直调飞书 OpenAPI。改造后统一通过 ./feishu_sdk_adapter.mjs 的 lark-cli 封装。
 
-function buildFeishuApi({ apiBase, token }) {
-  return async function feishuApi(pathname, options = {}) {
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    };
-    const res = await fetch(`${apiBase}${pathname}`, { ...options, headers });
-    const raw = await res.text();
-    let data;
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch {
-      throw new Error(`Feishu API non-JSON: ${pathname} HTTP ${res.status} ${raw.slice(0, 200)}`);
-    }
-    if (!res.ok || data.code !== 0) {
-      throw new Error(`Feishu API failed: ${pathname} ${data.msg || res.status}`);
-    }
-    return data;
-  };
-}
-
-async function readDocxRawContent(feishuApi, docId) {
-  const result = await feishuApi(`/open-apis/docx/v1/documents/${docId}/raw_content`, {
-    method: 'GET',
-  });
-  const content = result?.data?.content;
+async function readDocxRawContent(docId) {
+  const content = await readDocxContent({ docId });
   if (typeof content !== 'string' || !content.trim()) {
-    throw new Error(`Docx raw_content is empty: ${docId}`);
+    throw new Error(`Docx content is empty: ${docId}`);
   }
   return content;
 }
 
-async function buildDocBlocks(feishuApi, docId, markdown) {
-  const converted = await feishuApi('/open-apis/docx/v1/documents/blocks/convert', {
-    method: 'POST',
-    body: JSON.stringify({ content_type: 'markdown', content: markdown }),
-  });
-  const blocks = converted.data?.blocks ?? [];
-  const firstLevel = converted.data?.first_level_block_ids ?? [];
-  if (blocks.length === 0) return;
-  await feishuApi(`/open-apis/docx/v1/documents/${docId}/blocks/${docId}/descendant`, {
-    method: 'POST',
-    body: JSON.stringify({ children_id: firstLevel, descendants: blocks, index: -1 }),
-  });
-}
-
-async function uploadRewriteDoc({ feishuApi, client, title, markdown, senderOpenId }) {
+async function uploadRewriteDoc({ client, title, markdown, senderOpenId }) {
   const created = await createDoc(client, title);
   const docId = created.documentId;
   await setOrgEditablePermission(client, docId, 'docx');
@@ -155,7 +102,9 @@ async function uploadRewriteDoc({ feishuApi, client, title, markdown, senderOpen
       await addMemberPermission(client, docId, 'docx', senderOpenId, 'edit');
     } catch {}
   }
-  await buildDocBlocks(feishuApi, docId, markdown);
+  if (typeof markdown === 'string' && markdown.length > 0) {
+    await writeMarkdownToDocx({ docId, markdown, mode: 'append' });
+  }
   return { documentId: docId, title };
 }
 
@@ -177,34 +126,28 @@ function buildFeishuMessageTarget(payload) {
   return null;
 }
 
-async function sendFeishuText(feishuApi, payload, text) {
+async function sendFeishuText(payload, text) {
   const target = buildFeishuMessageTarget(payload);
   if (!target) return;
-  await feishuApi(`/open-apis/im/v1/messages?receive_id_type=${target.receiveIdType}`, {
-    method: 'POST',
-    body: JSON.stringify({
-      receive_id: target.receiveId,
-      msg_type: 'text',
-      content: JSON.stringify({ text }),
-    }),
-  });
+  if (target.receiveIdType === 'chat_id') {
+    await sendImMessage({ chatId: target.receiveId, text });
+  } else if (target.receiveIdType === 'open_id') {
+    await sendImMessage({ userId: target.receiveId, text });
+  }
 }
 
 export async function runRewriteCommand(rawPayload, deps = {}) {
   const payload = hydrateRewritePayload(rawPayload);
-  if (!payload.appId || !payload.appSecret) {
-    throw new Error('rewrite payload missing appId/appSecret');
-  }
   const docId = extractDocxId(payload.docxUrl);
   if (!docId) {
     throw new Error(`Invalid docxUrl, cannot extract documentId: ${payload.docxUrl}`);
   }
   payload.documentId = docId;
 
-  const apiBase = resolveFeishuApiBase(payload.domain);
+  // 老实现需要 payload.appId/appSecret 走 SDK；改造后由 lark-cli 自管账号凭据，
+  // 这两个字段不再要求。保留 domain 仅用于派生展示用的 docBase 链接前缀。
   const docBase = resolveFeishuDocBase(payload.domain);
-  const token = await fetchTenantToken({ apiBase, appId: payload.appId, appSecret: payload.appSecret });
-  const feishuApi = buildFeishuApi({ apiBase, token });
+  // client 在 lark-cli 模型下是无状态描述符，保留以兼容 createDoc/addMemberPermission/setOrgEditablePermission 的 client 形参。
   const client = await createFeishuClient({
     appId: payload.appId,
     appSecret: payload.appSecret,
@@ -222,7 +165,7 @@ export async function runRewriteCommand(rawPayload, deps = {}) {
     userRequirementsLength: userRequirements.length,
   });
 
-  const sourceText = await readDocxRawContent(feishuApi, docId);
+  const sourceText = await readDocxRawContent(docId);
   await appendTrace(payload.jobId, 'source_loaded', { length: sourceText.length });
 
   // 中间汇报 1：已读取源文档，开始双模型改写
@@ -230,7 +173,7 @@ export async function runRewriteCommand(rawPayload, deps = {}) {
     const startMessage = userRequirements
       ? `[${payload.jobId}] /rw 已读取源文档（${sourceText.length} 字），开始 GPT-5.5 + Local Gemini 双模型改写...\n用户附加要求：${userRequirements}`
       : `[${payload.jobId}] /rw 已读取源文档（${sourceText.length} 字），开始 GPT-5.5 + Local Gemini 双模型改写...`;
-    await sendFeishuText(feishuApi, payload, startMessage);
+    await sendFeishuText(payload,startMessage);
     await appendTrace(payload.jobId, 'rewrite_start_notice_sent', { textPreview: startMessage.slice(0, 200) });
   } catch (error) {
     await appendTrace(payload.jobId, 'rewrite_start_notice_failed', error instanceof Error ? error.message : String(error));
@@ -258,7 +201,7 @@ export async function runRewriteCommand(rawPayload, deps = {}) {
     const ok = drafts.filter((d) => d.status === 'success').length;
     const fail = drafts.length - ok;
     const draftDoneMessage = `[${payload.jobId}] /rw 双模型 draft 完成（成功 ${ok}/失败 ${fail}），开始上传到飞书...`;
-    await sendFeishuText(feishuApi, payload, draftDoneMessage);
+    await sendFeishuText(payload,draftDoneMessage);
     await appendTrace(payload.jobId, 'draft_done_notice_sent', { textPreview: draftDoneMessage.slice(0, 200) });
   } catch (error) {
     await appendTrace(payload.jobId, 'draft_done_notice_failed', error instanceof Error ? error.message : String(error));
@@ -277,7 +220,6 @@ export async function runRewriteCommand(rawPayload, deps = {}) {
       }
       const title = `改写稿-${shortDraftName(draft)}-${payload.jobId}`;
       const doc = await uploadRewriteDoc({
-        feishuApi,
         client,
         title,
         markdown: `# 改写候选 (${draft.modelLabel || draft.modelId})\n\n${content}`,
@@ -302,7 +244,7 @@ export async function runRewriteCommand(rawPayload, deps = {}) {
 
   const successMessage = buildSuccessMessage({ jobId: payload.jobId, drafts: uploadedDocs, sourceUrl: payload.docxUrl });
   try {
-    await sendFeishuText(feishuApi, payload, successMessage);
+    await sendFeishuText(payload,successMessage);
     await appendTrace(payload.jobId, 'completion_message_sent', { textPreview: successMessage.slice(0, 240) });
   } catch (error) {
     await appendTrace(payload.jobId, 'completion_message_failed', error instanceof Error ? error.message : String(error));

@@ -460,15 +460,16 @@ test('mergePipelineResult stays backward compatible with string transcript paylo
 });
 
 test('buildPipelineArgs targets the provided job root for pipeline output', () => {
-  assert.deepEqual(
-    buildPipelineArgs('https://example.com/video', '/tmp/job'),
-    [
-      '/Users/ncds/.openclaw/workspaces/xiaozhua/skills/video-pipeline/scripts/video_pipeline.py',
-      '--output',
-      '/tmp/job',
-      'https://example.com/video',
-    ],
-  );
+  // 老用例硬编码 xiaozhua workspace 路径；改造后 video_pipeline.py 自 ncds-opus-factory
+  // 的 skills/video-pipeline/scripts/ 下解析（VIDEO_PIPELINE_SCRIPT 由模块顶层
+  // path.join(workspaceDir, 'skills', 'video-pipeline', 'scripts', 'video_pipeline.py')
+  // 算出）。这里只校验参数结构和工作区路径是当前 workspaceDir 的子路径。
+  const args = buildPipelineArgs('https://example.com/video', '/tmp/job');
+  assert.equal(args.length, 4);
+  assert.match(args[0], /skills\/video-pipeline\/scripts\/video_pipeline\.py$/);
+  assert.equal(args[1], '--output');
+  assert.equal(args[2], '/tmp/job');
+  assert.equal(args[3], 'https://example.com/video');
 });
 
 test('resolvePythonBin prefers OPENCLAW_PYTHON when configured', () => {

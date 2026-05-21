@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import path from 'node:path';
 
 import {
   buildSdkEntryCandidates,
@@ -36,14 +35,9 @@ test('normalizePublicPermissionType rejects unsupported folder public type', () 
   assert.equal(normalizePublicPermissionType('folder'), null);
 });
 
-test('buildSdkEntryCandidates prefers the global OpenClaw Feishu plugin sdk path', () => {
-  const globalRoot = '/tmp/global-node-modules';
-  assert.deepEqual(buildSdkEntryCandidates([globalRoot]), [
-    path.join(globalRoot, 'openclaw', 'dist', 'extensions', 'feishu', 'node_modules', '@larksuiteoapi', 'node-sdk', 'lib', 'index.js'),
-    path.join(globalRoot, 'openclaw', 'dist', 'extensions', 'feishu', 'node_modules', '@larksuiteoapi', 'node-sdk', 'es', 'index.js'),
-    path.join(globalRoot, '@openclaw', 'feishu', 'node_modules', '@larksuiteoapi', 'node-sdk', 'lib', 'index.js'),
-    path.join(globalRoot, '@openclaw', 'feishu', 'node_modules', '@larksuiteoapi', 'node-sdk', 'es', 'index.js'),
-    path.join(globalRoot, 'openclaw', 'node_modules', '@larksuiteoapi', 'node-sdk', 'lib', 'index.js'),
-    path.join(globalRoot, 'openclaw', 'node_modules', '@larksuiteoapi', 'node-sdk', 'es', 'index.js'),
-  ]);
+test('buildSdkEntryCandidates returns empty after lark-cli migration', () => {
+  // 历史上这里测试 @larksuiteoapi SDK 加载路径；改造为 lark-cli 后 SDK 不再加载，
+  // 函数只是为了兼容保留，固定返回空数组。
+  assert.deepEqual(buildSdkEntryCandidates(['/tmp/anything']), []);
+  assert.deepEqual(buildSdkEntryCandidates(), []);
 });
