@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "cos-nodejs-sdk-v5": "^2.15.4",
+    "undici": "^7.24.4"
+  }
+}

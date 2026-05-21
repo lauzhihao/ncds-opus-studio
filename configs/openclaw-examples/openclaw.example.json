@@ -1,0 +1,162 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.13"
+  },
+  "update": {
+    "auto": {
+      "enabled": true
+    }
+  },
+  "auth": {
+    "profiles": {
+      "google:default": {
+        "provider": "google",
+        "mode": "api_key"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "cheapcc": {
+        "baseUrl": "https://www.code-cli.cn/api/cheapcc/v1",
+        "apiKey": "REPLACE_WITH_CHEAPCC_API_KEY",
+        "api": "anthropic-messages",
+        "models": [
+          {
+            "id": "claude-opus-4-6",
+            "name": "Claude Opus 4.6"
+          },
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6"
+          },
+          {
+            "id": "claude-haiku-4-5-20251001",
+            "name": "Claude Haiku 4.5"
+          }
+        ]
+      },
+      "deepseek": {
+        "baseUrl": "https://api.deepseek.com/v1",
+        "apiKey": "REPLACE_WITH_DEEPSEEK_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-chat",
+            "name": "DeepSeek Chat"
+          },
+          {
+            "id": "deepseek-reasoner",
+            "name": "DeepSeek Reasoner"
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "cheapcc/claude-opus-4-6"
+      },
+      "models": {
+        "cheapcc/claude-opus-4-6": {
+          "alias": "opus"
+        },
+        "cheapcc/claude-sonnet-4-6": {
+          "alias": "sonnet"
+        },
+        "cheapcc/claude-haiku-4-5-20251001": {
+          "alias": "haiku"
+        },
+        "deepseek/deepseek-chat": {},
+        "google/gemini-3.1-pro-preview": {
+          "alias": "gemini"
+        },
+        "google/gemini-3-flash-preview": {}
+      },
+      "workspace": "__WORKSPACE_DIR__",
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "timeoutSeconds": 3600,
+      "subagents": {
+        "model": "cheapcc/claude-haiku-4-5-20251001"
+      }
+    }
+  },
+  "tools": {
+    "profile": "coding",
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "gemini",
+        "gemini": {
+          "apiKey": "REPLACE_WITH_GEMINI_API_KEY"
+        }
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "channels": {
+    "feishu": {
+      "appId": "REPLACE_WITH_FEISHU_APP_ID",
+      "connectionMode": "websocket",
+      "chunkMode": "newline",
+      "dmPolicy": "open",
+      "enabled": true,
+      "groupPolicy": "open",
+      "appSecret": "REPLACE_WITH_FEISHU_APP_SECRET",
+      "domain": "feishu",
+      "allowFrom": [
+        "*"
+      ]
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "__GATEWAY_TOKEN__"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "contacts.add",
+        "calendar.add",
+        "reminders.add",
+        "sms.send"
+      ]
+    }
+  },
+  "skills": {
+    "entries": {
+      "feishu-doc": {
+        "enabled": false
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "feishu": {
+        "enabled": true
+      }
+    }
+  }
+}

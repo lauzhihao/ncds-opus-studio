@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ncds-opus-factory"
+version = "0.1.0"
+description = "Five-command media engine + reusable video templates for ncds content production. No direct Feishu API calls — all Feishu IO goes through lark-cli."
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "yt-dlp>=2024.1",
+    "openai-whisper>=20231117",
+    "python-docx>=1.1",
+    "dashscope>=1.20",
+    "Pillow>=10",
+]
+
+[project.scripts]
+ncds-opus-factory = "ncds_opus_factory.cli:main"
+nof = "ncds_opus_factory.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

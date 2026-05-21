@@ -1,0 +1,5 @@
+requests
+yt-dlp
+openai-whisper
+python-docx
+dashscope

@@ -1,0 +1,13 @@
+{
+  "name": "ncds-opus-factory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node-side runners for /asr /rw, and the 009 paper-card-talk render pipeline.",
+  "dependencies": {
+    "cos-nodejs-sdk-v5": "^2.15.4",
+    "undici": "^7.24.4",
+    "puppeteer-core": "^21",
+    "puppeteer-screen-recorder": "^3"
+  }
+}
