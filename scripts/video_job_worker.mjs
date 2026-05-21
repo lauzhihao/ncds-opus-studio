@@ -1198,12 +1198,49 @@ export async function runHighlightStage({
     model,
   });
 
-  const markdown = await runCodexCliImpl({
+  const codexMarkdown = await runCodexCliImpl({
     cliPath: codexCliPath,
     prompt,
     model,
     cwd: deliverablesRoot,
   });
+
+  // 把每个子任务的清洗稿单独上传成飞书文档，链接附到爆款精华文档末尾，
+  // 供用户对照原稿质检。并行上传，单条失败 graceful 不阻断主流程。
+  const polishedDocResults = await Promise.all(items.map(async (item, idx) => {
+    const subTaskId = item.subTaskId || `${jobId || 'ASR'}_${idx + 1}`;
+    const text = item.polishedTranscriptText || item.transcriptText;
+    if (typeof text !== 'string' || !text.trim()) {
+      return { subTaskId, error: '清洗稿正文为空' };
+    }
+    try {
+      const doc = await uploadDoc(`清洗稿-${subTaskId}`, text);
+      item.polishedTranscriptDoc = doc;
+      return { subTaskId, doc };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      item.polishedTranscriptDocError = message;
+      return { subTaskId, error: message };
+    }
+  }));
+
+  await appendTraceLog('polished_transcripts_uploaded', {
+    jobId,
+    results: polishedDocResults.map((r) => ({
+      subTaskId: r.subTaskId,
+      url: r.doc?.url || null,
+      error: r.error || null,
+    })),
+  });
+
+  const polishedLines = polishedDocResults.map((r) => (
+    r.doc?.url
+      ? `- 【${r.subTaskId}】${r.doc.url}`
+      : `- 【${r.subTaskId}】(上传失败: ${r.error || '未知原因'})`
+  ));
+  const markdown = polishedLines.length > 0
+    ? `${codexMarkdown.trimEnd()}\n\n## 清洗稿（供对照与质检）\n\n${polishedLines.join('\n')}\n`
+    : codexMarkdown;
 
   const markdownPath = path.join(deliverablesRoot, 'highlight.md');
   await writeMarkdown(markdownPath, markdown);

@@ -634,15 +634,15 @@ test('buildHighlightPrompt embeds each sub-task transcript with its sub-task id'
   assert.equal(prompt.includes('爆款原因'), true);
 });
 
-test('runHighlightStage writes markdown and uploads doc via injected helpers', async () => {
+test('runHighlightStage uploads each polished transcript and appends links to highlight markdown', async () => {
   const writes = [];
   const uploads = [];
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'highlight-stage-'));
+  const item1 = { subTaskId: 'ASR_demo_1', input: 'u1', polishedTranscriptText: 'hello' };
+  const item2 = { subTaskId: 'ASR_demo_2', input: 'u2', polishedTranscriptText: 'world' };
   const result = await runHighlightStage({
     jobId: 'ASR_demo',
-    items: [
-      { subTaskId: 'ASR_demo_1', input: 'u1', polishedTranscriptText: 'hello' },
-    ],
+    items: [item1, item2],
     runCodexCliImpl: async ({ prompt, model }) => `# Highlight (${model})\n\n${prompt.length} chars input`,
     codexCliPath: '/fake/codex',
     deliverablesRoot: tempRoot,
@@ -651,15 +651,61 @@ test('runHighlightStage writes markdown and uploads doc via injected helpers', a
     },
     uploadDoc: async (title, markdown) => {
       uploads.push({ title, markdown });
+      // 每份文档返回独立 docId / url，便于断言区分。
+      return { documentId: `doc-${title}`, url: `https://feishu.cn/docx/doc-${title}`, title };
+    },
+  });
+
+  // 2 份清洗稿 + 1 份爆款精华 = 3 次上传，且按 items 顺序、爆款精华最后。
+  assert.equal(uploads.length, 3);
+  assert.equal(uploads[0].title, '清洗稿-ASR_demo_1');
+  assert.equal(uploads[0].markdown, 'hello');
+  assert.equal(uploads[1].title, '清洗稿-ASR_demo_2');
+  assert.equal(uploads[1].markdown, 'world');
+  assert.equal(uploads[2].title, '爆款精华-ASR_demo');
+  assert.equal(uploads[2].markdown.startsWith('# Highlight (gpt-5.5)'), true);
+  assert.equal(uploads[2].markdown.includes('## 清洗稿（供对照与质检）'), true);
+  assert.equal(uploads[2].markdown.includes('https://feishu.cn/docx/doc-清洗稿-ASR_demo_1'), true);
+  assert.equal(uploads[2].markdown.includes('https://feishu.cn/docx/doc-清洗稿-ASR_demo_2'), true);
+
+  // 落盘的 highlight.md 跟上传给爆款精华的 markdown 是同一份。
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].filePath.endsWith('highlight.md'), true);
+  assert.equal(writes[0].content, uploads[2].markdown);
+
+  // 清洗稿 url 已经回写到 item 上，方便后续完成消息或 summary 引用。
+  assert.equal(item1.polishedTranscriptDoc?.url, 'https://feishu.cn/docx/doc-清洗稿-ASR_demo_1');
+  assert.equal(item2.polishedTranscriptDoc?.url, 'https://feishu.cn/docx/doc-清洗稿-ASR_demo_2');
+
+  assert.equal(result.doc.url, 'https://feishu.cn/docx/doc-爆款精华-ASR_demo');
+});
+
+test('runHighlightStage degrades gracefully when polished transcript upload fails', async () => {
+  const uploads = [];
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'highlight-stage-fail-'));
+  const item = { subTaskId: 'ASR_demo_1', input: 'u1', polishedTranscriptText: 'hello' };
+  const result = await runHighlightStage({
+    jobId: 'ASR_demo',
+    items: [item],
+    runCodexCliImpl: async ({ prompt, model }) => `# Highlight (${model})\n\n${prompt.length} chars`,
+    codexCliPath: '/fake/codex',
+    deliverablesRoot: tempRoot,
+    writeMarkdown: async () => {},
+    uploadDoc: async (title, markdown) => {
+      uploads.push({ title, markdown });
+      if (title.startsWith('清洗稿-')) {
+        throw new Error('docx:document:create denied');
+      }
       return { documentId: 'docHighlight', url: 'https://feishu.cn/docx/docHighlight', title };
     },
   });
 
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].filePath.endsWith('highlight.md'), true);
-  assert.equal(uploads.length, 1);
-  assert.equal(uploads[0].title, '爆款精华-ASR_demo');
-  assert.equal(uploads[0].markdown.startsWith('# Highlight (gpt-5.5)'), true);
+  // 清洗稿上传失败不应阻断爆款精华上传。
+  assert.equal(uploads.length, 2);
+  assert.equal(uploads[1].title, '爆款精华-ASR_demo');
+  assert.equal(uploads[1].markdown.includes('(上传失败: docx:document:create denied)'), true);
+  assert.equal(item.polishedTranscriptDocError, 'docx:document:create denied');
+  assert.equal(item.polishedTranscriptDoc, undefined);
   assert.equal(result.doc.url, 'https://feishu.cn/docx/docHighlight');
 });
 
