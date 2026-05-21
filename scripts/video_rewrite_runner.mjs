@@ -183,16 +183,40 @@ export async function runLocalGeminiCli({
   const spawnImpl = deps.spawnImpl ?? spawn;
 
   return await new Promise((resolve, reject) => {
+    // detached:true 让 bash 起一个新 process group，便于超时时整组 kill；
+    // 否则 bash 死后，gemini-cli 子孙进程会变孤儿继续吃 OAuth/API 锁。
     const child = spawnImpl('bash', [resolvedCliPath, '--safe'], {
       cwd,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
     });
 
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    let killTimer = null;
+
+    const finalize = (action) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      // 主动 destroy stdio 流：g.sh 的孙子 gemini-cli 会继承 stderr fd，
+      // 仅靠 'close' 事件会被孤儿持有的 fd 卡到永远不触发。
+      try { child.stdin?.destroy(); } catch { /* noop */ }
+      try { child.stdout?.destroy(); } catch { /* noop */ }
+      try { child.stderr?.destroy(); } catch { /* noop */ }
+      action();
+    };
+
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
+      // 杀整个 process group（包括 bash 的孙子 gemini-cli），而不是只杀 bash。
+      try { process.kill(-child.pid, 'SIGTERM'); } catch { /* noop */ }
+      // 5 秒兜底 SIGKILL，防止孙子吞 TERM。
+      killTimer = setTimeout(() => {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* noop */ }
+      }, 5000);
     }, timeoutMs);
 
     child.stdout.on('data', (chunk) => {
@@ -204,22 +228,28 @@ export async function runLocalGeminiCli({
     });
 
     child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
+      finalize(() => reject(error));
     });
 
-    child.on('close', (code, signal) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`local-gemini exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}: ${stderr.trim() || stdout.trim() || 'no output'}`));
-        return;
-      }
-      const body = stdout.trim();
-      if (!body) {
-        reject(new Error('local-gemini returned empty output'));
-        return;
-      }
-      resolve(body);
+    // 用 'exit'（child 死即触发）而不是 'close'（要等所有 stdio 关闭）。
+    // 否则孤儿 gemini-cli 持有的 stderr 写端会让 'close' 永不触发。
+    child.on('exit', (code, signal) => {
+      finalize(() => {
+        if (signal) {
+          reject(new Error(`local-gemini killed by ${signal} (likely ${Math.round(timeoutMs / 1000)}s timeout): ${stderr.trim() || stdout.trim() || 'no output'}`));
+          return;
+        }
+        if (code !== 0) {
+          reject(new Error(`local-gemini exited with code ${code ?? 'unknown'}: ${stderr.trim() || stdout.trim() || 'no output'}`));
+          return;
+        }
+        const body = stdout.trim();
+        if (!body) {
+          reject(new Error('local-gemini returned empty output'));
+          return;
+        }
+        resolve(body);
+      });
     });
 
     child.stdin.end(prompt);
