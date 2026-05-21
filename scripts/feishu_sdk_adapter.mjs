@@ -233,14 +233,17 @@ export async function writeMarkdownToDocx({ docId, markdown, mode = 'append', as
 
 export async function readDocxContent({ docId, asIdentity = 'bot' } = {}) {
   const res = await fetchDocxContent({ docId, asIdentity });
-  // lark-cli docs +fetch v2 输出形如 { content: "..." } 或 { data: { content: "..." } }，
-  // 兼容多种 shape。
+  // lark-cli docs +fetch v2 实测 shape：
+  //   { ok, identity, data: { document: { content, document_id, revision_id }, log_id } }
+  // 老版本 / v1 可能直接是 content 或 markdown，全兜底。
   const content =
     (typeof res === 'string' ? res : null) ||
-    res?.content ||
-    res?.markdown ||
+    res?.data?.document?.content ||
+    res?.document?.content ||
     res?.data?.content ||
     res?.data?.markdown ||
+    res?.content ||
+    res?.markdown ||
     '';
   return content;
 }

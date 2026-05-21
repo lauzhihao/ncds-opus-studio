@@ -70,15 +70,28 @@ export async function sendImTextMessage({ chatId, userId, text, asIdentity = 'bo
   return larkCli(args);
 }
 
+// v2 docs API：
+//   --content（不是 --markdown）；
+//   --doc-format markdown|xml（默认 xml）；
+//   --command append|overwrite|str_replace|block_* （不是 --mode）；
+//   --parent-token（不是 --folder-token）。
+// lark-cli 1.0.37 的 --help 仍展示 v1 flag，是历史遗留。
+
+function buildXmlSkeleton(title) {
+  const safeTitle = String(title || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<title>${safeTitle}</title>`;
+}
+
 export async function createDocxDocument({ title, folderToken, markdown, asIdentity = 'bot' }) {
-  const args = ['docs', '+create', '--api-version', 'v2', '--as', asIdentity, '--title', title];
-  if (folderToken) args.push('--folder-token', folderToken);
-  let stdin;
+  const args = ['docs', '+create', '--api-version', 'v2', '--as', asIdentity];
+  if (folderToken && folderToken !== '0') args.push('--parent-token', folderToken);
   if (typeof markdown === 'string' && markdown.length > 0) {
-    args.push('--markdown', '-');
-    stdin = markdown;
+    args.push('--doc-format', 'markdown', '--content', markdown);
+  } else {
+    // 只有 title 时塞个最小 XML 骨架，title 会被自动提取为文档标题
+    args.push('--content', buildXmlSkeleton(title));
   }
-  return larkCli(args, { stdin });
+  return larkCli(args);
 }
 
 export async function fetchDocxContent({ docId, asIdentity = 'bot' }) {
@@ -89,14 +102,16 @@ export async function fetchDocxContent({ docId, asIdentity = 'bot' }) {
 
 export async function appendMarkdownToDocx({ docId, markdown, mode = 'append', asIdentity = 'bot' }) {
   if (!docId) throw new Error('appendMarkdownToDocx requires docId');
+  // mode 老接口名（append / overwrite / replace_range 等）→ v2 的 --command
   const args = [
     'docs', '+update', '--api-version', 'v2',
     '--as', asIdentity,
     '--doc', docId,
-    '--mode', mode,
-    '--markdown', '-',
+    '--command', mode,
+    '--doc-format', 'markdown',
+    '--content', markdown ?? '',
   ];
-  return larkCli(args, { stdin: markdown ?? '' });
+  return larkCli(args);
 }
 
 export async function createDriveFolder({ name, parentFolderToken, asIdentity = 'bot' }) {
