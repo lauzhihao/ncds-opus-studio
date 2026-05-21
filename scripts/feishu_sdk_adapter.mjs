@@ -211,8 +211,20 @@ export async function createTask(client, payload) {
 }
 
 export async function patchTask(client, taskGuid, payload) {
-  const data = payload?.data ?? payload;
-  const res = await patchTaskCli({ taskGuid, data, asIdentity: clientIdentity(client) });
+  // 老 SDK 用法：patchTask(client, guid, { data: {...task fields...}, params: { update_fields: [...] } })
+  // 新 helper：patchTask({ taskGuid, taskFields, updateFields })
+  const taskFields = payload?.data ?? payload ?? {};
+  const updateFields = Array.isArray(payload?.params?.update_fields)
+    ? payload.params.update_fields
+    : Array.isArray(payload?.update_fields)
+      ? payload.update_fields
+      : Object.keys(taskFields); // 兜底：取 task body 里出现的字段
+  const res = await patchTaskCli({
+    taskGuid,
+    taskFields,
+    updateFields,
+    asIdentity: clientIdentity(client),
+  });
   return res?.data ?? res ?? {};
 }
 
