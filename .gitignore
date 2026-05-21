@@ -6,6 +6,7 @@ __pycache__/
 node_modules/
 state/
 video-jobs/
+.project_map
 .env
 *.log
 .DS_Store
