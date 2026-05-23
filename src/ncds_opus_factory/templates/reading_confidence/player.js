@@ -47,7 +47,10 @@
       el.classList.add('is-chapter');
       const num = ({ ch1: '一', ch2: '二', ch3: '三', ch4: '四', ch5: '五' })[id] || '';
       const firstBeat = beats.find(b => b.scene === id);
-      const sub = firstBeat ? firstBeat.zh.replace(/^[一二三四五六七八九十]、/, '') : '';
+      // 章节大标题：去掉 "一、" 前缀，并把中文逗号转成 <br> 以按句换行（字幕带走 textContent 不受影响）
+      const sub = firstBeat
+        ? firstBeat.zh.replace(/^[一二三四五六七八九十]、/, '').replace(/，/g, '<br>')
+        : '';
       el.innerHTML =
         '<image-slot id="slot-' + id + '" src="' + src + '" fit="contain" placeholder="(可选) 章节背景图，留空则用纯色封面"></image-slot>' +
         '<div class="chapter-card">' +
