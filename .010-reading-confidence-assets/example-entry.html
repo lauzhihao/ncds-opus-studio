@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>月薪再稳，也别把工牌当靠山</title>
+<meta name="viewport" content="width=1920">
+<!-- body 默认带 ken-burns 类（与 Tweaks 初值 kenBurns:true 同步）。Tweaks 加载后会接管 toggle，
+     先在这里挂上是为了让 player.js 首次 showBeat 时能正确读到 ken-burns 状态。 -->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Noto+Serif+SC:wght@500;700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href=".009-paper-card-talk-assets/styles.css">
+
+<!-- React + Babel：仅 tweaks-panel.jsx 用 -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body class="ken-burns">
+
+<div class="viewport">
+  <div class="stage" id="stage">
+
+    <!-- 顶部栏 -->
+    <header class="top-bar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <!-- 对角线笔刷 / 钢笔 icon（Ionicons brush 风格） -->
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+            <path fill="currentColor" d="M136.6 138.79a64.003 64.003 0 0 0-43.31 41.35L0 460l14.69 14.69L164.8 324.58c-2.99-6.26-4.8-13.18-4.8-20.58c0-26.51 21.49-48 48-48s48 21.49 48 48s-21.49 48-48 48c-7.4 0-14.32-1.81-20.58-4.8L37.31 497.31L52 512l279.86-93.29a64.003 64.003 0 0 0 41.35-43.31L416 224L288 96l-151.4 42.79zm361.34-64.62l-60.11-60.11c-18.75-18.75-49.16-18.75-67.91 0l-56.55 56.55l128.02 128.02l56.55-56.55c18.75-18.75 18.75-49.15 0-67.91z"/>
+          </svg>
+        </div>
+        <div class="brand-title" id="brandTitle">月薪再稳，也别把工牌当靠山</div>
+      </div>
+      <div></div>
+      <div class="disclaimer">观点仅供参考　无不良引导</div>
+    </header>
+
+    <!-- 中央卡片 -->
+    <main class="card-area">
+      <div class="card">
+        <div class="scene-stack" id="sceneStack"><!-- 由 player.js 填充 --></div>
+      </div>
+    </main>
+
+    <!-- 底部双语字幕 -->
+    <footer class="subtitle-band" id="band">
+      <div class="subtitle-zh" id="capZh">　</div>
+      <div class="subtitle-en" id="capEn">　</div>
+    </footer>
+
+    <!-- 录制倒数覆盖层（仅 enterRecording 时显示） -->
+    <div class="rec-countdown" id="recCountdown" aria-hidden="true"></div>
+
+  </div>
+</div>
+
+<!-- 控制条 -->
+<div class="controls" id="controls">
+  <button class="primary" id="playBtn">▶ 播放</button>
+  <button id="restartBtn">↺ 重头</button>
+  <button id="prevBtn">‹ 上一句</button>
+  <button id="nextBtn">下一句 ›</button>
+  <span class="progress" id="progress">0 / 0</span>
+  <label>节奏 <input type="range" id="rate" min="0.6" max="1.6" step="0.05" value="1"></label>
+  <button id="recBtn">● 录制模式</button>
+</div>
+
+<div class="rec-flash" id="recFlash">录制模式 · 按 Esc 退出</div>
+
+<!-- 自适应缩放：把 1920×1080 等比缩放到视口 -->
+<script>
+(function () {
+  const stage = document.getElementById('stage');
+  function fit() {
+    const sx = window.innerWidth / 1920;
+    const sy = window.innerHeight / 1080;
+    const s = Math.min(sx, sy);
+    stage.style.transform = 'scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+})();
+</script>
+
+<script src=".009-paper-card-talk-assets/image-slot.js"></script>
+<script src=".009-paper-card-talk-assets/beats.js"></script>
+<script src=".009-paper-card-talk-assets/overlays.js"></script>
+<script src=".009-paper-card-talk-assets/player.js"></script>
+
+<!-- Tweaks 面板 -->
+<script type="text/babel" src=".009-paper-card-talk-assets/tweaks-panel.jsx"></script>
+<script type="text/babel" src=".009-paper-card-talk-assets/tweaks.jsx"></script>
+
+</body>
+</html>
