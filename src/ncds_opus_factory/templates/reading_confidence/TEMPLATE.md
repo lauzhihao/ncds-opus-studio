@@ -1,21 +1,22 @@
-# paper-card-talk 视频模板
+# reading-confidence 视频模板
 
 > 1920×1080 中文口播短片：顶部品牌栏 + 中央纸质卡片 + 底部双语字幕，暖纸 + 红墨水风格。
 > 单一数据源驱动（`beats.js`）+ AI 大模型管线（CosyVoice TTS + gpt-image-2 + headless Chrome 录制）。
+> 派生自 009 `paper-card-talk` 模板，结构等同。
 
 ## 复制成新一集（10 分钟工作流）
 
-新一集（如 010-xxx）的标准做法是把本模板复制到 `~/ncds-materials/` 仓库下，按命名规则改名：
+新一集（如 011-xxx）的标准做法是把本模板复制到 `~/ncds-materials/` 仓库下，按命名规则改名：
 
 ```bash
 # 1. 从 ncds-opus-factory 拉模板到 ncds-materials
-TEMPLATE_DIR=~/projects/ncds-opus-factory/src/ncds_opus_factory/templates/paper_card_talk
-NEW_SLUG="010-your-slug"
+TEMPLATE_DIR=~/projects/ncds-opus-factory/src/ncds_opus_factory/templates/reading_confidence
+NEW_SLUG="011-your-slug"
 cp -r "$TEMPLATE_DIR" ~/ncds-materials/.${NEW_SLUG}-assets
 cp "$TEMPLATE_DIR/example-entry.html" ~/ncds-materials/${NEW_SLUG}.html
 
-# 2. 改 HTML 里的资源路径（template 里默认路径是 009 风格）
-sed -i '' "s/009-paper-card-talk-assets/${NEW_SLUG}-assets/g" ~/ncds-materials/${NEW_SLUG}.html
+# 2. 改 HTML 里的资源路径（template 里默认路径是 010 风格）
+sed -i '' "s/010-reading-confidence-assets/${NEW_SLUG}-assets/g" ~/ncds-materials/${NEW_SLUG}.html
 
 # 3. 清空旧产物 + 模板自带文档
 cd ~/ncds-materials/.${NEW_SLUG}-assets
@@ -48,7 +49,7 @@ ssh root@ncds.cc 'deploy-ncds-cc'
 
 ## 数据模型
 
-详见同目录 `README.md`（来自 009 实现的完整解剖文档），那是模板设计的金本。
+详见同目录 `README.md`（010 的完整实现解剖文档），那是模板设计的金本。
 
 ## 工具链文件
 
@@ -66,7 +67,7 @@ ssh root@ncds.cc 'deploy-ncds-cc'
 
 ## 与 ncds-opus-factory 主项目的关系
 
-本模板是 `paper-card-talk` 视频形态的金本。`pic_gen.py` 引用的 gpt-image-2 网关
+本模板是 010 `reading-confidence` 的金本（视频形态沿用 009 `paper-card-talk`）。`pic_gen.py` 引用的 gpt-image-2 网关
 （`../../../../gpt_image/gpt_image_gen.py`）和 `tts_gen.py` 引用的 DashScope CosyVoice
 都已搬到 ncds-opus-factory 主项目里。换言之：模板只负责"视频形态的工具链"，
 "图片 / 音频生成能力"由主项目托管。

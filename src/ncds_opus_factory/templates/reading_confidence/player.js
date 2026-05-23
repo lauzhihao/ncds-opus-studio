@@ -8,7 +8,7 @@
    ────────────────────────────────────────────────────────────────── */
 
 (function () {
-  const ASSET_ROOT = '.009-paper-card-talk-assets';
+  const ASSET_ROOT = '.010-reading-confidence-assets';
   const $ = (id) => document.getElementById(id);
   const beats = window.BEATS || [];
   const scenes = window.SCENES || {};

@@ -1,4 +1,4 @@
-/* 离线渲染：把 009 跑成 1920×1080 30fps MP4，音频从 audio/*.mp3 合成接进去。
+/* 离线渲染：把 010 跑成 1920×1080 30fps MP4，音频从 audio/*.mp3 合成接进去。
  *
  * 流程：
  *   1. 起一个 python http.server 让 chrome 能拿到完整页面
@@ -10,9 +10,9 @@
  *   7. ffmpeg 把视频和音频合到最终 mp4
  *
  * 用法（仓库根目录）：
- *   node .009-paper-card-talk-assets/render.mjs
+ *   node .010-reading-confidence-assets/render.mjs
  *
- * 输出：.009-paper-card-talk-assets/output/009-paper-card-talk.mp4
+ * 输出：.010-reading-confidence-assets/output/010-reading-confidence.mp4
  *
  * 需要：
  *   - /usr/bin/google-chrome
@@ -31,11 +31,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
 const AUDIO_DIR = path.join(HERE, 'audio');
 const OUTPUT_DIR = path.join(HERE, 'output');
-const OUTPUT_MP4 = path.join(OUTPUT_DIR, '009-paper-card-talk.mp4');
-const TMP_VIDEO = '/tmp/009-render-silent.mp4';
-const TMP_AUDIO = '/tmp/009-render-audio.mp3';
+const OUTPUT_MP4 = path.join(OUTPUT_DIR, '010-reading-confidence.mp4');
+const TMP_VIDEO = '/tmp/010-render-silent.mp4';
+const TMP_AUDIO = '/tmp/010-render-audio.mp3';
 const HTTP_PORT = 8765;
-const URL_009 = `http://127.0.0.1:${HTTP_PORT}/009-paper-card-talk.html`;
+const URL_010 = `http://127.0.0.1:${HTTP_PORT}/010-reading-confidence.html`;
 const FPS = 30;
 const INTRO_MS = 300;   // recorder 起来到 startRecordingPlayback 之间的空白纸面段
 const GAP_MS = 80;      // beat 之间的"喘息"间隔，必须跟 player.js 里的 setTimeout 一致
@@ -75,14 +75,14 @@ async function buildAudioTrack() {
   if (files.length === 0) throw new Error(`no audio/*.mp3 found in ${AUDIO_DIR}`);
   log(`audio: ${INTRO_MS}ms intro + ${files.length} mp3s + ${GAP_MS}ms gaps + ${ENDING_MS}ms tail silence`);
 
-  const silenceIntro = '/tmp/009-silence-intro.mp3';
-  const silenceGap = '/tmp/009-silence-gap.mp3';
-  const silenceTail = '/tmp/009-silence-tail.mp3';
+  const silenceIntro = '/tmp/010-silence-intro.mp3';
+  const silenceGap = '/tmp/010-silence-gap.mp3';
+  const silenceTail = '/tmp/010-silence-tail.mp3';
   await makeSilence(INTRO_MS / 1000, silenceIntro);
   await makeSilence(GAP_MS / 1000, silenceGap);
   await makeSilence(ENDING_MS / 1000, silenceTail);
 
-  const concatList = '/tmp/009-concat.txt';
+  const concatList = '/tmp/010-concat.txt';
   const lines = [`file '${silenceIntro}'`];
   for (let i = 0; i < files.length; i++) {
     lines.push(`file '${path.join(AUDIO_DIR, files[i])}'`);
@@ -135,7 +135,7 @@ async function main() {
   try {
     const page = await browser.newPage();
     log('loading page');
-    await page.goto(URL_009, { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.goto(URL_010, { waitUntil: 'networkidle0', timeout: 30000 });
     // 等所有 audio 元素 readyState >= 1（metadata loaded），player 才能算 Ken Burns 时长
     await page.waitForFunction(
       () =>

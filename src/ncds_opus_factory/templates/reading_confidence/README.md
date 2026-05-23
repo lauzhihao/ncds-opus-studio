@@ -1,6 +1,6 @@
-# 009 Paper Card Talk · 实现笔记
+# 010 Reading Confidence · 实现笔记
 
-> 一个 1920×1080 的中文口播短片模板：顶部品牌栏、中央纸质卡片、底部双语字幕、暖纸 + 红墨水的设计语言。139 句台词、37 个场景、32 张 AI 插图、6 分钟成片。本文档既是 009 的实现解剖，也是后续素材（010、011…）的复制模板。
+> 一个 1920×1080 的中文口播短片模板：顶部品牌栏、中央纸质卡片、底部双语字幕、暖纸 + 红墨水的设计语言。100 句台词、29 个场景（含 5 个章节卡）、24 张 AI 插图。本文档是 010 的实现解剖，模板派生自 009 paper-card-talk，可作为后续素材（011、012…）的复制模板。
 
 ## 一句话总览
 
@@ -93,7 +93,7 @@ window.SCENES = {
 ## 工具链
 
 ```
-.009-paper-card-talk-assets/
+.010-reading-confidence-assets/
 ├── beats.js                ← 数据：BEATS + SCENES（唯一真理）
 ├── player.js               ← 运行时：音频驱动播放
 ├── overlays.js             ← overlay 渲染引擎 + 8 风格 × 8 动效
@@ -103,18 +103,18 @@ window.SCENES = {
 ├── tts_gen.py              ← TTS 批量生成（DashScope CosyVoice）
 ├── pic_gen.py              ← 插图批量生成（远程 ncds gpt-image-2）
 ├── render.mjs              ← 离线渲染（headless Chrome + ffmpeg → MP4）
-├── 009-paper-card-talk.json← 素材元信息
-├── 009-narration.txt       ← 朗读稿明文（任何 TTS 引擎都能再用）
-├── audio/                  ← 139 × NNNN.mp3
-├── pictures/               ← 32 × NN-<scene-id>.webp
+├── 010-reading-confidence.json← 素材元信息
+├── 010-narration.txt       ← 朗读稿明文（任何 TTS 引擎都能再用）
+├── audio/                  ← 100 × NNNN.mp3
+├── pictures/               ← 24 × NN-<scene-id>.webp
 └── output/                 ← MP4 成片（gitignored，render.mjs 落地点）
 ```
 
 ### TTS · `tts_gen.py`
 
 ```bash
-python3 .009-paper-card-talk-assets/tts_gen.py            # 用默认 longtian_v3 跑全片
-VOICE=longshuo_v3 RATE=1.0 python3 ... --force            # 换音色 + 重生
+python3 .010-reading-confidence-assets/tts_gen.py            # 用默认 longtian_v3 跑全片
+VOICE=longshuo_v3 RATE=1.0 python3 ... --force               # 换音色 + 重生
 ```
 
 - 模型：`cosyvoice-v3-flash`（plus / v3.5-plus 当前账号未开通，返回 418）
@@ -122,22 +122,22 @@ VOICE=longshuo_v3 RATE=1.0 python3 ... --force            # 换音色 + 重生
 - 依赖 `$DASHSCOPE_API_KEY`
 - 幂等：目标 mp3 存在则跳过
 - 自带重试（4 次指数退避）+ 句间 250ms 节流避免 rate-limit
-- 139 段约 4 分钟跑完
+- 100 段约 3 分钟跑完
 
 ### 文生图 · `pic_gen.py`
 
 ```bash
-python3 .009-paper-card-talk-assets/pic_gen.py            # 跑全部缺失
-python3 .009-paper-card-talk-assets/pic_gen.py hook       # 只重做某几个
-python3 .009-paper-card-talk-assets/pic_gen.py --force    # 全部重生
+python3 .010-reading-confidence-assets/pic_gen.py            # 跑全部缺失
+python3 .010-reading-confidence-assets/pic_gen.py hook       # 只重做某几个
+python3 .010-reading-confidence-assets/pic_gen.py --force    # 全部重生
 ```
 
 - 模型：OpenAI gpt-image-2，本机调 `~/.codex/skills/gpt-image/scripts/gpt_image_gen.py`
 - 路径：`python3 gpt_image_gen.py --size 1536x1024 --prompt ...`（依赖 `$GPT_IMAGE2_BASE_URL` / `$GPT_IMAGE2_API_KEY`，已在 `~/.zshrc` 导出）
-- 落地：本机生成 PNG 到 `/tmp/gpt-image/009-NN-<id>/` → Pillow 转 1536×1024 WebP（quality 85）→ `pictures/NN-<id>.webp`
+- 落地：本机生成 PNG 到 `/tmp/gpt-image/010-NN-<id>/` → Pillow 转 1536×1024 WebP（quality 85）→ `pictures/NN-<id>.webp`
 - 跳过 `ch*` 章节场景（player.js 走 CSS chapter-card）
 - prompt 自动追加 `NO_TEXT_SUFFIX`：强制画面不出现任何文字
-- 32 张约 16-18 分钟（gpt-image-2 单张 ~30-60s，串行调用避免限流）
+- 24 张约 12-14 分钟（gpt-image-2 单张 ~30-60s，串行调用避免限流）
 - 网关：`https://codeproxy.dev/v1`（偶尔 502 → 重跑漏的）
 
 ### overlay 渲染 · `overlays.js` + `styles.css`
@@ -147,59 +147,59 @@ python3 .009-paper-card-talk-assets/pic_gen.py --force    # 全部重生
 ### 离线渲染 · `render.mjs`
 
 ```bash
-node .009-paper-card-talk-assets/render.mjs
+node .010-reading-confidence-assets/render.mjs
 ```
 
 - headless Chrome 1920×1080，CDP screencast 30fps 抓帧
 - 音视频对齐用 `scripted` 模式：player.js 在录制时用 `setTimeout(audio.duration)` 推进而不是 `audio.onended`，避免静音 audio.onended 抖动累积漂移
 - 录前 page.evaluate 预设 `body.classList.add('recording')` 隐藏控件、清空字幕，再开 recorder
-- ffmpeg concat 音轨：300ms 前导静音（覆盖空白纸面 intro）→ 139 mp3 + 80ms 间隙 → 1500ms 尾部淡出静音
-- 最终 mux：h264 + aac 160k → `output/009-paper-card-talk.mp4`
-- 整段 ~7 分钟（视频实时录 5:20 + ffmpeg 后处理 30s）
+- ffmpeg concat 音轨：300ms 前导静音（覆盖空白纸面 intro）→ 100 mp3 + 80ms 间隙 → 1500ms 尾部淡出静音
+- 最终 mux：h264 + aac 160k → `output/010-reading-confidence.mp4`
+- 整段 ~5 分钟（视频实时录 3-4 分钟 + ffmpeg 后处理 30s）
 - 依赖：仓库根 `npm install puppeteer-core puppeteer-screen-recorder`（已 gitignore `node_modules/`）+ 系统 ffmpeg
 
 ---
 
 ## 复制成新一集 · 10 分钟工作流
 
-假设要做 010：
+假设要做 011：
 
 ```bash
 # 1. 复制模板
-cp 009-paper-card-talk.html 010-{your-slug}.html
-cp -r .009-paper-card-talk-assets .010-{your-slug}-assets
+cp 010-reading-confidence.html 011-{your-slug}.html
+cp -r .010-reading-confidence-assets .011-{your-slug}-assets
 
 # 2. 改 HTML 里的资源路径
-sed -i 's/009-paper-card-talk-assets/010-{your-slug}-assets/g' 010-{your-slug}.html
+sed -i 's/010-reading-confidence-assets/011-{your-slug}-assets/g' 011-{your-slug}.html
 
 # 3. 清空旧产物
-rm -rf .010-{your-slug}-assets/audio .010-{your-slug}-assets/pictures
-rm -rf .010-{your-slug}-assets/output
+rm -rf .011-{your-slug}-assets/audio .011-{your-slug}-assets/pictures
+rm -rf .011-{your-slug}-assets/output
 
 # 4. 改 beats.js — 替换 BEATS 和 SCENES（保留章节卡 ch1-5 结构）
 #    每条 BEAT ≤ 16 字幕，长度 6-30 字最佳，配 scene id
 #    每个 SCENES 项写 prompt（明确留白位置）和 overlays（如需文字）
-$EDITOR .010-{your-slug}-assets/beats.js
+$EDITOR .011-{your-slug}-assets/beats.js
 
 # 5. 跑 TTS
-python3 .010-{your-slug}-assets/tts_gen.py
+python3 .011-{your-slug}-assets/tts_gen.py
 # 验证：随便听一段
-mpv .010-{your-slug}-assets/audio/0001.mp3
+mpv .011-{your-slug}-assets/audio/0001.mp3
 
 # 6. 跑文生图（需 codeproxy.dev 网关健康；env 在 ~/.zshrc）
-python3 .010-{your-slug}-assets/pic_gen.py
+python3 .011-{your-slug}-assets/pic_gen.py
 
 # 7. 本地预览微调
 python3 -m http.server 8765
-# 打开 http://127.0.0.1:8765/010-{your-slug}.html
+# 打开 http://127.0.0.1:8765/011-{your-slug}.html
 # 边播边看 overlay 位置；不到位的回 beats.js 改 xPct/yPct，刷新就生效
 
 # 8. 渲染
-node .010-{your-slug}-assets/render.mjs
-# → output/010-{your-slug}.mp4
+node .011-{your-slug}-assets/render.mjs
+# → output/011-{your-slug}.mp4
 
 # 9. 提交 + 部署
-git add -A && git commit -m "010: {description}"
+git add -A && git commit -m "011: {description}"
 git push
 ssh root@ncds.cc 'deploy-ncds-cc'
 ```
@@ -258,4 +258,4 @@ ssh root@ncds.cc 'deploy-ncds-cc'
 | `audio/*.mp3` | 自动生成 | 不手编 |
 | `pictures/*.webp` | 自动生成 | 不手编 |
 | `output/*.mp4` | 自动生成 | gitignored，每次重渲 |
-| `009-narration.txt` | 朗读稿明文 | 给剪映 / 其它 TTS 兜底用，可选 |
+| `010-narration.txt` | 朗读稿明文 | 给剪映 / 其它 TTS 兜底用，可选 |

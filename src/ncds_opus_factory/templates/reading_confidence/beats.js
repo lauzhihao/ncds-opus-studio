@@ -15,7 +15,7 @@
 window.BEATS = [
   // ── 开场钩子 ──
   { zh: "你听过这句话吗", en: "Have you heard this before", scene: "hook" },
-  { zh: ""读书有什么用，大老板好多没上过大学"", en: "\"What's the point of school? Many bosses never went to college\"", scene: "hook" },
+  { zh: "“读书有什么用，大老板好多没上过大学”", en: "\"What's the point of school? Many bosses never went to college\"", scene: "hook" },
   { zh: "这句话害了多少人，你知道吗", en: "Do you know how many people this hurt?", scene: "hook" },
   { zh: "它让无数年轻人心安理得地放弃自己", en: "It made countless young people give up guilt-free", scene: "hook" },
   { zh: "然后用十年二十年去后悔", en: "then spend decades regretting", scene: "hook" },
@@ -73,7 +73,7 @@ window.BEATS = [
   { zh: "三、不是学不会，是没用心", en: "3. It's not inability, it's effort", scene: "ch3", chapter: 3 },
 
   { zh: "你可能在想", en: "You might be thinking", scene: "self-doubt" },
-  { zh: ""我就是学不会，脑子没别人好使"", en: "\"I just can't learn, I'm not smart enough\"", scene: "self-doubt" },
+  { zh: "“我就是学不会，脑子没别人好使”", en: "\"I just can't learn, I'm not smart enough\"", scene: "self-doubt" },
   { zh: "真的是这样吗", en: "Is that really true?", scene: "self-doubt" },
 
   { zh: "你所谓的学不会", en: "Your so-called 'can't learn'", scene: "attitude" },

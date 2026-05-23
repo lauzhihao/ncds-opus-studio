@@ -63,7 +63,7 @@ def generate_one(scene: dict, force: bool) -> str:
 
     prompt = scene["prompt"].strip() + NO_TEXT_SUFFIX
 
-    gen_out_dir = Path("/tmp") / "gpt-image" / f"009-{nn}-{sid}"
+    gen_out_dir = Path("/tmp") / "gpt-image" / f"010-{nn}-{sid}"
     shutil.rmtree(gen_out_dir, ignore_errors=True)
     gen_out_dir.mkdir(parents=True, exist_ok=True)
 
