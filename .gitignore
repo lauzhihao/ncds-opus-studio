@@ -6,6 +6,11 @@ __pycache__/
 node_modules
 state/
 video-jobs/
+web/dist/
+web/*.tsbuildinfo
+# tsc -b 增量编译会 emit vite.config 的 .d.ts/.js 副产物（即便 tsconfig.noEmit）；忽略
+web/vite.config.d.ts
+web/vite.config.js
 .project_map
 .env
 *.log

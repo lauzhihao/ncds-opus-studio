@@ -17,10 +17,15 @@ from __future__ import annotations
 import logging
 import os
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from ncds_opus_factory.server.routes import jobs as jobs_routes
+from ncds_opus_factory.server.routes import pipelines as pipelines_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
 from ncds_opus_factory.server.state import RUNNER, STATE_DIR
@@ -50,6 +55,36 @@ app.add_middleware(
 app.include_router(tasks_routes.router)
 app.include_router(templates_routes.router)
 app.include_router(jobs_routes.router)
+app.include_router(pipelines_routes.router)
+
+
+# ---------------------------------------------------------------------------
+# Studio SPA：把 web/dist 挂到 /studio。
+# - dev：用 vite dev (port 5173)，本路由不参与
+# - prod：访问 /studio/* → 静态文件；SPA 路由由前端 BrowserRouter 处理
+# ---------------------------------------------------------------------------
+
+_STUDIO_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
+
+if _STUDIO_DIST.exists():
+    # /studio/assets/* 静态资源（vite 产物含 hash）
+    app.mount(
+        "/studio/assets",
+        StaticFiles(directory=_STUDIO_DIST / "assets"),
+        name="studio-assets",
+    )
+
+    @app.get("/studio")
+    @app.get("/studio/")
+    async def studio_root() -> FileResponse:
+        return FileResponse(_STUDIO_DIST / "index.html")
+
+    # SPA fallback：所有 /studio/<深层路径> 都返回 index.html，由前端路由解析
+    @app.get("/studio/{full_path:path}")
+    async def studio_spa(full_path: str) -> FileResponse:  # noqa: ARG001
+        return FileResponse(_STUDIO_DIST / "index.html")
+else:
+    logger.info("[nof-server] web/dist not built; /studio not mounted")
 
 
 @app.get("/health")
