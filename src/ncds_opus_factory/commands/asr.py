@@ -93,10 +93,14 @@ def run(
     if proc.returncode != 0:
         raise RuntimeError(f"ASR runner exited with code {proc.returncode}. trace_log={trace_log}")
     on_progress("ASR 任务完成")
+    # 冒泡产物约定路径：daoer 等下游通过 ncds /jobs/{job_id}/files/{relpath}
+    # HTTP 端点按 relpath 拉本地产物，无需共享 fs / 无需猜路径。
     return {
         "job_id": job_id,
         "trace_log": str(trace_log),
         "exit_code": proc.returncode,
+        "deliverables_dir": f"video-jobs/{job_id}/deliverables",
+        "results_json_relpath": "deliverables/results.json",
     }
 
 

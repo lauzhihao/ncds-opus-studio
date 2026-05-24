@@ -106,10 +106,15 @@ def run(
     if proc.returncode != 0:
         raise RuntimeError(f"/rw runner exited with code {proc.returncode}. trace_log={trace_log}")
     on_progress("/rw 任务完成")
+    # 冒泡产物约定路径：rewrite_command_runner.mjs 在 deliverables/manifest.json
+    # 里列出本次所有 draft 的本地 relpath + 飞书 docUrl，daoer 通过 ncds
+    # /jobs/{job_id}/files/deliverables/manifest.json 拉一份再决定 import 哪一稿。
     return {
         "job_id": job_id,
         "trace_log": str(trace_log),
         "exit_code": proc.returncode,
+        "deliverables_dir": f"video-jobs/{job_id}/deliverables",
+        "manifest_relpath": "deliverables/manifest.json",
     }
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { mkdir, appendFile } from 'node:fs/promises';
+import { mkdir, appendFile, writeFile } from 'node:fs/promises';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -242,6 +242,43 @@ export async function runRewriteCommand(rawPayload, deps = {}) {
   }
   await appendTrace(payload.jobId, 'uploaded_docs', uploadedDocs);
 
+  // 落盘 deliverables/manifest.json：把本地 draft 路径 + 飞书 docUrl 合并成
+  // 一份机器可读 manifest，供下游（如 daoer canvas import）按约定 fetch。
+  // 飞书上传是额外动作，本地本来就有产物 —— manifest 把这两面都暴露出来。
+  const localDrafts = drafts.map((draft, index) => {
+    const uploaded = uploadedDocs[index] || {};
+    const relpath = draft.path
+      ? path.join('deliverables', path.relative(deliverablesDir, draft.path))
+      : null;
+    return {
+      modelId: draft.modelId,
+      modelLabel: draft.modelLabel,
+      status: draft.status,
+      relpath,
+      docUrl: uploaded.url || null,
+      docError: uploaded.error || null,
+      error: draft.error || null,
+    };
+  });
+  const manifest = {
+    jobId: payload.jobId,
+    targetProfile: payload.targetProfile || 'douyin',
+    sourceDocumentId: docId,
+    sourceUrl: payload.docxUrl,
+    drafts: localDrafts,
+    generatedAt: new Date().toISOString(),
+  };
+  try {
+    await writeFile(
+      path.join(deliverablesDir, 'manifest.json'),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      'utf8',
+    );
+    await appendTrace(payload.jobId, 'manifest_written', { draftsCount: localDrafts.length });
+  } catch (error) {
+    await appendTrace(payload.jobId, 'manifest_write_failed', error instanceof Error ? error.message : String(error));
+  }
+
   const successMessage = buildSuccessMessage({ jobId: payload.jobId, drafts: uploadedDocs, sourceUrl: payload.docxUrl });
   try {
     await sendFeishuText(payload,successMessage);
@@ -256,6 +293,7 @@ export async function runRewriteCommand(rawPayload, deps = {}) {
     sourceDocumentId: docId,
     rewriteStatus: rewrite.status,
     drafts: uploadedDocs,
+    manifestRelpath: 'deliverables/manifest.json',
     message: successMessage,
   };
 }

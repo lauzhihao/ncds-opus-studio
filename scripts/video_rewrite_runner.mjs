@@ -975,7 +975,11 @@ async function defaultDraftGenerator({
 
 function getDraftPath(rewriteDir, modelId, targetProfile = DEFAULT_REWRITE_PROFILE_ID) {
   const profile = getRewriteProfile(targetProfile);
-  return path.join(rewriteDir, `${profile.draftFilePrefix}-${modelId}.md`);
+  // 兼容老 profile：未声明 draftFileExt 时默认 .md
+  const ext = typeof profile.draftFileExt === 'string' && profile.draftFileExt
+    ? profile.draftFileExt
+    : '.md';
+  return path.join(rewriteDir, `${profile.draftFilePrefix}-${modelId}${ext}`);
 }
 
 async function generateDraftRecord({

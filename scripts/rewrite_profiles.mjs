@@ -294,12 +294,63 @@ function buildToutiaoDraftPrompt({ outline, analysisRecord }) {
   ]);
 }
 
+function buildPaperCardTalkDraftPrompt({ outline }) {
+  // paper-card-talk 短视频脚本生成：把源文档（爆款精华或抖音转写清洗稿）
+  // 拆分为 Beat[]，每条 beat 是一句中文字幕 + 英文翻译 + 所属 scene 标识。
+  // 模型只能输出严格 JSON（无 markdown 包裹、无解释文本），让 daoer 端
+  // 直接 Beat.model_validate 落到 episode.beats。
+  const sourceText = typeof outline?.sourceText === 'string' && outline.sourceText.trim()
+    ? outline.sourceText.trim()
+    : '';
+  const userRequirements = typeof outline?.userRequirements === 'string' && outline.userRequirements.trim()
+    ? outline.userRequirements.trim()
+    : '';
+  return joinNonEmptyLines([
+    '你是 paper-card-talk 系列短视频的脚本生成器。下面是一份源文档（抖音爆款精华或转写清洗稿）。',
+    '请把它改写成 paper-card-talk 形态的 beats 列表：每条 beat 对应视频里一句中文字幕（zh），可选英文翻译（en），并标注所属 scene。',
+    '',
+    '【输出格式】只能输出一个 JSON 对象，结构严格如下，禁止任何额外文本/解释/代码块包裹：',
+    '{',
+    '  "beats": [',
+    '    {',
+    '      "zh": string,           // 必填，单句中文字幕，10-30 字为宜，朗朗上口',
+    '      "en": string,           // 选填，对应英文翻译；若无可写空串 ""',
+    '      "scene": string,        // 必填，所属 scene 的语义 id，如 "intro" / "chap1_hook" / "chap2_evidence" / "outro"',
+    '      "chapter": number|null  // 选填，章节编号 1..N；非章节卡片可写 null',
+    '    }',
+    '    // ...更多 beat',
+    '  ]',
+    '}',
+    '',
+    '【内容要求】',
+    '- 必须使用简体中文（zh 字段）。en 字段为选填的英文译文。',
+    '- 全篇 beats 数量建议 30~80 条，根据源文档信息密度自适应；不要少于 12 条。',
+    '- 开篇用 1~2 条 intro beat 抛出钩子；正文 beats 按"章节"组织，每个章节用统一 scene 前缀（如 "chap1_*"），章节首条标注 chapter 编号；结尾 1~2 条 outro beat 收束并行动号召。',
+    '- 不得编造源文档未出现的人物、平台、数据；只能改写、压缩、重组源文档信息。',
+    '- 不要写章节标题/段落小标题；beats 直接是字幕原文。',
+    '- 不要使用 markdown 列表符号、emoji、特殊字符（限制在中英文标点 + ASCII 内）。',
+    '',
+    '【scene 命名约定】',
+    '- intro / outro 用固定语义 id',
+    '- 章节用 chap{N}_{semantic}，如 chap1_hook / chap2_evidence / chap3_turn / chap4_action',
+    '- 同 scene 下可以有多条连续 beat',
+    '',
+    '== 源文档 ==',
+    sourceText,
+    '== 源文档结束 ==',
+    userRequirements ? '' : '',
+    userRequirements ? '【用户附加要求（最高优先级，可覆盖以上默认要求）】：' : '',
+    userRequirements,
+  ]);
+}
+
 const REWRITE_PROFILES = {
   douyin: {
     id: 'douyin',
     requiresAnalysis: false,
     requiresOutline: false,
     draftFilePrefix: 'douyin',
+    draftFileExt: '.md',
     defaultAnalysisRecord: {
       formatName: 'douyin',
       formatFeatures: ['短视频口播', '开头钩子明显', '节奏较快'],
@@ -324,11 +375,48 @@ const REWRITE_PROFILES = {
       return '你是一个擅长抖音口播稿写作的中文内容编辑。';
     },
   },
+  paper_card_talk: {
+    // daoer 画布编辑器消费：直出 Beat[] JSON，import 端点按 schema 校验后
+    // 写入 episode.beats[]。不上传飞书的事情由 daoer 决定；这里只保证本地
+    // deliverables/beats-{modelId}.json 是合法 JSON。
+    id: 'paper_card_talk',
+    requiresAnalysis: false,
+    requiresOutline: false,
+    draftFilePrefix: 'beats',
+    draftFileExt: '.json',
+    defaultAnalysisRecord: {
+      formatName: 'paper-card-talk',
+      formatFeatures: ['短视频 beats 字幕', 'paper 风格', '按 scene 分组'],
+      writingLogic: ['intro 钩子', '分章节展开', 'outro 收束'],
+      expressionStyle: ['口语化', '单句字幕短句', '可朗读'],
+      articleType: 'paper-card-talk beats',
+      summary: '未执行 analysis，直接把源文档作为写作指南转 beats。',
+      audience: 'paper-card-talk 短视频观众',
+      platformTone: 'paper-card-talk',
+      risks: ['不得编造源文档未给出的事实。'],
+      generatedBy: null,
+    },
+    buildAnalysisPrompt() {
+      throw new Error('paper_card_talk profile does not require analysis');
+    },
+    buildOutlinePrompt() {
+      throw new Error('paper_card_talk profile does not require outline');
+    },
+    buildDraftPrompt: buildPaperCardTalkDraftPrompt,
+    buildStageSystemPrompt(stage) {
+      if (stage === 'outline' || stage === 'analysis') {
+        return '你是一个中文内容策划编辑，只能输出合法 JSON。';
+      }
+      // draft 阶段：模型必须只输出 {"beats":[...]} JSON
+      return '你是 paper-card-talk 短视频脚本生成器，只能输出严格的 JSON 对象（{"beats":[...]}），禁止 markdown 代码块或任何额外文本。';
+    },
+  },
   toutiao: {
     id: 'toutiao',
     requiresAnalysis: true,
     analysisDefinesTargetProfile: false,
     draftFilePrefix: 'toutiao',
+    draftFileExt: '.md',
     defaultAnalysisRecord: {
       formatName: '头条',
       formatFeatures: ['图文阅读友好', '开头直接抛出主题或悬念', '分段清晰', '信息密度适中'],

@@ -20,6 +20,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from ncds_opus_factory.server.routes import jobs as jobs_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
 from ncds_opus_factory.server.state import RUNNER, STATE_DIR
@@ -48,6 +49,7 @@ app.add_middleware(
 
 app.include_router(tasks_routes.router)
 app.include_router(templates_routes.router)
+app.include_router(jobs_routes.router)
 
 
 @app.get("/health")
