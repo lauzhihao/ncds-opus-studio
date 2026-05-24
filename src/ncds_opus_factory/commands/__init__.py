@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from ncds_opus_factory.commands import asr, rw, tst, vid, wst
+from ncds_opus_factory.commands import asr, render, rw, tst, tts, vid, wst
 
 RunFn = Callable[..., dict[str, Any]]
 
@@ -24,6 +24,8 @@ COMMAND_REGISTRY: dict[str, RunFn] = {
     "vid": vid.run,
     "asr": asr.run,
     "rw": rw.run,
+    "tts": tts.run,
+    "render": render.run,
 }
 
 
