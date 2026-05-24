@@ -14,11 +14,17 @@ dependencies = [
     "python-docx>=1.1",
     "dashscope>=1.20",
     "Pillow>=10",
+    # HTTP server 包装层（暴露 commands 为 POST + SSE）
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "sse-starlette>=2",
+    "pydantic>=2",
 ]
 
 [project.scripts]
 ncds-opus-factory = "ncds_opus_factory.cli:main"
 nof = "ncds_opus_factory.cli:main"
+nof-server = "ncds_opus_factory.server.app:cli_main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
