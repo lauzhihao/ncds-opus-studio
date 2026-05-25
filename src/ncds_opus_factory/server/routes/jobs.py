@@ -31,13 +31,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# ncds 仓库根，对齐 commands/asr.py 与 rw.py 中的 ROOT 计算方式
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# ncds 仓库根；jobs.py 在 src/ncds_opus_factory/server/routes/ 下，parents[4] 才到仓库根
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_VIDEO_JOBS_DIR = _REPO_ROOT / "video-jobs"
 
 VIDEO_JOBS_DIR: Path = Path(
@@ -86,3 +87,21 @@ async def get_job_file(job_id: str, relpath: str) -> FileResponse:
         raise HTTPException(400, f"not a regular file: {relpath}")
 
     return FileResponse(path=str(target))
+
+
+class WriteFileBody(BaseModel):
+    text: str
+
+
+@router.put("/jobs/{job_id}/files/{relpath:path}")
+async def put_job_file(job_id: str, relpath: str, body: WriteFileBody) -> dict:
+    """文本写回 video-jobs/{job_id}/{relpath}；用于用户在抽屉里编辑精华稿等场景。
+
+    只接 UTF-8 文本。安全检查走 _resolve_safe 防 path-traversal。
+    """
+    target = _resolve_safe(job_id, relpath)
+    if target.exists() and not target.is_file():
+        raise HTTPException(400, f"not a regular file: {relpath}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(body.text, encoding="utf-8")
+    return {"ok": True, "relpath": relpath, "bytes": len(body.text.encode("utf-8"))}

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -168,6 +169,11 @@ class PipelineRunner:
                 logger.warning("[pipeline] read %s failed: %s", sf, exc)
         return out
 
+    @staticmethod
+    def _default_title(job_id: str, ts: float) -> str:
+        # OPUS + 14 位本地时间戳 + 4 位 job_id hash，全大写；命名唯一且便于按时间排序
+        return "OPUS" + time.strftime("%Y%m%d%H%M%S", time.localtime(ts)) + job_id[:4].upper()
+
     def create_job(self, pipeline_id: str, title: str, inputs: dict[str, Any]) -> JobState:
         pipeline = get_pipeline(pipeline_id)
         job_id = uuid.uuid4().hex[:12]
@@ -188,7 +194,7 @@ class PipelineRunner:
         state = JobState(
             job_id=job_id,
             pipeline_id=pipeline_id,
-            title=title or f"未命名作品 {job_id[:6]}",
+            title=title or self._default_title(job_id, now),
             created_at=now,
             updated_at=now,
             inputs=dict(inputs),
@@ -211,15 +217,19 @@ class PipelineRunner:
         ep = self.video_jobs_dir / job_id / "02_rw" / "episode.json"
         ep.parent.mkdir(parents=True, exist_ok=True)
         ep.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
-        # 用户改了 episode → 等于 rw 节点重新有效；同时 invalidate wst/tts/render
+        # 用户在 preview 阶段改 episode → 仅 invalidate render 及之后；
+        # image / tts 本身保留 done（素材不需要重生，除非用户改了 prompt/beats 后主动重跑那两步）
         state = self._load(job_id)
-        if "rw" in state.nodes:
-            state.nodes["rw"].status = "done"
-            state.nodes["rw"].outputs = {"episode_path": str(ep)}
-            state.nodes["rw"].finished_at = time.time()
-        for n in get_pipeline(state.pipeline_id).downstream_of("rw"):
+        for n in get_pipeline(state.pipeline_id).downstream_of("preview"):
             if state.nodes[n].status != "idle":
                 self._reset_node(state.nodes[n])
+        self._save(state)
+        self.bus.publish(state.job_id, {"type": "job_updated", "job_id": state.job_id})
+
+    def update_title(self, job_id: str, title: str) -> None:
+        state = self._load(job_id)
+        state.title = title or self._default_title(job_id, state.created_at)
+        state.updated_at = time.time()
         self._save(state)
         self.bus.publish(state.job_id, {"type": "job_updated", "job_id": state.job_id})
 
@@ -228,6 +238,30 @@ class PipelineRunner:
         state.node_positions[node] = {"x": x, "y": y}
         self._save(state)
         # 位置变更不广播事件，前端自己掌握；下次 GET 时拿到
+
+    def update_inputs(self, job_id: str, inputs: dict[str, Any]) -> None:
+        """更新 job inputs（用户在 input 节点抽屉粘贴抖音 URL 时调用）。
+
+        同步把 inputs 落到 input 节点的 outputs，避免下游 asr 拿不到 url。
+        会 invalidate input 之外的所有下游节点（输入变了 → 之前的 asr 结果失效）。
+        """
+        state = self._load(job_id)
+        state.inputs.update(inputs)
+        # 同步到 input 节点的 outputs；保持 status=done
+        for n in state.nodes.values():
+            if n.name == "input":
+                n.outputs.update(inputs)
+                n.status = "done"
+                n.finished_at = time.time()
+                break
+        # 输入变了 → 整条链 invalidate（除 input 自身）
+        for n in state.nodes.values():
+            if n.name != "input" and n.status != "idle":
+                self._reset_node(n)
+        self._save(state)
+        self.bus.publish(job_id, {"type": "job_updated", "job_id": job_id})
+
+    # parse_inputs 已废弃：解析在前端完成，后端只通过 update_inputs 持久化。
 
     # ---------- 重跑 / 调度 ----------
 
@@ -277,6 +311,20 @@ class PipelineRunner:
                 await self._execute_mock(job_id, node_name)
             else:
                 await self._execute_real(job_id, node_name)
+        except asyncio.CancelledError:
+            # 用户主动 cancel：把节点回退到 idle 让 UI 可以再点"确认"
+            try:
+                state = self._load(job_id)
+                n = state.nodes[node_name]
+                n.status = "idle"
+                n.error = "cancelled"
+                n.finished_at = time.time()
+                n.progress = ""
+                self._reset_node(n)
+                self._save(state)
+                self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+            finally:
+                raise
         except Exception as exc:
             logger.exception("[pipeline] node %s/%s failed", job_id, node_name)
             state = self._load(job_id)
@@ -288,6 +336,60 @@ class PipelineRunner:
             self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
         finally:
             self._running_nodes.pop((job_id, node_name), None)
+
+    def rewrite_rw_model(self, job_id: str, model_id: str) -> None:
+        """只重写 rw 单个模型的 draft（不动另一个、不动下游）。
+        当前仅 mock 实现：覆写 02_rw/{model_id}/draft.md + episode.json。
+        """
+        state = self._load(job_id)
+        n = state.nodes.get("rw")
+        if n is None:
+            raise KeyError("rw node not found")
+        if n.status != "done":
+            raise ValueError("rw node not done; run rw first")
+        label = dict(MOCK_RW_MODELS).get(model_id)
+        if label is None:
+            raise ValueError(f"unknown model: {model_id}")
+        out_dir = self.video_jobs_dir / job_id / "02_rw"
+        _write_rw_model_artifacts(out_dir, model_id, label)
+        state.updated_at = time.time()
+        self._save(state)
+        self.bus.publish(job_id, {"type": "job_updated", "job_id": job_id})
+
+    def select_rw_model(self, job_id: str, model_id: str) -> None:
+        """用户在 rw 抽屉里选定一个模型作为下游 image 的入口。
+        把 02_rw/{model_id}/episode.json 拷贝到 02_rw/episode.json；
+        把 selected_model_id 写入 outputs。
+        """
+        state = self._load(job_id)
+        n = state.nodes.get("rw")
+        if n is None:
+            raise KeyError("rw node not found")
+        if n.status != "done":
+            raise ValueError("rw node not done")
+        drafts = (n.outputs or {}).get("drafts") or []
+        valid_ids = {d.get("model_id") for d in drafts if isinstance(d, dict)}
+        if model_id not in valid_ids:
+            raise ValueError(f"unknown model: {model_id}")
+        out_dir = self.video_jobs_dir / job_id / "02_rw"
+        src = out_dir / model_id / "episode.json"
+        dst = out_dir / "episode.json"
+        if not src.exists():
+            raise FileNotFoundError(f"missing source episode: {src}")
+        dst.write_bytes(src.read_bytes())
+        n.outputs["selected_model_id"] = model_id
+        state.updated_at = time.time()
+        self._save(state)
+        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
+
+    async def cancel_node(self, job_id: str, node_name: str) -> bool:
+        """取消正在跑的节点 task。返回是否真的取消了。"""
+        key = (job_id, node_name)
+        task = self._running_nodes.get(key)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
 
     async def _execute_mock(self, job_id: str, node_name: str) -> None:
         """Mock 模式：sleep 模拟，落假 outputs。前端联调用。"""
@@ -310,7 +412,7 @@ class PipelineRunner:
             self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
         # 产假 outputs
-        outputs = _mock_outputs(node_name, job_id, self.video_jobs_dir)
+        outputs = _mock_outputs(node_name, job_id, self.video_jobs_dir, state.inputs)
         state = self._load(job_id)
         n = state.nodes[node_name]
         n.status = "done"
@@ -330,46 +432,101 @@ class PipelineRunner:
 # Mock outputs（前端联调用，结构尽量贴近真实）
 # ---------------------------------------------------------------------------
 
-def _mock_outputs(node_name: str, job_id: str, video_jobs_dir: Path) -> dict[str, Any]:
+def _mock_outputs(
+    node_name: str,
+    job_id: str,
+    video_jobs_dir: Path,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
     """按节点 name 产生形态合理的假 outputs，并把可读文件落盘。"""
     job_dir = video_jobs_dir / job_id
 
     if node_name == "asr":
         out_dir = job_dir / "01_asr"
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "transcript.md").write_text(
-            "# 听写稿（mock）\n\n这是一段假转写稿，用于前端联调。\n", encoding="utf-8"
-        )
-        (out_dir / "key_points.json").write_text(
-            json.dumps({"points": ["要点 A", "要点 B", "要点 C"]}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+
+        # 从 inputs 抽出每条视频；shares 优先（带 title/author），urls 兜底
+        shares: list[dict[str, Any]] = []
+        for s in inputs.get("shares") or []:
+            if isinstance(s, dict) and s.get("url"):
+                shares.append(s)
+        if not shares:
+            urls = inputs.get("urls") or ([inputs.get("url")] if inputs.get("url") else [])
+            shares = [{"url": u, "title": "", "author": "", "tags": []} for u in urls if u]
+        if not shares:
+            shares = [{"url": "https://v.douyin.com/mock-001", "title": "示例视频", "author": "示例作者", "tags": []}]
+
+        items: list[dict[str, Any]] = []
+        for idx, s in enumerate(shares, start=1):
+            url = s.get("url", "")
+            # title / author 由前端解析得到；缺失就给空字符串，UI 自决定隐藏
+            title = (s.get("title") or "").strip()
+            author = (s.get("author") or "").strip()
+            slug = f"{idx:02d}-{hashlib.md5(url.encode('utf-8')).hexdigest()[:6]}"
+            item_dir = out_dir / slug
+            item_dir.mkdir(parents=True, exist_ok=True)
+            (item_dir / "transcript.md").write_text(
+                f"# 听写稿（mock）\n\n来源: {url}\n"
+                + (f"作者: {author}\n" if author else "")
+                + "\n大家好这是一段模拟的口语转写文本它没有标点符号也没有分段\n"
+                "就像 ASR 直接吐出来的样子主要用于前端联调展示\n",
+                encoding="utf-8",
+            )
+            (item_dir / "article.md").write_text(
+                f"# 文章解析（mock）\n\n来源: {url}\n\n"
+                "## 第一段\n\n这是经过清洗、加标点、分段后的文章解析示例。\n\n"
+                "## 第二段\n\n演示多段排版与结构化呈现。\n",
+                encoding="utf-8",
+            )
+            (item_dir / "highlight.md").write_text(
+                "# 精华提取（mock）\n\n"
+                "- 要点 1：核心结论 A\n"
+                "- 要点 2：核心结论 B\n"
+                "- 要点 3：核心结论 C\n",
+                encoding="utf-8",
+            )
+            items.append({
+                "index": idx,
+                "url": url,
+                "title": title,
+                "author": author,
+                "transcript_relpath": f"01_asr/{slug}/transcript.md",
+                "article_relpath": f"01_asr/{slug}/article.md",
+                "highlight_relpath": f"01_asr/{slug}/highlight.md",
+            })
+
         return {
-            "transcript_path": str(out_dir / "transcript.md"),
-            "key_points_path": str(out_dir / "key_points.json"),
+            "items": items,
             "feishu_doc_url": "https://example.feishu.cn/docs/mock",
         }
 
     if node_name == "rw":
         out_dir = job_dir / "02_rw"
         out_dir.mkdir(parents=True, exist_ok=True)
-        episode = _mock_episode()
-        (out_dir / "episode.json").write_text(
-            json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        # 双模型改写：各写一份 draft.md + episode.json 到子目录
+        # selected_model_id 在用户点 tab 内"下一步"时由 select 端点写入
+        drafts: list[dict[str, Any]] = []
+        for model_id, label in MOCK_RW_MODELS:
+            _write_rw_model_artifacts(out_dir, model_id, label)
+            drafts.append({
+                "model_id": model_id,
+                "label": label,
+                "draft_relpath": f"02_rw/{model_id}/draft.md",
+                "episode_relpath": f"02_rw/{model_id}/episode.json",
+            })
+        # 02_rw/episode.json 留空；用户 select 后由 select 端点拷贝
         return {
-            "episode_path": str(out_dir / "episode.json"),
-            "beats_count": len(episode["beats"]),
-            "scenes_count": len(episode["scenes"]),
+            "drafts": drafts,
+            "selected_model_id": None,
         }
 
-    if node_name == "wst":
-        out_dir = job_dir / "03_wst"
+    if node_name == "image":
+        out_dir = job_dir / "03_image"
         out_dir.mkdir(parents=True, exist_ok=True)
         return {
             "pictures_dir": str(out_dir),
-            "pictures_count": 0,  # mock 不真生图
-            "note": "mock：联调阶段不真调 gpt-image",
+            "pictures_count": 0,
+            "note": "mock：联调阶段不真调 wst",
         }
 
     if node_name == "tts":
@@ -377,12 +534,21 @@ def _mock_outputs(node_name: str, job_id: str, video_jobs_dir: Path) -> dict[str
         out_dir.mkdir(parents=True, exist_ok=True)
         return {
             "audio_dir": str(out_dir),
-            "audio_count": 0,  # mock 不真调 TTS
+            "audio_count": 0,
             "note": "mock：联调阶段不真调 dashscope-cosyvoice",
         }
 
+    if node_name == "preview":
+        out_dir = job_dir / "05_preview"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "preview_url": f"/preview/{job_dir.name}/011-reading-confidence.html",
+            "approved": True,
+            "note": "mock：用户审核通过，下游可跑 render",
+        }
+
     if node_name == "render":
-        out_dir = job_dir / "05_render"
+        out_dir = job_dir / "06_render"
         out_dir.mkdir(parents=True, exist_ok=True)
         return {
             "output_path": str(out_dir / "011.mp4"),
@@ -390,6 +556,35 @@ def _mock_outputs(node_name: str, job_id: str, video_jobs_dir: Path) -> dict[str
         }
 
     return {}
+
+
+MOCK_RW_MODELS: list[tuple[str, str]] = [
+    ("gpt5", "GPT-5.5"),
+    ("gemini", "GEMINI-3.5-flash"),
+]
+
+
+def _write_rw_model_artifacts(out_dir: Path, model_id: str, label: str) -> None:
+    """写一个模型的 draft.md + episode.json。重写单模型时可单独调。"""
+    item_dir = out_dir / model_id
+    item_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = int(time.time())
+    (item_dir / "draft.md").write_text(
+        f"# {label} 改写稿（mock · #{timestamp}）\n\n"
+        "## 标题\n\n示例作品（mock 改写）\n\n"
+        "## 正文\n\n"
+        f"这是 {label} 模型生成的改写稿示例。\n"
+        "用户可以直接在右侧 textarea 修改，离开后自动保存。\n\n"
+        "## 字幕节奏\n\n"
+        "- 第一句：开场引入\n- 第二句：核心观点\n- 第三句：行动呼吁\n",
+        encoding="utf-8",
+    )
+    episode = _mock_episode()
+    episode["meta"]["title"] = f"{label} 改写示例"
+    (item_dir / "episode.json").write_text(
+        json.dumps(episode, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _mock_episode() -> dict[str, Any]:

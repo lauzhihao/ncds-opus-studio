@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ncds_opus_factory.server.routes import jobs as jobs_routes
 from ncds_opus_factory.server.routes import pipelines as pipelines_routes
+from ncds_opus_factory.server.routes import preview as preview_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
 from ncds_opus_factory.server.state import RUNNER, STATE_DIR
@@ -56,17 +57,24 @@ app.include_router(tasks_routes.router)
 app.include_router(templates_routes.router)
 app.include_router(jobs_routes.router)
 app.include_router(pipelines_routes.router)
+app.include_router(preview_routes.router)
 
 
 # ---------------------------------------------------------------------------
 # Studio SPA：把 web/dist 挂到 /studio。
-# - dev：用 vite dev (port 5173)，本路由不参与
+# - dev (NOF_DEV=1)：反代到 vite dev server，HMR WebSocket 同走 :8810 → 单端口体验
 # - prod：访问 /studio/* → 静态文件；SPA 路由由前端 BrowserRouter 处理
 # ---------------------------------------------------------------------------
 
 _STUDIO_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
+_DEV_MODE = os.environ.get("NOF_DEV") == "1"
 
-if _STUDIO_DIST.exists():
+if _DEV_MODE:
+    from ncds_opus_factory.server.dev_proxy import build_router as _build_dev_proxy
+
+    app.include_router(_build_dev_proxy())
+    logger.info("[nof-server] NOF_DEV=1 → /studio/* proxied to vite dev server")
+elif _STUDIO_DIST.exists():
     # /studio/assets/* 静态资源（vite 产物含 hash）
     app.mount(
         "/studio/assets",

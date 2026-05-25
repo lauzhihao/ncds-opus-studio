@@ -1,0 +1,150 @@
+/* ============================================================
+   主题 token：4 套色板通过 [data-theme] 切换。
+   命名约定：
+     --bg-*    背景层级（canvas / surface / surface-2 / overlay）
+     --ink-*   文字层级（1=主、2=次、3=辅助/placeholder）
+     --border-*       边线（默认 / strong）
+     --accent / --accent-soft / --accent-tint
+     --status-*       6 种节点状态色
+   ============================================================ */
+
+/* —— Paper（默认，呼应 011 暖纸） —— */
+:root,
+[data-theme='paper'] {
+  --bg-canvas: #f5f1e8;
+  --bg-surface: #faf7ee;
+  --bg-surface-2: #ede6d3;
+  --bg-overlay: rgba(28, 26, 22, 0.06);
+  --bg-input: #fffdf7;
+
+  --ink-1: #1c1a16;
+  --ink-2: #4a4639;
+  --ink-3: #8a8576;
+  --ink-disabled: #c9c2ad;
+
+  --border: rgba(28, 26, 22, 0.10);
+  --border-strong: rgba(28, 26, 22, 0.22);
+  --border-focus: rgba(184, 54, 42, 0.45);
+
+  --accent: #b8362a;
+  --accent-soft: #d4a44a;
+  --accent-ink: #ffffff;
+  --accent-tint: rgba(184, 54, 42, 0.08);
+  --accent-hover: #9c2c22;
+
+  --status-idle: #c9c2ad;
+  --status-queued: #6b8aa3;
+  --status-running: #c8852e;
+  --status-done: #4a7c59;
+  --status-failed: #b8362a;
+
+  --grid-dot: rgba(28, 26, 22, 0.10);
+  --edge: rgba(28, 26, 22, 0.32);
+
+  color-scheme: light;
+}
+
+/* —— Onyx（暗调，warm black） —— */
+[data-theme='onyx'] {
+  --bg-canvas: #0e0d0c;
+  --bg-surface: #1a1816;
+  --bg-surface-2: #25221f;
+  --bg-overlay: rgba(255, 251, 240, 0.04);
+  --bg-input: #1f1d1a;
+
+  --ink-1: #f0ebe0;
+  --ink-2: #b3aea3;
+  --ink-3: #6e6a61;
+  --ink-disabled: #3d3a36;
+
+  --border: rgba(255, 251, 240, 0.08);
+  --border-strong: rgba(255, 251, 240, 0.20);
+  --border-focus: rgba(232, 129, 77, 0.55);
+
+  --accent: #e8814d;
+  --accent-soft: #d4a44a;
+  --accent-ink: #1a0e07;
+  --accent-tint: rgba(232, 129, 77, 0.10);
+  --accent-hover: #f59266;
+
+  --status-idle: #3d3a36;
+  --status-queued: #6b8aa3;
+  --status-running: #e8a55c;
+  --status-done: #7ab089;
+  --status-failed: #d96552;
+
+  --grid-dot: rgba(255, 251, 240, 0.06);
+  --edge: rgba(255, 251, 240, 0.22);
+
+  color-scheme: dark;
+}
+
+/* —— Sage（鼠尾草） —— */
+[data-theme='sage'] {
+  --bg-canvas: #e8ebe0;
+  --bg-surface: #f3f5ea;
+  --bg-surface-2: #d8ddca;
+  --bg-overlay: rgba(29, 36, 25, 0.06);
+  --bg-input: #fbfcf6;
+
+  --ink-1: #1d2419;
+  --ink-2: #4a5042;
+  --ink-3: #828877;
+  --ink-disabled: #c1c7b3;
+
+  --border: rgba(29, 36, 25, 0.10);
+  --border-strong: rgba(29, 36, 25, 0.22);
+  --border-focus: rgba(47, 107, 80, 0.45);
+
+  --accent: #2f6b50;
+  --accent-soft: #c98a3c;
+  --accent-ink: #ffffff;
+  --accent-tint: rgba(47, 107, 80, 0.08);
+  --accent-hover: #245543;
+
+  --status-idle: #c1c7b3;
+  --status-queued: #6b8aa3;
+  --status-running: #c98a3c;
+  --status-done: #2f6b50;
+  --status-failed: #a8483a;
+
+  --grid-dot: rgba(29, 36, 25, 0.10);
+  --edge: rgba(29, 36, 25, 0.32);
+
+  color-scheme: light;
+}
+
+/* —— Ink（高对比黑白报刊） —— */
+[data-theme='ink'] {
+  --bg-canvas: #ffffff;
+  --bg-surface: #fafaf7;
+  --bg-surface-2: #f0eee8;
+  --bg-overlay: rgba(0, 0, 0, 0.05);
+  --bg-input: #ffffff;
+
+  --ink-1: #0b0b0b;
+  --ink-2: #3a3a3a;
+  --ink-3: #8a8a8a;
+  --ink-disabled: #d1d1d1;
+
+  --border: rgba(0, 0, 0, 0.10);
+  --border-strong: rgba(0, 0, 0, 0.28);
+  --border-focus: rgba(196, 30, 58, 0.45);
+
+  --accent: #c41e3a;
+  --accent-soft: #8a8a8a;
+  --accent-ink: #ffffff;
+  --accent-tint: rgba(196, 30, 58, 0.08);
+  --accent-hover: #a01830;
+
+  --status-idle: #d1d1d1;
+  --status-queued: #5a7a92;
+  --status-running: #b58020;
+  --status-done: #2d6b48;
+  --status-failed: #c41e3a;
+
+  --grid-dot: rgba(0, 0, 0, 0.08);
+  --edge: rgba(0, 0, 0, 0.32);
+
+  color-scheme: light;
+}

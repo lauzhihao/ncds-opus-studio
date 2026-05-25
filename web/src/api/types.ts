@@ -52,6 +52,37 @@ export interface JobSummary {
   updated_at: number;
 }
 
+// RW 节点 outputs.drafts 中的一条；与 pipeline_runner._mock_outputs("rw") 对齐。
+export interface RwDraft {
+  model_id: string;
+  label: string;
+  draft_relpath: string;
+  episode_relpath: string;
+}
+
+// ASR 节点 outputs.items 中的一条；与 pipeline_runner._mock_outputs("asr") 对齐。
+// 真 worker 接入后由后端 adapter 转译成相同形状。
+export interface AsrItem {
+  index: number;
+  url: string;
+  title: string;
+  author: string;
+  transcript_relpath: string;
+  article_relpath: string;
+  highlight_relpath: string;
+  error?: string | null;
+}
+
+// 前端从抖音分享文本里 regex 解析出的一条作品。
+// 桌面 / 手机 / 纯 URL 三种形态都支持，识别不到的字段就 undefined。
+export interface ParsedShare {
+  url: string;
+  originalUrl?: string;
+  title?: string;
+  author?: string;
+  tags: string[];
+}
+
 // SSE 事件 payload
 export type StreamEvent =
   | { type: 'snapshot'; job_id: string; state: JobState }

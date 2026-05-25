@@ -1,6 +1,6 @@
-// 通用节点详情面板：展示节点描述 + 当前状态 + outputs 字段。
-// 用于尚未单独实现编辑器的节点（asr/wst/tts/render/input/output）。
+// 通用节点详情：节点描述 + 状态 table + outputs JSON。
 
+import { CheckCircle2, CircleAlert, CircleDashed, Clock, FileJson, Loader2 } from 'lucide-react';
 import type { NodeState, PipelineNodeDef } from '../../api/types';
 
 interface Props {
@@ -8,47 +8,89 @@ interface Props {
   nodeState: NodeState;
 }
 
+const STATUS_ICON: Record<NodeState['status'], typeof CircleDashed> = {
+  idle: CircleDashed,
+  queued: Clock,
+  running: Loader2,
+  done: CheckCircle2,
+  failed: CircleAlert,
+};
+
+const STATUS_COLOR: Record<NodeState['status'], string> = {
+  idle: 'var(--status-idle)',
+  queued: 'var(--status-queued)',
+  running: 'var(--status-running)',
+  done: 'var(--status-done)',
+  failed: 'var(--status-failed)',
+};
+
 export function GenericNodePanel({ nodeDef, nodeState }: Props) {
+  const StatusIcon = STATUS_ICON[nodeState.status];
+  const statusColor = STATUS_COLOR[nodeState.status];
   return (
     <div>
-      <div className="section-h">描述</div>
-      <p style={{ margin: '6px 0 12px', color: 'var(--ink-soft)' }}>{nodeDef.description}</p>
+      <div style={{ color: 'var(--ink-2)', fontSize: 'var(--text-md)', lineHeight: 1.65 }}>
+        {nodeDef.description}
+      </div>
 
       <div className="section-h">状态</div>
-      <table style={{ width: '100%', fontSize: 13 }}>
-        <tbody>
-          <tr><td style={{ width: 100, color: 'var(--ink-soft)' }}>状态</td><td>{nodeState.status}</td></tr>
-          <tr><td style={{ color: 'var(--ink-soft)' }}>进度</td><td>{nodeState.progress || '—'}</td></tr>
-          {nodeState.started_at && (
-            <tr><td style={{ color: 'var(--ink-soft)' }}>开始</td>
-              <td>{new Date(nodeState.started_at * 1000).toLocaleString('zh-CN', { hour12: false })}</td></tr>
-          )}
-          {nodeState.finished_at && (
-            <tr><td style={{ color: 'var(--ink-soft)' }}>完成</td>
-              <td>{new Date(nodeState.finished_at * 1000).toLocaleString('zh-CN', { hour12: false })}</td></tr>
-          )}
-          {nodeState.error && (
-            <tr><td style={{ color: 'var(--status-failed)' }}>错误</td><td>{nodeState.error}</td></tr>
-          )}
-        </tbody>
-      </table>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'auto 1fr',
+        gap: '8px 14px',
+        fontSize: 'var(--text-sm)',
+        color: 'var(--ink-2)',
+      }}>
+        <div className="dim-mono">status</div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: statusColor, fontWeight: 500 }}>
+          <StatusIcon size={14} strokeWidth={1.8} className={nodeState.status === 'running' ? 'spin' : ''} />
+          {nodeState.status}
+        </div>
+        {nodeState.progress && (
+          <>
+            <div className="dim-mono">progress</div>
+            <div>{nodeState.progress}</div>
+          </>
+        )}
+        {nodeState.started_at != null && (
+          <>
+            <div className="dim-mono">started</div>
+            <div className="mono" style={{ fontSize: 'var(--text-xs)' }}>
+              {new Date(nodeState.started_at * 1000).toLocaleString('zh-CN', { hour12: false })}
+            </div>
+          </>
+        )}
+        {nodeState.finished_at != null && (
+          <>
+            <div className="dim-mono">finished</div>
+            <div className="mono" style={{ fontSize: 'var(--text-xs)' }}>
+              {new Date(nodeState.finished_at * 1000).toLocaleString('zh-CN', { hour12: false })}
+            </div>
+          </>
+        )}
+        {nodeState.error && (
+          <>
+            <div className="dim-mono">error</div>
+            <div style={{ color: 'var(--status-failed)' }}>{nodeState.error}</div>
+          </>
+        )}
+      </div>
 
-      <div className="section-h">产物</div>
+      <div className="section-h">
+        <FileJson size={12} strokeWidth={1.6} /> 产物
+      </div>
       {Object.keys(nodeState.outputs).length === 0 ? (
-        <div style={{ color: 'var(--ink-soft)', fontSize: 13 }}>暂无产物</div>
+        <div className="dim" style={{ fontSize: 'var(--text-sm)' }}>暂无产物</div>
       ) : (
-        <pre style={{
-          fontSize: 12,
-          background: '#faf8f3',
-          padding: 10,
-          border: '1px solid var(--border)',
-          borderRadius: 6,
-          overflow: 'auto',
-          maxHeight: 360,
-        }}>
+        <pre className="code-block">
 {JSON.stringify(nodeState.outputs, null, 2)}
         </pre>
       )}
+
+      <style>{`
+        .spin { animation: spin-loader 0.9s linear infinite; }
+        @keyframes spin-loader { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }

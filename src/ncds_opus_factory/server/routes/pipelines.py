@@ -51,6 +51,25 @@ class NodePositionRequest(BaseModel):
     y: float
 
 
+class UpdateJobTitleRequest(BaseModel):
+    title: str
+
+
+class UpdateInputsRequest(BaseModel):
+    """input 节点抽屉里 PUT 过来的字段。
+
+    - url       : 单条链接（向后兼容）
+    - urls      : 多条链接
+    - raw_text  : 用户在 textarea 里粘贴的整段抖音原始分享文本
+    - shares    : 前端从 raw_text 里解析出的结构化数组（每条含 url/author/tags）
+    服务端只做持久化，不再解析。
+    """
+    url: str | None = None
+    urls: list[str] | None = None
+    raw_text: str | None = None
+    shares: list[dict[str, Any]] | None = None
+
+
 # ---------------------------------------------------------------------------
 # Pipelines（模板定义）
 # ---------------------------------------------------------------------------
@@ -136,6 +155,79 @@ async def run_node(job_id: str, node: str) -> dict[str, Any]:
         raise HTTPException(400, str(e))
     state = PIPELINE_RUNNER.get_job(job_id)
     return _serialize_job(state)
+
+
+@router.post("/jobs/{job_id}/nodes/{node}/cancel")
+async def cancel_node(job_id: str, node: str) -> dict[str, Any]:
+    try:
+        cancelled = await PIPELINE_RUNNER.cancel_node(job_id, node)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    return {"cancelled": cancelled, "job_id": job_id, "node": node}
+
+
+class SelectModelBody(BaseModel):
+    model_id: str
+
+
+@router.post("/jobs/{job_id}/nodes/rw/rewrite/{model_id}")
+async def rewrite_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
+    try:
+        PIPELINE_RUNNER.rewrite_rw_model(job_id, model_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "job_id": job_id, "model_id": model_id}
+
+
+@router.put("/jobs/{job_id}/nodes/rw/select")
+async def select_rw_model(job_id: str, body: SelectModelBody) -> dict[str, Any]:
+    try:
+        PIPELINE_RUNNER.select_rw_model(job_id, body.model_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "job_id": job_id, "selected_model_id": body.model_id}
+
+
+@router.put("/jobs/{job_id}/inputs")
+async def update_inputs(job_id: str, body: UpdateInputsRequest) -> dict[str, Any]:
+    """更新 input 节点：urls / raw_text / shares 任一组合都接受。
+
+    服务端纯持久化，不解析。前端的正则在 textarea onChange 时实时跑。
+    """
+    try:
+        PIPELINE_RUNNER.get_job(job_id)
+    except KeyError:
+        raise HTTPException(404, f"job not found: {job_id}")
+    inputs: dict[str, Any] = {}
+    if body.urls is not None:
+        cleaned = [u.strip() for u in body.urls if u and u.strip()]
+        inputs["urls"] = cleaned
+        inputs["url"] = cleaned[0] if cleaned else ""
+    elif body.url is not None:
+        inputs["url"] = body.url.strip()
+        inputs["urls"] = [body.url.strip()] if body.url.strip() else []
+    if body.raw_text is not None:
+        inputs["raw_text"] = body.raw_text
+    if body.shares is not None:
+        inputs["shares"] = body.shares
+    if not inputs:
+        raise HTTPException(400, "no inputs provided")
+    PIPELINE_RUNNER.update_inputs(job_id, inputs)
+    return {"ok": True, "inputs": inputs}
+
+
+@router.put("/jobs/{job_id}/title")
+async def update_title(job_id: str, body: UpdateJobTitleRequest) -> dict[str, Any]:
+    try:
+        PIPELINE_RUNNER.update_title(job_id, body.title.strip())
+    except KeyError:
+        raise HTTPException(404, f"job not found: {job_id}")
+    state = PIPELINE_RUNNER.get_job(job_id)
+    return {"job_id": state.job_id, "title": state.title}
 
 
 @router.put("/jobs/{job_id}/nodes/{node}/position")

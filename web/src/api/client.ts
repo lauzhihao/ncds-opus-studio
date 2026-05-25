@@ -3,6 +3,7 @@ import type {
   Episode,
   JobState,
   JobSummary,
+  ParsedShare,
   PipelineDef,
 } from './types';
 
@@ -46,8 +47,41 @@ export const api = {
   createJob: (body: { pipeline_id: string; title?: string; inputs: Record<string, unknown> }) =>
     post<JobState>('/jobs', body),
   deleteJob: (id: string) => del<{ deleted: string }>(`/jobs/${id}`),
+  updateJobTitle: (jobId: string, title: string) =>
+    put<{ job_id: string; title: string }>(`/jobs/${jobId}/title`, { title }),
   runNode: (jobId: string, node: string) =>
     post<JobState>(`/jobs/${jobId}/nodes/${node}/run`),
+  cancelNode: (jobId: string, node: string) =>
+    post<{ cancelled: boolean; job_id: string; node: string }>(
+      `/jobs/${jobId}/nodes/${node}/cancel`,
+    ),
+  rewriteRwModel: (jobId: string, modelId: string) =>
+    post<{ ok: boolean; job_id: string; model_id: string }>(
+      `/jobs/${jobId}/nodes/rw/rewrite/${modelId}`,
+    ),
+  selectRwModel: (jobId: string, modelId: string) =>
+    put<{ ok: boolean; job_id: string; selected_model_id: string }>(
+      `/jobs/${jobId}/nodes/rw/select`,
+      { model_id: modelId },
+    ),
+  writeFile: (jobId: string, relpath: string, text: string) =>
+    put<{ ok: boolean; relpath: string; bytes: number }>(
+      `/jobs/${jobId}/files/${relpath}`,
+      { text },
+    ),
+  updateInputs: (
+    jobId: string,
+    body: {
+      url?: string;
+      urls?: string[];
+      raw_text?: string;
+      shares?: ParsedShare[];
+    },
+  ) =>
+    put<{ ok: boolean; inputs: Record<string, unknown> }>(
+      `/jobs/${jobId}/inputs`,
+      body,
+    ),
   updateNodePosition: (jobId: string, node: string, x: number, y: number) =>
     put<unknown>(`/jobs/${jobId}/nodes/${node}/position`, { x, y }),
   getEpisode: (jobId: string) => get<Episode>(`/jobs/${jobId}/episode`),

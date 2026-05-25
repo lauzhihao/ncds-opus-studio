@@ -1,91 +1,93 @@
-// React Flow 自定义节点：每个 pipeline 节点一张卡片。
-// 状态由父级通过 data 传入；按钮事件回调到父级处理。
+// React Flow 自定义节点：只显示信息（编号 + 图标 + label + 状态徽章 + 简介/进度），
+// 整张卡点击打开抽屉；运行/重跑等操作全部移到抽屉内。
 
 import { memo } from 'react';
 import { Handle, Position } from 'reactflow';
+import {
+  Cog,
+  Download,
+  Eye,
+  Globe,
+  Image as ImageIcon,
+  Mic,
+  PenLine,
+  Sparkles,
+  Volume2,
+} from 'lucide-react';
+
 import type { NodeState, PipelineNodeDef } from '../api/types';
 
 export interface NodeCardData {
   def: PipelineNodeDef;
   state: NodeState;
-  onRun: () => void;
+  index: number;
   onOpen: () => void;
 }
 
-interface Props {
-  data: NodeCardData;
-}
-
 const STATUS_LABEL: Record<NodeState['status'], string> = {
-  idle: '待运行',
-  queued: '排队中',
-  running: '运行中',
-  done: '已完成',
-  failed: '失败',
+  idle: 'IDLE',
+  queued: 'QUEUED',
+  running: 'RUNNING',
+  done: 'DONE',
+  failed: 'FAILED',
 };
 
-function fmtDuration(state: NodeState): string {
-  if (state.started_at == null) return '';
-  const end = state.finished_at ?? Date.now() / 1000;
-  const s = Math.max(0, end - state.started_at);
-  if (s < 60) return `${s.toFixed(1)}s`;
-  return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+function getIcon(name: string): typeof Cog {
+  switch (name) {
+    case 'input': return Globe;
+    case 'asr': return Mic;
+    case 'rw': return PenLine;
+    case 'image': return ImageIcon;
+    case 'tts': return Volume2;
+    case 'preview': return Eye;
+    case 'render': return Cog;
+    case 'download': return Download;
+    case 'output': return Download;
+    default: return Sparkles;
+  }
 }
 
-function NodeCardImpl({ data }: Props) {
-  const { def, state, onRun, onOpen } = data;
+function NodeCardImpl({ data }: { data: NodeCardData }) {
+  const { def, state, index, onOpen } = data;
+  const Icon = getIcon(def.name);
   const isInput = def.kind === 'input';
   const isOutput = def.kind === 'output';
-  const canRun = !isInput && !isOutput && state.status !== 'running' && state.status !== 'queued';
-  const showDuration = state.status === 'running' || state.status === 'done';
 
   return (
-    <div className={`node-card kind-${def.kind} status-${state.status}`}>
-      {/* Handles：input 节点无 target，output 节点无 source */}
-      {!isInput && <Handle type="target" position={Position.Left} />}
-      {!isOutput && <Handle type="source" position={Position.Right} />}
+    <div
+      className={`node kind-${def.kind} status-${state.status}`}
+      onClick={(e) => {
+        // 让 React Flow 自己处理 drag-start；正常 click 才打开抽屉
+        if ((e.target as HTMLElement).closest('.react-flow__handle')) return;
+        onOpen();
+      }}
+    >
+      {!isInput && <Handle type="target" position={Position.Top} />}
+      {!isOutput && <Handle type="source" position={Position.Bottom} />}
 
       <div className="head">
-        <span className="dot" />
-        <span className="label">{def.label}</span>
-        <span style={{ fontSize: 11, color: 'var(--ink-soft)' }}>{STATUS_LABEL[state.status]}</span>
+        <span className="seq mono">{String(index).padStart(2, '0')}</span>
+        <span className="label">
+          <Icon size={20} strokeWidth={1.6} style={{ marginRight: 9, verticalAlign: '-3px', color: 'var(--ink-2)' }} />
+          {def.label}
+        </span>
+        <span className="status-badge">{STATUS_LABEL[state.status]}</span>
       </div>
 
       <div className="body">
-        {state.status === 'running' && state.progress && (
-          <div className="progress">⏳ {state.progress}</div>
+        {state.status === 'running' && (
+          <div className="progress-line">
+            <span className="spinner" />
+            <span>{state.progress || '执行中…'}</span>
+          </div>
         )}
         {state.status === 'failed' && state.error && (
-          <div style={{ color: 'var(--status-failed)' }}>{state.error}</div>
-        )}
-        {state.status === 'done' && Object.keys(state.outputs).length > 0 && (
-          <div>
-            <div style={{ fontSize: 11 }}>产物：</div>
-            <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 11 }}>
-              {Object.entries(state.outputs).slice(0, 3).map(([k, v]) => (
-                <li key={k} title={String(v)} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {k}: <span style={{ color: 'var(--ink)' }}>{String(v).slice(0, 28)}</span>
-                </li>
-              ))}
-            </ul>
+          <div style={{ color: 'var(--status-failed)', fontSize: 'var(--text-xs)' }}>
+            {state.error}
           </div>
         )}
-        {state.status === 'idle' && (
-          <div style={{ fontSize: 11 }}>{def.description}</div>
-        )}
-        {showDuration && (
-          <div style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 4 }}>
-            耗时 {fmtDuration(state)}
-          </div>
-        )}
-      </div>
-
-      <div className="footer">
-        <button className="btn sm" onClick={onOpen}>详情</button>
-        {canRun && (
-          <button className="btn sm primary" onClick={onRun}>
-            {state.status === 'done' ? '重跑' : '运行'}
-          </button>
+        {(state.status === 'idle' || state.status === 'queued' || state.status === 'done') && (
+          <div className="brief">{def.description}</div>
         )}
       </div>
     </div>
