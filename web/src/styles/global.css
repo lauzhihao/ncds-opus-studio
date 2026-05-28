@@ -2258,6 +2258,22 @@ textarea.code-pane.editable {
   color: var(--ink-3);
 }
 
+/* TTS 抽屉：按 scene 分组（每组共享一段整段音频） */
+.tts-scene {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--s-3);
+}
+.tts-scene-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
 /* LINES 抽屉：beats 列表编辑 */
 .lines-list {
   display: flex;

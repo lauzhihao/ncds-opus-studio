@@ -13,6 +13,7 @@ import { Pause, Play, RefreshCw, Square, VolumeX } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Episode, NodeState, PipelineNodeDef, TtsItem } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { ProcStatusRow } from './RwResultPanel';
 
 interface Props {
   jobId: string;
@@ -28,15 +29,16 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     () => (nodeState.outputs?.items as TtsItem[] | undefined) ?? [],
     [nodeState.outputs],
   );
+  const sceneGroups = useMemo(() => groupItemsByScene(items), [items]);
   const status = nodeState.status;
 
   const [episode, setEpisode] = useState<Episode | null>(null);
   const [epErr, setEpErr] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [advanceBusy, setAdvanceBusy] = useState(false);
-  const [regenBusy, setRegenBusy] = useState<Record<number, boolean>>({});
+  const [regenBusy, setRegenBusy] = useState<Record<string, boolean>>({});
   const [pendingRerun, setPendingRerun] = useState(false);
-  const [playingIdx, setPlayingIdx] = useState<number | null>(null);
+  const [playingScene, setPlayingScene] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -121,47 +123,42 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     }
   }
 
-  async function doRegen(index: number) {
-    setRegenBusy((m) => ({ ...m, [index]: true }));
+  // scene 级重生（015）：重合成整个 scene，与 UI 渲染粒度一致
+  async function doRegenScene(sceneId: string) {
+    setRegenBusy((m) => ({ ...m, [sceneId]: true }));
     try {
       await flushEpisode();
-      await api.regenTtsBeat(jobId, index);
+      await api.regenTtsScene(jobId, sceneId);
     } catch (e) {
       alert(`重生失败: ${(e as Error).message}`);
     } finally {
-      setRegenBusy((m) => ({ ...m, [index]: false }));
+      setRegenBusy((m) => ({ ...m, [sceneId]: false }));
     }
   }
 
-  function togglePlay(item: TtsItem) {
-    if (!item.audio_relpath) return;
-    // 同行二次点击 → 暂停
-    if (playingIdx === item.index && audioRef.current) {
+  // 试听整段 scene 音频（audio_relpath 是 scene 整段 mp3）
+  function togglePlayScene(sceneKey: string, audioRelpath: string | null) {
+    if (!audioRelpath) return;
+    if (playingScene === sceneKey && audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
-      setPlayingIdx(null);
+      setPlayingScene(null);
       return;
     }
-    // 切换：停掉旧的，播新的
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
-    const el = new Audio(`/jobs/${jobId}/files/${item.audio_relpath}`);
-    el.onended = () => {
-      setPlayingIdx((cur) => (cur === item.index ? null : cur));
+    const el = new Audio(`/jobs/${jobId}/files/${audioRelpath}`);
+    const clear = () => {
+      setPlayingScene((cur) => (cur === sceneKey ? null : cur));
       if (audioRef.current === el) audioRef.current = null;
     };
-    el.onerror = () => {
-      setPlayingIdx((cur) => (cur === item.index ? null : cur));
-      if (audioRef.current === el) audioRef.current = null;
-    };
+    el.onended = clear;
+    el.onerror = clear;
     audioRef.current = el;
-    setPlayingIdx(item.index);
-    void el.play().catch(() => {
-      setPlayingIdx(null);
-      audioRef.current = null;
-    });
+    setPlayingScene(sceneKey);
+    void el.play().catch(clear);
   }
 
   async function doAdvance() {
@@ -214,11 +211,42 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
           : '';
   const hasPending = pendingEpRef.current != null;
 
+  // 提示 banner（标题上方，统一风格）
+  let hint: { tone: 'info' | 'error'; text: string } | null = null;
+  if (status === 'failed' && nodeState.error) {
+    hint = { tone: 'error', text: `失败：${nodeState.error}` };
+  } else if (epErr) {
+    hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
+  } else if (status === 'idle') {
+    hint = { tone: 'info', text: '点击下方「开始配音」启动，按 scene 整段合成。' };
+  } else if (items.length === 0 && status === 'done') {
+    hint = { tone: 'info', text: '暂无字幕；先在 BEATS 抽屉里编辑。' };
+  }
+
   return (
     <div className="rw-panel-root">
+      {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
+
+      {/* 配音状态行：跑过就常驻（done 后不消失，与 BEATS/RW 一致） */}
+      {status !== 'idle' && (
+        <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
+          <ProcStatusRow
+            row={{
+              id: 'tts',
+              label: '分段式高情感度语音合成',
+              status: status === 'done' ? 'done' : status === 'failed' ? 'failed' : 'running',
+            }}
+            runningText="合成中"
+          />
+        </div>
+      )}
+
       <div className="rw-panel-header">
-        <div className="section-h" style={{ margin: 0, flex: 1 }}>
-          TTS 配音 · {items.length} 句{statusBadge}
+        <div
+          className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
+          style={{ margin: 0, flex: 1 }}
+        >
+          TTS / {sceneGroups.length} 段 / {items.length} 句{statusBadge}
           {hasPending && (
             <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
               · 保存中…
@@ -228,67 +256,60 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
         {renderActionBtn()}
       </div>
 
-      {status === 'running' && (
-        <div className="dim-mono">{nodeState.progress || '正在配音…'}</div>
-      )}
-      {status === 'failed' && nodeState.error && (
-        <div className="asr-error">失败：{nodeState.error}</div>
-      )}
-      {epErr && (
-        <div className="asr-error">episode 加载失败：{epErr}</div>
-      )}
-
-      {items.length === 0 ? (
-        <div className="dim-mono">
-          {status === 'idle' || status === 'failed'
-            ? '尚未配音，点击右上「开始配音」启动。'
-            : status === 'running' || status === 'queued'
-              ? '配音中…'
-              : '暂无字幕；先在 LINES / PREVIEW 抽屉里编辑 beats。'}
-        </div>
-      ) : (
+      {items.length === 0 ? null : (
         <>
           <div className="tts-list">
-            {items.map((it) => {
-              const zh = episode?.beats?.[it.index - 1]?.zh ?? it.zh;
-              const playing = playingIdx === it.index;
-              const canPlay = !!it.audio_relpath;
+            {sceneGroups.map((g) => {
+              const playing = playingScene === g.key;
+              const canPlay = !!g.audioRelpath;
+              const busy = !!regenBusy[g.scene];
               return (
-                <div key={it.index} className="tts-row">
-                  <span className="tts-row-num mono">{String(it.index).padStart(2, '0')}</span>
-                  <input
-                    type="text"
-                    className="field tts-row-input"
-                    value={zh}
-                    onChange={(e) => patchZh(it.index, e.target.value)}
-                    placeholder="（空字幕）"
-                    spellCheck={false}
-                  />
-                  <button
-                    type="button"
-                    className="btn sm icon-only ghost"
-                    title={canPlay ? (playing ? '暂停' : '试听') : 'mock 模式无音频'}
-                    disabled={!canPlay || actionBusy || advanceBusy}
-                    onClick={() => togglePlay(it)}
-                  >
-                    {!canPlay ? (
-                      <VolumeX size={12} strokeWidth={1.7} />
-                    ) : playing ? (
-                      <Pause size={12} strokeWidth={1.8} fill="currentColor" />
-                    ) : (
-                      <Play size={12} strokeWidth={1.8} fill="currentColor" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn sm icon-only ghost"
-                    title={regenBusy[it.index] ? '生成中…' : '按当前文本重生此条音频'}
-                    disabled={status !== 'done' || regenBusy[it.index] || actionBusy || advanceBusy}
-                    onClick={() => doRegen(it.index)}
-                  >
-                    <RefreshCw size={12} strokeWidth={1.7} />
-                  </button>
-                </div>
+                <section key={g.key} className="tts-scene">
+                  <header className="tts-scene-head">
+                    <span className="lines-scene-tag">{g.scene || `#${g.items[0].index}`}</span>
+                    <span style={{ flex: 1 }} />
+                    <button
+                      type="button"
+                      className="btn sm icon-only ghost"
+                      title={canPlay ? (playing ? '暂停' : '试听整段') : '无音频'}
+                      disabled={!canPlay || actionBusy || advanceBusy}
+                      onClick={() => togglePlayScene(g.key, g.audioRelpath)}
+                    >
+                      {!canPlay ? (
+                        <VolumeX size={12} strokeWidth={1.7} />
+                      ) : playing ? (
+                        <Pause size={12} strokeWidth={1.8} fill="currentColor" />
+                      ) : (
+                        <Play size={12} strokeWidth={1.8} fill="currentColor" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn sm icon-only ghost"
+                      title={busy ? '重生中…' : '按当前文本重生此段音频'}
+                      disabled={!g.scene || status !== 'done' || busy || actionBusy || advanceBusy}
+                      onClick={() => doRegenScene(g.scene)}
+                    >
+                      <RefreshCw size={12} strokeWidth={1.7} />
+                    </button>
+                  </header>
+                  {g.items.map((it) => {
+                    const zh = episode?.beats?.[it.index - 1]?.zh ?? it.zh;
+                    return (
+                      <div key={it.index} className="tts-row">
+                        <span className="tts-row-num mono">{String(it.index).padStart(2, '0')}</span>
+                        <input
+                          type="text"
+                          className="field tts-row-input"
+                          value={zh}
+                          onChange={(e) => patchZh(it.index, e.target.value)}
+                          placeholder="（空字幕）"
+                          spellCheck={false}
+                        />
+                      </div>
+                    );
+                  })}
+                </section>
               );
             })}
           </div>
@@ -320,4 +341,27 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
       />
     </div>
   );
+}
+
+// 按 scene 把 beats 分组（连续相同 scene 合一组）。一组共享一个整段 scene mp3。
+// 014 逐句（items 无 scene）退化为每 beat 一组（key 用 index）。
+interface TtsSceneGroup {
+  key: string;
+  scene: string;
+  audioRelpath: string | null;
+  items: TtsItem[];
+}
+// 按 scene 分组（连续相同 scene 合一组），一组共享一段整段 scene mp3。
+function groupItemsByScene(items: TtsItem[]): TtsSceneGroup[] {
+  const groups: TtsSceneGroup[] = [];
+  for (const it of items) {
+    const scene = it.scene;
+    const last = groups[groups.length - 1];
+    if (last && last.key === scene) {
+      last.items.push(it);
+    } else {
+      groups.push({ key: scene, scene, audioRelpath: it.audio_relpath, items: [it] });
+    }
+  }
+  return groups;
 }

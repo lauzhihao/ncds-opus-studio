@@ -72,6 +72,10 @@ export const api = {
     post<{ ok: boolean; job_id: string; index: number }>(
       `/jobs/${jobId}/nodes/tts/regen/${index}`,
     ),
+  regenTtsScene: (jobId: string, sceneId: string) =>
+    post<{ ok: boolean; job_id: string; scene_id: string }>(
+      `/jobs/${jobId}/nodes/tts/regen-scene/${encodeURIComponent(sceneId)}`,
+    ),
   writeFile: (jobId: string, relpath: string, text: string) =>
     put<{ ok: boolean; relpath: string; bytes: number }>(
       `/jobs/${jobId}/files/${relpath}`,

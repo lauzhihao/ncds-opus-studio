@@ -12,6 +12,7 @@ import { ImageOff, Play, RefreshCw, Square } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Episode, ImageItem, NodeState, PipelineNodeDef } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { ProcStatusRow } from './RwResultPanel';
 
 interface Props {
   jobId: string;
@@ -173,10 +174,41 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
           : '';
   const hasPending = pendingEpRef.current != null;
 
+  // 提示 banner（标题上方，统一风格）：idle 引导，failed 报错，episode 加载失败
+  let hint: { tone: 'info' | 'error'; text: string } | null = null;
+  if (status === 'failed' && nodeState.error) {
+    hint = { tone: 'error', text: `失败：${nodeState.error}` };
+  } else if (epErr) {
+    hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
+  } else if (status === 'idle') {
+    hint = { tone: 'info', text: '点击右上「开始生图」启动，按 scene 批量图生图。' };
+  } else if (items.length === 0 && status === 'done') {
+    hint = { tone: 'info', text: '暂无场景；先在 PREVIEW 抽屉里添加 scene。' };
+  }
+
   return (
     <div className="rw-panel-root">
+      {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
+
+      {/* 生图状态行：跑过就常驻（done 后不消失，与 BEATS/TTS 一致） */}
+      {status !== 'idle' && (
+        <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
+          <ProcStatusRow
+            row={{
+              id: 'image',
+              label: '批量图生图',
+              status: status === 'done' ? 'done' : status === 'failed' ? 'failed' : 'running',
+            }}
+            runningText="生成中"
+          />
+        </div>
+      )}
+
       <div className="rw-panel-header">
-        <div className="section-h" style={{ margin: 0, flex: 1 }}>
+        <div
+          className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
+          style={{ margin: 0, flex: 1 }}
+        >
           IMAGE 生成 · {items.length} 个场景{statusBadge}
           {hasPending && (
             <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
@@ -187,25 +219,12 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
         {renderActionBtn()}
       </div>
 
-      {status === 'running' && (
-        <div className="dim-mono">{nodeState.progress || '正在生图…'}</div>
-      )}
-      {status === 'failed' && nodeState.error && (
-        <div className="asr-error">失败：{nodeState.error}</div>
-      )}
-      {epErr && (
-        <div className="asr-error">episode 加载失败：{epErr}</div>
+      {/* 批量生图较慢（每 scene 一次 gpt-image-2），running 时保留逐条进度明细 */}
+      {(status === 'running' || status === 'queued') && nodeState.progress && (
+        <div className="dim-mono">{nodeState.progress}</div>
       )}
 
-      {items.length === 0 ? (
-        <div className="dim-mono">
-          {status === 'idle' || status === 'failed'
-            ? '尚未生图，点击右上「开始生图」启动。'
-            : status === 'running' || status === 'queued'
-              ? '生图中…'
-              : '暂无场景；先在 PREVIEW 抽屉里添加 scene。'}
-        </div>
-      ) : (
+      {items.length === 0 ? null : (
         <>
           <div className="image-grid">
             {items.map((it) => {

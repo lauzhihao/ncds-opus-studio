@@ -616,6 +616,60 @@ class PipelineRunner:
         self._save(state)
         self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
 
+    async def regen_tts_scene(self, job_id: str, scene_id: str) -> None:
+        """015：重生指定 scene 的整段音频（spawn tts_gen.py --only sid --force）。
+        UI 按 scene 渲染，重生粒度也是 scene，与「整段合成」语义一致。
+        """
+        state = self._load(job_id)
+        if state.pipeline_id != "paper_card_talk_015":
+            raise ValueError("scene 级重生仅 015 pipeline 支持")
+        n = state.nodes.get("tts")
+        if n is None:
+            raise KeyError("tts node not found")
+        if n.status != "done":
+            raise ValueError("tts node not done; run tts first")
+
+        job_dir = self.video_jobs_dir / job_id
+        ep_path = job_dir / "02_rw" / "episode.json"
+        if not ep_path.is_file():
+            raise ValueError("episode.json not found")
+        # 校验 scene 存在于 beats
+        ep = json.loads(ep_path.read_text(encoding="utf-8"))
+        if not any((b.get("scene") == scene_id) for b in (ep.get("beats") or [])):
+            raise ValueError(f"unknown scene: {scene_id}")
+
+        repo_root = Path(__file__).resolve().parents[3]
+        tts_gen = (
+            repo_root / "src" / "ncds_opus_factory" / "templates"
+            / "paper_card_talk_015" / ".015-draft-assets" / "tts_gen.py"
+        )
+        audio_dir = job_dir / "04_tts"
+
+        def on_progress(text: str) -> None:
+            self._push_progress(job_id, "tts", f"[regen {scene_id}] {text}")
+
+        await asyncio.to_thread(
+            _run_tts_gen_015,
+            script=tts_gen,
+            episode_path=ep_path,
+            audio_dir=audio_dir,
+            on_line=on_progress,
+            only=scene_id,
+            force=True,
+        )
+
+        # 重建 items（episode 的该 scene beats 时间戳已更新）
+        ep2 = json.loads(ep_path.read_text(encoding="utf-8"))
+        state = self._load(job_id)
+        n = state.nodes.get("tts")
+        if n is None:
+            return
+        n.outputs["items"] = _rebuild_tts_items_015(ep2)
+        n.finished_at = time.time()
+        state.updated_at = time.time()
+        self._save(state)
+        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
+
     async def cancel_node(self, job_id: str, node_name: str) -> bool:
         """取消正在跑的节点 task。返回是否真的取消了。"""
         key = (job_id, node_name)
@@ -755,20 +809,8 @@ class PipelineRunner:
             )
             # 读回 tts_gen 写好时间戳的 episode，组装 beat 级 items（audio 指向 scene mp3）
             ep2 = json.loads(ep_path.read_text(encoding="utf-8"))
-            items: list[dict[str, Any]] = []
-            scene_files: set[str] = set()
-            for i, b in enumerate(ep2.get("beats") or [], start=1):
-                af = str(b.get("audioFile") or "")
-                name = af.split("/")[-1] if af else ""
-                if name:
-                    scene_files.add(name)
-                items.append({
-                    "index": i,
-                    "zh": str(b.get("zh") or ""),
-                    "audio_relpath": f"04_tts/{name}" if name else "",
-                    "audio_start": b.get("audioStart"),
-                    "audio_end": b.get("audioEnd"),
-                })
+            items = _rebuild_tts_items_015(ep2)
+            scene_files = {it["audio_relpath"] for it in items if it.get("audio_relpath")}
             on_progress(f"完成：{len(scene_files)} 段 scene 音频 · {len(items)} beats")
             return {
                 "items": items,
@@ -804,6 +846,7 @@ class PipelineRunner:
             items.append({
                 "index": i,
                 "zh": str(b.get("zh") or ""),
+                "scene": str(b.get("scene") or ""),
                 "audio_relpath": f"04_tts/{name}",
             })
 
@@ -1399,23 +1442,49 @@ class PipelineRunner:
         }
 
 
+def _rebuild_tts_items_015(episode: dict[str, Any]) -> list[dict[str, Any]]:
+    """从写好时间戳的 episode 组装 beat 级 items（audio 指向所属 scene 整段 mp3）。
+    前端 TtsResultPanel 按 scene 分组渲染时用。"""
+    items: list[dict[str, Any]] = []
+    for i, b in enumerate(episode.get("beats") or [], start=1):
+        af = str(b.get("audioFile") or "")
+        name = af.split("/")[-1] if af else ""
+        items.append({
+            "index": i,
+            "zh": str(b.get("zh") or ""),
+            "scene": str(b.get("scene") or ""),
+            "audio_relpath": f"04_tts/{name}" if name else "",
+            "audio_start": b.get("audioStart"),
+            "audio_end": b.get("audioEnd"),
+        })
+    return items
+
+
 def _run_tts_gen_015(
     *,
     script: Path,
     episode_path: Path,
     audio_dir: Path,
     on_line: Callable[[str], None],
+    only: str | None = None,
+    force: bool = False,
 ) -> None:
     """同步调 015 tts_gen.py 按 scene 整段合成 + 写回 episode.json 时间戳。
+    only: 只跑指定 scene（单 scene 重生）；force: 覆盖已存在产物。
     行级转发 stdout；失败把末尾输出塞进 RuntimeError。
     """
+    cmd = [
+        sys.executable, str(script),
+        "--episode", str(episode_path.resolve()),
+        "--audio-dir", str(audio_dir.resolve()),
+        "--workers", "6",
+    ]
+    if only:
+        cmd += ["--only", only]
+    if force:
+        cmd += ["--force"]
     proc = subprocess.Popen(
-        [
-            sys.executable, str(script),
-            "--episode", str(episode_path.resolve()),
-            "--audio-dir", str(audio_dir.resolve()),
-            "--workers", "6",
-        ],
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

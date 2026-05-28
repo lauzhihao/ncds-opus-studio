@@ -223,7 +223,7 @@ async def regen_scene_image_from_preview(job_id: str, scene_id: str) -> dict[str
 
 @router.post("/jobs/{job_id}/nodes/tts/regen/{index}")
 async def regen_tts_beat(job_id: str, index: int) -> dict[str, Any]:
-    """重生 tts 节点下某条字幕的音频，不影响其他句和下游节点。"""
+    """重生 tts 节点下某条字幕的音频（014 逐句），不影响其他句和下游节点。"""
     try:
         await PIPELINE_RUNNER.regen_tts_beat(job_id, index)
     except KeyError as e:
@@ -231,6 +231,18 @@ async def regen_tts_beat(job_id: str, index: int) -> dict[str, Any]:
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "index": index}
+
+
+@router.post("/jobs/{job_id}/nodes/tts/regen-scene/{scene_id}")
+async def regen_tts_scene(job_id: str, scene_id: str) -> dict[str, Any]:
+    """015：重生指定 scene 的整段音频，不影响其他 scene 和下游节点。"""
+    try:
+        await PIPELINE_RUNNER.regen_tts_scene(job_id, scene_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "job_id": job_id, "scene_id": scene_id}
 
 
 @router.put("/jobs/{job_id}/inputs")

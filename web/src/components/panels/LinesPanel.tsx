@@ -231,11 +231,15 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
     <div className="rw-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
 
-      {/* 结构化进度行：放在标题分割线上方，与 RW/ASR 状态行统一风格 */}
-      {(status === 'running' || status === 'queued') && (
+      {/* 结构化状态行：跑过就常驻（done 后不消失，参考 RW），与 RW/ASR 统一风格 */}
+      {status !== 'idle' && (
         <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
           <ProcStatusRow
-            row={{ id: 'lines', label: 'AI 切分字幕', status: 'running' }}
+            row={{
+              id: 'lines',
+              label: 'AI 切分字幕',
+              status: status === 'done' ? 'done' : status === 'failed' ? 'failed' : 'running',
+            }}
             runningText="结构化中"
           />
         </div>
@@ -246,7 +250,7 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
           className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
           style={{ margin: 0, flex: 1 }}
         >
-          台词稿 · {beats.length || beatsCount} 句{statusBadge}
+          台词稿 / {groups.length} 段 / {beats.length || beatsCount} 句{statusBadge}
           {hasPending && (
             <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
               · 保存中…

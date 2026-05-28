@@ -82,7 +82,11 @@ export interface ImageItem {
 export interface TtsItem {
   index: number;
   zh: string;
+  scene: string;
   audio_relpath: string | null;
+  // 015 整段合成：beat 在整段里的区间（ms）
+  audio_start?: number | null;
+  audio_end?: number | null;
 }
 
 // ASR 节点 outputs.items 中的一条；与 pipeline_runner._execute_asr 输出对齐。
