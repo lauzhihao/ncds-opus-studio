@@ -1,0 +1,909 @@
+/* ──────────────────────────────────────────────────────────────────
+   抖音/B站短片样板：1920×1080，纸质暖色底，顶部标题/声明，中央卡片，
+   底部双语字幕。所有数值都走 CSS 变量，方便在 Tweaks 面板里改。
+   ────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* 配色：warm paper（默认）。Tweaks 可切到 sage / dusty-blue */
+  --bg:           #e6dfd0;   /* 整体纸底 */
+  --card:        #fbf6e8;    /* 中央卡片 */
+  --ink:         #1c1a16;    /* 主要文字 */
+  --ink-soft:    #4a4639;    /* 次级文字 */
+  --accent:      #c1392b;    /* 强调红 */
+  --accent-soft: #d4a44a;    /* 暖黄 */
+  --band:        #131210;    /* 底部字幕带 */
+  --band-text:   #ffffff;
+  --band-sub:    #cfc9b8;
+
+  /* 字号（1920×1080 刻度） */
+  --type-title:    44px;     /* 顶部标题 */
+  --type-disclaim: 30px;     /* 右上免责 */
+  --type-headline: 88px;     /* 章节大字 */
+  --type-cap-zh:   78px;     /* 底部中文字幕 */
+  --type-cap-en:   38px;     /* 底部英文字幕 */
+
+  /* 间距 */
+  --pad-x: 140px;
+  --top-h: 110px;
+  --band-h: 220px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  width: 100%; height: 100%;
+  background: #000;     /* 视口外为黑（letterbox） */
+  overflow: hidden;
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 视口适配 ─────────────────────────────────────────────────────── */
+.viewport {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.stage {
+  position: relative;
+  width: 1920px; height: 1080px;
+  transform-origin: center center;
+  background: var(--bg);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* 纸质纹理：细密噪点 + 微微竖向纹路 */
+.stage::before {
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .12 0'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>");
+  background-size: 200px 200px;
+  opacity: .9;
+  mix-blend-mode: multiply;
+  z-index: 1;
+}
+
+/* 装饰水印：稀疏的小星、细十字、圆点，做平铺；密度低、不抢主视觉 */
+.stage::after {
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320'><g fill='%231c1a16' stroke='%231c1a16' stroke-width='1.2' fill-opacity='1' stroke-opacity='1'><!-- 4-point sparkles --><path d='M40 38 l2 8 l8 2 l-8 2 l-2 8 l-2 -8 l-8 -2 l8 -2 z'/><path d='M220 90 l1.5 6 l6 1.5 l-6 1.5 l-1.5 6 l-1.5 -6 l-6 -1.5 l6 -1.5 z'/><path d='M125 215 l1.8 7 l7 1.8 l-7 1.8 l-1.8 7 l-1.8 -7 l-7 -1.8 l7 -1.8 z'/><path d='M275 260 l1.2 5 l5 1.2 l-5 1.2 l-1.2 5 l-1.2 -5 l-5 -1.2 l5 -1.2 z'/><path d='M80 280 l1.5 6 l6 1.5 l-6 1.5 l-1.5 6 l-1.5 -6 l-6 -1.5 l6 -1.5 z'/><!-- thin crosses --><g stroke-linecap='round'><line x1='160' y1='40' x2='160' y2='52'/><line x1='154' y1='46' x2='166' y2='46'/><line x1='75' y1='150' x2='75' y2='160'/><line x1='70' y1='155' x2='80' y2='155'/><line x1='250' y1='170' x2='250' y2='180'/><line x1='245' y1='175' x2='255' y2='175'/><line x1='190' y1='285' x2='190' y2='295'/><line x1='185' y1='290' x2='195' y2='290'/></g><!-- tiny dots --><g stroke='none'><circle cx='100' cy='100' r='1.8'/><circle cx='200' cy='40' r='1.4'/><circle cx='280' cy='130' r='1.6'/><circle cx='50' cy='220' r='1.4'/><circle cx='140' cy='160' r='1.2'/><circle cx='300' cy='200' r='1.4'/><circle cx='15' cy='80' r='1.2'/></g></g></svg>");
+  background-size: 320px 320px;
+  opacity: .085;
+  mix-blend-mode: multiply;
+}
+
+/* ── 顶部栏 ──────────────────────────────────────────────────────── */
+.top-bar {
+  position: absolute; left: 0; right: 0; top: 0;
+  height: var(--top-h);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 var(--pad-x);
+  z-index: 5;
+}
+
+.brand {
+  display: flex; align-items: center; gap: 18px;
+  justify-self: start;
+}
+
+/* 品牌标：红色方块容器 + 内嵌反白钢笔尖 SVG。color 给 SVG 的 currentColor 用。 */
+.brand-mark {
+  width: 60px; height: 60px;
+  background: var(--accent);
+  color: var(--card);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.55);
+  border-radius: 2px;
+}
+.brand-mark svg { display: block; width: 40px; height: 40px; }
+
+.brand-title {
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-weight: 700;
+  font-size: var(--type-title);
+  color: var(--ink);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.disclaimer {
+  justify-self: end;
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-weight: 600;
+  font-size: var(--type-disclaim);
+  color: var(--ink-soft);
+  letter-spacing: .04em;
+}
+
+/* ── 中央卡片 ────────────────────────────────────────────────────── */
+.card-area {
+  position: absolute;
+  left: var(--pad-x);
+  right: var(--pad-x);
+  top: calc(var(--top-h) + 10px);
+  bottom: var(--band-h);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 3;
+}
+
+.card {
+  position: relative;
+  width: 100%; height: 100%;
+  background: var(--card);
+  border-radius: 28px;
+  box-shadow: 0 24px 48px -28px rgba(0,0,0,.18), inset 0 0 0 1px rgba(0,0,0,.04);
+  overflow: hidden;
+}
+
+/* image-slot 堆叠层。所有 slot 共占一个绝对区域，靠 active 类切换可见 */
+.scene-stack {
+  position: absolute; inset: 0;
+}
+
+/* 默认无 Ken Burns（瞬切）；body.ken-burns 时启用慢推。
+   player.js 在激活每个 scene 时会按"该 scene 占多少秒"覆盖 transform-duration，
+   让短 beat 的镜头不会"还没动起来就切走了"。 */
+.scene {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transform: scale(1.02);
+  transition: opacity .55s ease, transform .3s ease;
+  pointer-events: none;
+}
+body.ken-burns .scene {
+  transition: opacity .55s ease, transform 5s ease-out;
+}
+
+.scene.active {
+  opacity: 1;
+  transform: scale(1.06);
+  pointer-events: auto;
+}
+
+/* image-stage 是 light DOM wrapper（mo-img-* keyframe 挂这里，不是 ::part），
+   占原本 image-slot 92%/88% 的位置 + absolute 居中 + base translate(-50%,-50%)
+   让 keyframe 公式（含 translate(-50%,-50%)）能正确叠加。image-slot 自己撑满
+   wrapper。 */
+.scene .image-stage {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 92%;
+  height: 88%;
+  transform: translate(-50%, -50%);
+}
+.scene .image-stage image-slot {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* 占位时显示的 prompt 文字（用户没拖图前的提示） */
+.scene .placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 80px 100px;
+  text-align: center;
+  pointer-events: none;
+  color: var(--ink-soft);
+}
+.scene .placeholder .ph-id {
+  font-family: "JetBrains Mono", "SF Mono", "Menlo", monospace;
+  font-size: 24px;
+  letter-spacing: .08em;
+  color: var(--accent);
+  margin-bottom: 18px;
+  text-transform: uppercase;
+}
+.scene .placeholder .ph-prompt {
+  font-size: 30px;
+  line-height: 1.45;
+  max-width: 1100px;
+  color: var(--ink-soft);
+}
+
+/* 章节封面卡：左侧大序号 + 中间红色细线 + 右侧章节名（杂志栏目排版） */
+.scene.is-chapter .placeholder { display: none; }
+.scene .chapter-card {
+  display: none;
+  position: absolute; inset: 0;
+  align-items: center; justify-content: center;
+  gap: 60px;
+  z-index: 3;
+}
+.scene.is-chapter .chapter-card { display: flex; }
+/* 章节卡字号/字体走 CSS variable，episode.json 的 scenes[id].style 可 per-chapter 覆盖 */
+.scene .chapter-num {
+  font-family: var(--chapter-num-font, "Noto Serif SC"), "Source Han Serif SC", "Songti SC", serif;
+  font-weight: var(--chapter-num-weight, 900);
+  font-size: var(--chapter-num-size, 360px);
+  line-height: 1;
+  color: var(--chapter-num-color, var(--ink));
+  letter-spacing: var(--chapter-num-letter-spacing, normal);
+}
+.scene .chapter-num em {
+  font-style: normal;
+  color: var(--chapter-num-accent, var(--accent));
+}
+.scene .chapter-rule {
+  width: var(--chapter-rule-width, 3px);
+  height: var(--chapter-rule-height, 260px);
+  background: var(--chapter-rule-color, var(--accent));
+  align-self: center;
+  border-radius: 1px;
+}
+.scene .chapter-text {
+  font-family: var(--chapter-text-font, "Noto Serif SC"), "Source Han Serif SC", "Songti SC", serif;
+  font-weight: var(--chapter-text-weight, 600);
+  font-size: var(--chapter-text-size, 80px);
+  line-height: var(--chapter-text-line-height, 1.32);
+  color: var(--chapter-text-color, var(--ink));
+  text-align: var(--chapter-text-align, center);
+  max-width: var(--chapter-text-max-width, 1400px);
+  letter-spacing: var(--chapter-text-letter-spacing, .04em);
+}
+
+/* ── 底部字幕带 ──────────────────────────────────────────────────── */
+.subtitle-band {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: var(--band-h);
+  background: var(--band);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 0 var(--pad-x);
+  z-index: 4;
+  gap: 18px;
+  overflow: hidden;                /* 防字号过大时撑爆字幕带 */
+}
+
+.subtitle-zh, .subtitle-en {
+  text-align: center;
+  width: 100%;
+  line-height: 1.2;
+  transition: opacity .25s ease;
+}
+
+.subtitle-zh {
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-weight: 700;
+  font-size: var(--type-cap-zh);
+  color: var(--band-text);
+  letter-spacing: .02em;
+}
+.band-dark .subtitle-zh {
+  text-shadow: 0 2px 0 rgba(0,0,0,.4);
+}
+.band-paper .subtitle-zh {
+  /* 纸底大字：用细微的纸张衬底感，不要硬阴影 */
+  text-shadow: 0 1px 0 rgba(255,255,255,.4);
+}
+
+.subtitle-en {
+  font-family: "Inter", "Helvetica Neue", system-ui, sans-serif;
+  font-weight: 500;
+  font-size: var(--type-cap-en);
+  color: var(--band-sub);
+  letter-spacing: .01em;
+}
+
+.beat-fade-out .subtitle-zh,
+.beat-fade-out .subtitle-en {
+  opacity: 0;
+}
+
+/* ── 控制条：左下角，在 1920×1080 缩放后的左侧黑边中水平居中（录制时隐藏） ───
+   --bar 是左侧黑边宽度 (viewport - 16:9 stage) / 2; 黑边窄时 fallback 到左 8px 保底间距 */
+.controls {
+  --bar: max(0px, (100vw - 100vh * 16 / 9) / 2);
+  --bar-w: 48px;
+  position: fixed;
+  bottom: 16px;
+  left: max(8px, calc((var(--bar) - var(--bar-w)) / 2));
+  width: var(--bar-w);
+  box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+  background: rgba(20,18,15,.85);
+  color: #fff;
+  border-radius: 10px;
+  padding: 8px 6px;
+  font-size: 13px;
+  z-index: 9999;
+  backdrop-filter: blur(8px);
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.controls button {
+  appearance: none;
+  border: 0;
+  background: rgba(255,255,255,.12);
+  color: #fff;
+  width: 36px; height: 36px;
+  padding: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.controls button:hover { background: rgba(255,255,255,.22); }
+.controls button.primary { background: var(--accent); }
+.controls button.primary:hover { background: #d44535; }
+
+/* SVG icons */
+.controls .ico { width: 18px; height: 18px; display: block; }
+.controls #playBtn .ico-pause { display: none; }
+.controls #playBtn[data-state="playing"] .ico-play { display: none; }
+.controls #playBtn[data-state="playing"] .ico-pause { display: block; }
+
+/* hover 时把 data-label 浮在右侧 */
+.controls [data-label]:hover::after {
+  content: attr(data-label);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(20,18,15,.95);
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 分页：input 在上 (当前 beat), total 在下 (跳到末尾), 都跟其他按钮一样 36×36 方块 */
+.controls .progress {
+  font-variant-numeric: tabular-nums;
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 6px;
+  padding: 0;
+}
+.controls .progress input[type=number] {
+  background: rgba(255,255,255,.12);
+  color: #fff;
+  border: 0;
+  width: 36px; height: 36px;
+  padding: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+.controls .progress input[type=number]::-webkit-outer-spin-button,
+.controls .progress input[type=number]::-webkit-inner-spin-button {
+  -webkit-appearance: none; margin: 0;
+}
+.controls .progress input[type=number]:focus { outline: 1px solid var(--accent); }
+.controls .progress .progress-sep { display: none; }
+.controls .progress #progressTotal {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 节奏 slider：藏起来不参与布局，但保留 #rate 在 DOM 里供 player.js 读 value */
+.controls .rate-control { display: none; }
+
+body.recording .controls { display: none; }
+
+/* 录制模式下隐藏所有"编辑器残留"，保证视频不漏 UI */
+body.recording .twk-panel { display: none !important; }       /* React Tweaks 面板 */
+body.recording .scene .placeholder { display: none; }         /* player.js 渲染的 ph-id + ph-prompt 提示 */
+/* 图已填充时也隐藏 placeholder 提示文字（image-slot 在 src 加载完成后置 data-filled）。
+   用 :has 而非 + 兄弟选择器，因为 image-slot 被包在 light DOM 的 .image-stage
+   里（mo-img-* keyframe 的载体），跟 .placeholder 已经不是直接相邻。 */
+.scene:has(image-slot[data-filled]) .placeholder { display: none; }
+body.recording image-slot::part(ring) { display: none; }      /* image-slot 拖拽指示环 */
+body.recording image-slot::part(empty) { display: none; }     /* image-slot 空状态：图标 + placeholder= 文字 */
+
+/* 片尾淡出：playFrom 走完后挂 body.ending 1.5s，字幕轻轻淡掉、镜头继续慢推，
+   给录屏者一个明确的结束信号；ending 期间 stop()，但仍在 recording 状态等用户按 Esc */
+body.ending .subtitle-zh,
+body.ending .subtitle-en {
+  opacity: 0;
+  transition: opacity 0.7s ease;
+}
+
+/* 录制启动倒数：3 秒大字覆盖在 stage 中心。倒数完毕后淡出再 play()，
+   保证视频第一帧就是干净的封面镜，字幕不带 "准备录制… 3" */
+.rec-countdown {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 18, 15, 0.94);   /* 几乎不透明，挡住底下未激活的空 scene */
+  color: #fff;
+  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-weight: 900;
+  font-size: 480px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 50;
+  transition: opacity 0.32s ease;
+  text-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+.rec-countdown.show { opacity: 1; }
+
+/* "录制中" 微提示，只在动手指挥录屏前几秒露一下 */
+.rec-flash {
+  position: fixed; top: 16px; right: 16px;
+  background: var(--accent); color: #fff;
+  padding: 8px 14px; border-radius: 8px;
+  font-size: 13px;
+  z-index: 9999;
+  opacity: 0;
+  transition: opacity .4s;
+  font-family: "Inter", system-ui, sans-serif;
+}
+.rec-flash.show { opacity: 1; }
+
+/* ── 动效守门：首页静态，点击播放/录制后才启用动效 ──────────────── */
+body:not(.motion-enabled) .scene.active[class*="mo-scene-"] {
+  animation: none !important;
+  transition: opacity .35s ease !important;
+}
+body:not(.motion-enabled) .scene.active .scene-overlay {
+  animation: none !important;
+  opacity: 1 !important;
+}
+body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-typewriter"],
+body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-handwrite"],
+body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-slide-clip"],
+body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-iris"] {
+  clip-path: none !important;
+}
+
+/* ── 提示：浏览器无中文 TTS 时 ─────────────────────────────────────── */
+.tts-notice {
+  position: fixed; left: 50%; top: 64px;
+  transform: translateX(-50%);
+  background: rgba(20,18,15,.92);
+  color: #fff;
+  padding: 12px 18px; border-radius: 10px;
+  font-size: 14px; line-height: 1.5;
+  max-width: 540px;
+  z-index: 9999;
+  display: none;
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+/* ─── overlay 引擎 ────────────────────────────────────────────────────
+   场景文字叠层。overlays.js 在 scene 激活时把 SCENES[id].overlays 渲染成
+   .scene-overlay div，xPct/yPct 标的是 div 中心点（translate(-50%,-50%)）。
+   动效用 .scene.active .oa-* 触发，--oa-delay 控制阶梯延迟。
+   ─────────────────────────────────────────────────────────────────── */
+.overlay-layer {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* overlay 样式系统：base 把所有"可被 inline 覆盖的样式字段"全部 var() 化，
+   preset class 只重设 --os-* 变量、不直接写 property。这样：
+     - inline style（applyStyleObject 写 --os-font/--os-color 等）只覆盖单个变量，
+       preset 的 padding / background / border 等结构性视觉保持不变。
+     - 改字体后不再"清掉预设其他样式"。
+     - 加新 preset 只需写一行 --os-* 列表，模板统一。 */
+.scene-overlay {
+  position: absolute;
+  transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg));
+  font-family: var(--os-font, "Noto Sans SC", "PingFang SC", sans-serif);
+  font-weight: var(--os-weight, normal);
+  font-size: var(--os-size, 48px);
+  font-style: var(--os-font-style, normal);
+  color: var(--os-color, var(--ink));
+  letter-spacing: var(--os-letter-spacing, normal);
+  text-shadow: var(--os-text-shadow, none);
+  text-decoration: var(--os-text-decoration, none);
+  background: var(--os-bg, transparent);
+  padding: var(--os-padding, 0);
+  border: var(--os-border, none);
+  border-radius: var(--os-border-radius, 0);
+  box-shadow: var(--os-box-shadow, none);
+  white-space: var(--os-white-space, nowrap);
+  user-select: none;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.scene.active .scene-overlay {
+  animation-delay: var(--oa-delay, 0ms);
+  animation-fill-mode: forwards;
+  animation-duration: 600ms;
+  animation-timing-function: cubic-bezier(.22, .85, .36, 1);
+}
+
+/* ─── 字体字号风格（os-*）─ 全部走 --os-* 变量模板 ───────────────
+   规则：preset 只重设 --os-* 变量，不直接写 font-family / color 等 property。
+   base .scene-overlay 已 var() 引用所有 --os-*。inline style（applyStyleObject）
+   覆盖单个变量时不破坏 preset 其他视觉。新加 preset 抄一份变量列表即可。 */
+
+/* 小号白底圆角徽章：黑墨衬线字 */
+.os-tag-pill {
+  --os-font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --os-weight: 700;
+  --os-size: 40px;
+  --os-bg: var(--card);
+  --os-padding: 10px 26px;
+  --os-border-radius: 999px;
+  --os-box-shadow: inset 0 0 0 2px var(--ink), 0 8px 18px -10px rgba(0, 0, 0, .35);
+}
+
+/* 红色印章：粗红边 + 红字 + 微旋转 */
+.os-stamp {
+  --os-rotate: -3deg;
+  --os-font: "Noto Sans SC", "PingFang SC", sans-serif;
+  --os-weight: 900;
+  --os-size: 46px;
+  --os-color: var(--accent);
+  --os-padding: 10px 26px;
+  --os-border: 4px solid var(--accent);
+  --os-border-radius: 6px;
+  --os-bg: rgba(251, 246, 232, .55);
+  --os-letter-spacing: .06em;
+}
+
+/* 黑字 + 黄色 marker 划重点条 */
+.os-marker {
+  --os-font: "Noto Sans SC", "PingFang SC", sans-serif;
+  --os-weight: 800;
+  --os-size: 48px;
+  --os-color: var(--ink);
+  --os-padding: 2px 8px;
+  --os-bg: linear-gradient(transparent 55%, var(--accent-soft) 55% 92%, transparent 92%);
+}
+
+/* 手写卡片：衬线斜体 + 轻微倾斜 */
+.os-handwrite {
+  --os-rotate: -3deg;
+  --os-font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --os-weight: 500;
+  --os-font-style: italic;
+  --os-size: 52px;
+  --os-color: var(--ink-soft);
+}
+
+/* 等宽便利贴：黄底 + 灰墨 monospace */
+.os-typewriter {
+  --os-rotate: 2deg;
+  --os-font: "JetBrains Mono", "SF Mono", "Menlo", monospace;
+  --os-weight: 500;
+  --os-size: 34px;
+  --os-color: var(--ink);
+  --os-padding: 12px 22px;
+  --os-bg: #f4eed8;
+  --os-box-shadow: 0 8px 18px -10px rgba(0, 0, 0, .25), inset 0 0 0 1px rgba(28, 26, 22, .08);
+  --os-letter-spacing: .04em;
+}
+
+/* 大号衬线 + 细下划线（下划线用 currentColor 跟随 --os-color） */
+.os-callout {
+  --os-font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --os-weight: 700;
+  --os-size: 60px;
+  --os-color: var(--ink);
+  padding-bottom: 8px;
+  border-bottom: 3px solid currentColor;
+}
+
+/* 同上，红墨水版 */
+.os-callout-red {
+  --os-font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --os-weight: 700;
+  --os-size: 60px;
+  --os-color: var(--accent);
+}
+
+/* 红色 marker 圈出（手绘感椭圆，::before 是装饰层 hard-code，不入变量模板） */
+.os-circle-mark {
+  --os-font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --os-weight: 700;
+  --os-size: 48px;
+  --os-color: var(--ink);
+  --os-padding: 12px 28px;
+}
+.os-circle-mark::before {
+  content: "";
+  position: absolute;
+  inset: -6px -14px;
+  border: 4px solid var(--accent);
+  border-radius: 50%;
+  transform: rotate(-4deg);
+  pointer-events: none;
+}
+
+/* ─── 第二批 preset（印章/题字/高光/气泡，全部走 --os-* 模板）─────── */
+
+/* 蓝墨印章：跟 os-stamp 红色对位 */
+.os-stamp-blue {
+  --os-rotate: -3deg;
+  --os-font: "Noto Sans SC", "PingFang SC", sans-serif;
+  --os-weight: 900;
+  --os-size: 46px;
+  --os-color: #1f3a93;
+  --os-padding: 10px 26px;
+  --os-border: 4px solid #1f3a93;
+  --os-border-radius: 6px;
+  --os-bg: rgba(251, 246, 232, .55);
+  --os-letter-spacing: .06em;
+}
+
+/* 黄色便利贴：纯黄底 + 黑字 + 厚阴影，常用作旁注/补充 */
+.os-sticker-yellow {
+  --os-rotate: -2deg;
+  --os-font: "Noto Sans SC", "PingFang SC", sans-serif;
+  --os-weight: 700;
+  --os-size: 36px;
+  --os-color: var(--ink);
+  --os-bg: #ffe66b;
+  --os-padding: 16px 26px;
+  --os-box-shadow: 0 12px 20px -12px rgba(0,0,0,.4), 0 2px 4px rgba(0,0,0,.08);
+}
+
+/* 书签：左侧三角尖角 + 红边白底，挂"章节名/序号"语义 */
+.os-bookmark {
+  --os-font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --os-weight: 700;
+  --os-size: 38px;
+  --os-color: var(--accent);
+  --os-bg: var(--card);
+  --os-padding: 8px 26px 8px 36px;
+  --os-border: 2px solid var(--accent);
+  --os-border-radius: 0 6px 6px 0;
+}
+.os-bookmark::before {
+  content: "";
+  position: absolute;
+  left: -2px; top: 50%;
+  width: 0; height: 0;
+  border-top: 12px solid transparent;
+  border-bottom: 12px solid transparent;
+  border-right: 14px solid var(--accent);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+/* 方形深色吊牌：黑底 + 暖白字，做"标签 / 关键词"语义 */
+.os-tag-square {
+  --os-font: "Noto Sans SC", sans-serif;
+  --os-weight: 600;
+  --os-size: 32px;
+  --os-color: #fbf6e8;
+  --os-bg: #1c1a16;
+  --os-padding: 10px 22px;
+  --os-letter-spacing: .12em;
+}
+
+/* 篆刻方形红印：白字红底 + 内描边，落款语义 */
+.os-seal-square {
+  --os-rotate: -2deg;
+  --os-font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --os-weight: 900;
+  --os-size: 36px;
+  --os-color: #fbf6e8;
+  --os-bg: var(--accent);
+  --os-padding: 14px 18px;
+  --os-letter-spacing: .12em;
+  --os-box-shadow: inset 0 0 0 3px #fbf6e8;
+}
+
+/* 毛笔题款：超大粗衬线 + 微浮起阴影 */
+.os-brush-title {
+  --os-font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --os-weight: 900;
+  --os-size: 80px;
+  --os-color: var(--ink);
+  --os-letter-spacing: .04em;
+  --os-text-shadow: 0 4px 0 rgba(0,0,0,.06);
+}
+
+/* 落款方印：小号正方红框，配合 brush-title 用 */
+.os-title-stamp {
+  --os-rotate: -1deg;
+  --os-font: "Noto Serif SC", serif;
+  --os-weight: 800;
+  --os-size: 28px;
+  --os-color: var(--accent);
+  --os-padding: 6px 14px;
+  --os-border: 2px solid var(--accent);
+  --os-letter-spacing: .15em;
+}
+
+/* 霓虹粉光：多层 text-shadow 散光，黑底 */
+.os-neon {
+  --os-font: "Noto Sans SC", sans-serif;
+  --os-weight: 900;
+  --os-size: 52px;
+  --os-color: #ffe9f4;
+  --os-bg: rgba(20,18,15,.85);
+  --os-padding: 12px 24px;
+  --os-border-radius: 4px;
+  --os-text-shadow: 0 0 6px #ff5fb0, 0 0 12px #ff5fb0, 0 0 24px #ff2d92;
+  --os-letter-spacing: .04em;
+}
+
+/* 描边发光：白字 + 红 4 向描边 + 红外发光 */
+.os-outline-glow {
+  --os-font: "Noto Sans SC", sans-serif;
+  --os-weight: 900;
+  --os-size: 64px;
+  --os-color: #fbf6e8;
+  --os-text-shadow:
+    -2px -2px 0 var(--accent), 2px -2px 0 var(--accent),
+    -2px 2px 0 var(--accent), 2px 2px 0 var(--accent),
+    0 0 18px rgba(193, 57, 43, .55);
+}
+
+/* 全黄底高亮：比 os-marker 的渐变条更直接 */
+.os-highlight-yellow {
+  --os-font: "Noto Sans SC", sans-serif;
+  --os-weight: 800;
+  --os-size: 46px;
+  --os-color: var(--ink);
+  --os-bg: #ffe66b;
+  --os-padding: 4px 14px;
+  --os-border-radius: 4px;
+}
+
+/* 大引号金句：::before 挂一个超大红色开引号 */
+.os-quote-pull {
+  --os-font: "Noto Serif SC", serif;
+  --os-weight: 600;
+  --os-size: 52px;
+  --os-color: var(--ink);
+  --os-padding: 8px 0 8px 50px;
+  --os-letter-spacing: .02em;
+}
+.os-quote-pull::before {
+  content: "\201C";
+  position: absolute;
+  left: -10px; top: -30px;
+  font-family: "Georgia", "Source Han Serif SC", serif;
+  font-size: 120px;
+  color: var(--accent);
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* 对话气泡：圆角矩形 + 底尾尖角 */
+.os-bubble {
+  --os-font: "Noto Sans SC", sans-serif;
+  --os-weight: 600;
+  --os-size: 36px;
+  --os-color: var(--ink);
+  --os-bg: var(--card);
+  --os-padding: 14px 24px;
+  --os-border-radius: 18px;
+  --os-box-shadow: 0 6px 14px -8px rgba(0,0,0,.25);
+}
+.os-bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%; bottom: -10px;
+  width: 0; height: 0;
+  border-top: 12px solid var(--card);
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 3px 2px rgba(0,0,0,.15));
+  pointer-events: none;
+}
+
+/* ─── 入场动效（oa-*） ──────────────────────────────────────────── */
+@keyframes oa-fly-top {
+  from { opacity: 0; transform: translate(-50%, calc(-50% - 60px)) rotate(var(--os-rotate, 0deg)); }
+  to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+@keyframes oa-fly-bottom {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 60px)) rotate(var(--os-rotate, 0deg)); }
+  to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+@keyframes oa-fly-left {
+  from { opacity: 0; transform: translate(calc(-50% - 80px), -50%) rotate(var(--os-rotate, 0deg)); }
+  to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+@keyframes oa-fly-right {
+  from { opacity: 0; transform: translate(calc(-50% + 80px), -50%) rotate(var(--os-rotate, 0deg)); }
+  to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+@keyframes oa-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes oa-zoom {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(.6) rotate(var(--os-rotate, 0deg)); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1)  rotate(var(--os-rotate, 0deg)); }
+}
+@keyframes oa-stamp-hit {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(1.6) rotate(calc(var(--os-rotate, 0deg) + 8deg)); }
+  60%  { opacity: 1; transform: translate(-50%, -50%) scale(.94) rotate(calc(var(--os-rotate, 0deg) - 3deg)); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1)   rotate(var(--os-rotate, 0deg)); }
+}
+@keyframes oa-blur {
+  from { opacity: 0; filter: blur(8px); transform: translate(-50%, calc(-50% + 18px)) rotate(var(--os-rotate, 0deg)); }
+  to   { opacity: 1; filter: blur(0);   transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+
+.scene.active .oa-fly-top    { animation-name: oa-fly-top; }
+.scene.active .oa-fly-bottom { animation-name: oa-fly-bottom; }
+.scene.active .oa-fly-left   { animation-name: oa-fly-left; }
+.scene.active .oa-fly-right  { animation-name: oa-fly-right; }
+.scene.active .oa-fade       { animation-name: oa-fade; }
+.scene.active .oa-zoom       { animation-name: oa-zoom; }
+.scene.active .oa-stamp-hit  { animation-name: oa-stamp-hit; animation-timing-function: cubic-bezier(.4, 2, .6, 1); }
+.scene.active .oa-blur       { animation-name: oa-blur; animation-timing-function: ease-out; }
+
+/* 跨 scene 的 overlay 退出：当 .scene 失去 .active 时，关键帧动画名失配 ⇒
+   元素回落到 .scene-overlay 基线（opacity: 0）。给它加上 opacity / filter 的
+   transition，把"硬切"换成 360ms 的柔和淡出。entry 由 keyframe 驱动不受影响。 */
+.scene-overlay {
+  transition: opacity .36s ease, filter .36s ease;
+}
+
+/* ─── 每条字幕进场动效（cap-enter-*） ────────────────────────────────
+   每条新 beat 都会被 player.showBeat() 重新挂一个 cap-enter-* 类，
+   通过 remove + reflow + add 强制重放 keyframes。所有 keyframes 都以
+   opacity 1 收尾，时长 < 560ms，确保短 beat 也能放完。
+   ───────────────────────────────────────────────────────────────── */
+@keyframes cap-fly-up        { 0% { opacity: 0; transform: translateY( 44px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes cap-fly-down      { 0% { opacity: 0; transform: translateY(-44px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes cap-fade-blur     { 0% { opacity: 0; filter: blur(10px); }           100% { opacity: 1; filter: blur(0); } }
+@keyframes cap-zoom-soft     { 0% { opacity: 0; transform: scale(.84); }        100% { opacity: 1; transform: scale(1); } }
+@keyframes cap-mask-l-r      { 0% { clip-path: inset(0 100% 0 0); opacity: 1; } 100% { clip-path: inset(0 0     0 0); opacity: 1; } }
+@keyframes cap-letter-spread { 0% { opacity: 0; letter-spacing: -.04em; }       100% { opacity: 1; letter-spacing: .02em; } }
+@keyframes cap-rise-glow {
+  0%   { opacity: 0; transform: translateY(20px); text-shadow: 0 0 0 transparent; }
+  55%  { opacity: 1; transform: translateY(-2px); text-shadow: 0 0 18px rgba(255,255,255,.55), 0 2px 0 rgba(0,0,0,.4); }
+  100% { opacity: 1; transform: translateY(0);    text-shadow: 0 2px 0 rgba(0,0,0,.4); }
+}
+
+body.motion-enabled .subtitle-zh[class*="cap-enter-"],
+body.motion-enabled .subtitle-en[class*="cap-enter-"] {
+  animation-duration: 540ms;
+  animation-timing-function: cubic-bezier(.22, .85, .36, 1);
+  animation-fill-mode: both;
+}
+
+.subtitle-zh.cap-enter-fly-up        { animation-name: cap-fly-up; }
+.subtitle-zh.cap-enter-fly-down      { animation-name: cap-fly-down; }
+.subtitle-zh.cap-enter-fade-blur     { animation-name: cap-fade-blur; }
+.subtitle-zh.cap-enter-zoom-soft     { animation-name: cap-zoom-soft; }
+.subtitle-zh.cap-enter-mask-l-r      { animation-name: cap-mask-l-r; }
+.subtitle-zh.cap-enter-letter-spread { animation-name: cap-letter-spread; }
+.subtitle-zh.cap-enter-rise-glow     { animation-name: cap-rise-glow; }
+/* 英文行延 130ms 跟进，节奏感更清晰 */
+.subtitle-en.cap-enter-fly-up        { animation-name: cap-fly-up;        animation-delay: 130ms; }
+.subtitle-en.cap-enter-fly-down      { animation-name: cap-fly-down;      animation-delay: 130ms; }
+.subtitle-en.cap-enter-fade-blur     { animation-name: cap-fade-blur;     animation-delay: 130ms; }
+.subtitle-en.cap-enter-zoom-soft     { animation-name: cap-zoom-soft;     animation-delay: 130ms; }
+.subtitle-en.cap-enter-mask-l-r      { animation-name: cap-mask-l-r;      animation-delay: 130ms; }
+.subtitle-en.cap-enter-letter-spread { animation-name: cap-letter-spread; animation-delay: 130ms; }
+.subtitle-en.cap-enter-rise-glow     { animation-name: cap-rise-glow;     animation-delay: 130ms; }
+
+/* 未启用动效（首页静态）时屏蔽，避免点击播放前字幕"跳"一下 */
+body:not(.motion-enabled) .subtitle-zh[class*="cap-enter-"],
+body:not(.motion-enabled) .subtitle-en[class*="cap-enter-"] {
+  animation: none !important;
+}
+
+body.tts-missing .tts-notice { display: block; }

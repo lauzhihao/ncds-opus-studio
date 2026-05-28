@@ -1,11 +1,13 @@
-// asr 节点产物面板：手风琴 + 三 tab；精华稿默认可编辑（textarea + 自动防抖保存）。
+// asr 节点产物面板：手风琴 + 「文章整理」单视图。
 // header 分割线右侧单按钮按节点状态变形（仅控制 ASR 本节点）：
 //   IDLE/FAILED → Play  + 开始转写  → runNode('asr')
 //   RUNNING/QUEUED → Square + 停止 → cancelNode('asr')
 //   DONE         → RefreshCw + 重新执行（弹确认）→ runNode('asr')（清下游 + 重跑）
-// 触发 RW 的 play 按钮单独放在精华稿 tab 的复制按钮旁，点击前会 flush 草稿再 runNode('rw')。
+// 触发 RW 的 play 按钮放在文章整理面板的复制按钮旁。
+// 注：「听写稿」tab 已下线 —— 阿里 ASR 输出稳定，用户需要原稿可去 transcript_relpath。
+//     「精华稿」tab 也已下线 —— 爆款精华提取转由 rw 节点的多模型并行改写承担。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -16,10 +18,12 @@ import {
   Square,
   User,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 import { api } from '../../api/client';
 import type { AsrItem, NodeState, PipelineNodeDef } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { ProcStatusRow, type ProcStatus } from './RwResultPanel';
 
 interface Props {
   jobId: string;
@@ -29,13 +33,16 @@ interface Props {
   onAdvanced?: () => void;
 }
 
-type TabKey = 'transcript' | 'article' | 'highlight';
 
-const TABS: { key: TabKey; label: string; relpathKey: keyof AsrItem }[] = [
-  { key: 'transcript', label: '听写稿', relpathKey: 'transcript_relpath' },
-  { key: 'article', label: '文章解析', relpathKey: 'article_relpath' },
-  { key: 'highlight', label: '精华稿', relpathKey: 'highlight_relpath' },
-];
+// 作品级进度：后端 _execute_asr 把每条 URL 的 {status, stage} 实时推到 outputs.item_progress
+interface AsrItemProgress {
+  index: number;
+  title: string;
+  url: string;
+  status: ProcStatus;
+  stage: string;
+  error?: string;
+}
 
 export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   const items = (nodeState.outputs?.items as AsrItem[] | undefined) ?? [];
@@ -44,45 +51,11 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
   const [pendingRerun, setPendingRerun] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
 
-  // 所有 item 的精华稿未落盘草稿；relpath -> content
-  // 用 ref 而非 state，防抖 timer 直接读最新值不触发 re-render
-  const pendingDraftsRef = useRef<Map<string, string>>(new Map());
-  const debounceTimer = useRef<number | null>(null);
-  const [saveTick, setSaveTick] = useState(0); // 仅用于触发"保存中…"指示
-
-  // 防抖 flush：onHighlightChange 触发后 600ms 内没新变化就落盘
-  const onHighlightChange = useCallback(
-    (relpath: string, content: string) => {
-      pendingDraftsRef.current.set(relpath, content);
-      setSaveTick((t) => t + 1);
-      if (debounceTimer.current != null) window.clearTimeout(debounceTimer.current);
-      debounceTimer.current = window.setTimeout(() => {
-        void flushHighlightDrafts();
-      }, 600);
-    },
-    [], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-
-  async function flushHighlightDrafts(): Promise<void> {
-    if (debounceTimer.current != null) {
-      window.clearTimeout(debounceTimer.current);
-      debounceTimer.current = null;
-    }
-    const entries = Array.from(pendingDraftsRef.current.entries());
-    if (entries.length === 0) return;
-    pendingDraftsRef.current.clear();
-    setSaveTick((t) => t + 1);
-    await Promise.all(
-      entries.map(([relpath, content]) =>
-        api.writeFile(jobId, relpath, content).catch((e) => {
-          // 失败回填到 pending，下次 flush 重试
-          pendingDraftsRef.current.set(relpath, content);
-          console.error('[asr] save highlight failed', relpath, e);
-        }),
-      ),
-    );
-    setSaveTick((t) => t + 1);
-  }
+  // 作品级状态行：每条 URL 一行（后端推的 item_progress），running 时显示实时阶段
+  const itemProgress = nodeState.outputs?.item_progress as
+    | Record<string, AsrItemProgress>
+    | undefined;
+  const itemRows = itemProgress ? Object.values(itemProgress) : [];
 
   async function doRun() {
     setActionBusy(true);
@@ -106,12 +79,11 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     }
   }
 
-  // 精华稿 tab 内 play 按钮触发：先 flush 当前所有 highlight 草稿，再启动 RW
+  // 文章整理面板 play 按钮触发：直接启动 RW
   const [advanceBusy, setAdvanceBusy] = useState(false);
   async function doAdvanceToRw() {
     setAdvanceBusy(true);
     try {
-      await flushHighlightDrafts();
       await api.runNode(jobId, 'rw');
       onAdvanced?.();
     } catch (e) {
@@ -165,11 +137,46 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
           ? ' · FAILED'
           : '';
 
-  const hasPending = pendingDraftsRef.current.size > 0;
+  // 统一提示 banner（标题上方，带色条）：idle/空产物时引导，failed 时显示错误
+  let hint: { tone: 'info' | 'error'; text: string } | null = null;
+  if (status === 'failed' && nodeState.error) {
+    hint = { tone: 'error', text: `失败：${nodeState.error}` };
+  } else if (items.length === 0 && status === 'idle') {
+    hint = { tone: 'info', text: '点击下方「开始转写」启动。' };
+  } else if (items.length === 0 && status === 'done') {
+    hint = { tone: 'info', text: '暂无产物。' };
+  }
 
   return (
-    <div>
+    <div className="asr-panel-root">
+      {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
+
+      {/* 作品状态行：放在「ASR 产物」标题分割线上方。running 时显示进度；
+          failed 时也显示，失败作品 badge=错误，hover 看完整错误信息。 */}
+      {itemRows.length > 0 && (status === 'running' || status === 'queued' || status === 'failed') && (
+        <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
+          {itemRows.map((it) => (
+            <ProcStatusRow
+              key={it.index}
+              row={{
+                id: String(it.index),
+                label: it.title || shortUrl(it.url) || `作品 ${it.index}`,
+                status: it.status,
+                detail: it.error || undefined,
+              }}
+              runningText={it.stage || '处理中'}
+            />
+          ))}
+        </div>
+      )}
+      {(status === 'running' || status === 'queued') && itemRows.length === 0 && (
+        <div className="dim-mono" style={{ marginBottom: 'var(--s-3)' }}>
+          {nodeState.progress || '正在启动…'}
+        </div>
+      )}
+
       <div
+        className="asr-panel-header"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -177,37 +184,16 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
           margin: 'var(--s-3) 0',
         }}
       >
-        <div className="section-h" style={{ margin: 0, flex: 1 }}>
+        <div
+          className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
+          style={{ margin: 0, flex: 1 }}
+        >
           ASR 产物 · {items.length} 条视频{statusBadge}
-          {hasPending && (
-            <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
-              · 保存中…
-            </span>
-          )}
         </div>
         {renderActionBtn()}
       </div>
 
-      {status === 'running' && (
-        <div className="dim-mono" style={{ marginBottom: 'var(--s-3)' }}>
-          {nodeState.progress || '正在跑…'}
-        </div>
-      )}
-      {status === 'failed' && nodeState.error && (
-        <div className="asr-error" style={{ marginBottom: 'var(--s-3)' }}>
-          失败：{nodeState.error}
-        </div>
-      )}
-
-      {items.length === 0 ? (
-        <div className="dim-mono">
-          {status === 'idle' || status === 'failed'
-            ? '尚未跑过 ASR，点击右上「确认」启动。'
-            : status === 'running' || status === 'queued'
-              ? '产物生成中…'
-              : '暂无产物'}
-        </div>
-      ) : (
+      {items.length > 0 && (
         <div className="asr-acc">
           {items.map((item, idx) => (
             <AsrItemRow
@@ -216,11 +202,8 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
               item={item}
               expanded={openIdx === idx}
               onToggle={() => setOpenIdx(openIdx === idx ? -1 : idx)}
-              onHighlightChange={onHighlightChange}
               onAdvanceToRw={doAdvanceToRw}
               advanceBusy={advanceBusy}
-              // saveTick 仅作为 re-render 触发器，让"保存中"指示能反映最新 pending 状态
-              saveTick={saveTick}
             />
           ))}
         </div>
@@ -247,7 +230,6 @@ function AsrItemRow({
   item,
   expanded,
   onToggle,
-  onHighlightChange,
   onAdvanceToRw,
   advanceBusy,
 }: {
@@ -255,44 +237,34 @@ function AsrItemRow({
   item: AsrItem;
   expanded: boolean;
   onToggle: () => void;
-  onHighlightChange: (relpath: string, content: string) => void;
   onAdvanceToRw: () => void | Promise<void>;
   advanceBusy: boolean;
-  saveTick: number;
 }) {
-  const [tab, setTab] = useState<TabKey>('transcript');
-  const [cache, setCache] = useState<Partial<Record<TabKey, string>>>({});
+  // 只剩 article 一个 tab；保留 body/loading 命名风格便于未来再加 tab
+  const [body, setBody] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!expanded) return;
-    if (cache[tab] !== undefined) return;
-    const relpath = item[TABS.find((t) => t.key === tab)!.relpathKey] as
-      | string
-      | undefined;
+    if (body !== undefined) return;
+    const relpath = item.article_relpath;
     if (!relpath) {
-      setCache((c) => ({ ...c, [tab]: '(无内容)' }));
+      setBody('(无内容)');
       return;
     }
     setLoading(true);
     fetch(`/jobs/${jobId}/files/${relpath}`)
-      .then((r) =>
-        r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`)),
-      )
-      .then((text) => setCache((c) => ({ ...c, [tab]: text })))
-      .catch((e) =>
-        setCache((c) => ({ ...c, [tab]: `加载失败: ${(e as Error).message}` })),
-      )
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((text) => setBody(text))
+      .catch((e) => setBody(`加载失败: ${(e as Error).message}`))
       .finally(() => setLoading(false));
-  }, [expanded, tab, jobId, item, cache]);
+  }, [expanded, jobId, item, body]);
 
   const failed = !!item.error;
-  const body = cache[tab];
-  const isHighlight = tab === 'highlight';
 
   return (
     <article className={`asr-item${expanded ? ' open' : ''}${failed ? ' failed' : ''}`}>
-      <header className="asr-item-head" onClick={onToggle}>
+      <header className="asr-item-head asr-item-head-2lines" onClick={onToggle}>
         {expanded ? (
           <ChevronDown size={14} strokeWidth={1.7} />
         ) : (
@@ -301,45 +273,40 @@ function AsrItemRow({
         <span className="asr-item-num mono">
           {String(item.index ?? '?').padStart(2, '0')}
         </span>
-        {item.title && (
-          <span className="asr-item-title" title={item.title}>
-            {item.title}
-          </span>
-        )}
-        {item.author && (
-          <span className="dim-mono asr-item-author">
-            <User size={11} strokeWidth={1.7} style={{ verticalAlign: '-1px', marginRight: 2 }} />
-            {item.author}
-          </span>
-        )}
-        {item.url && (
-          <a
-            className={`asr-item-url${item.title ? '' : ' primary'}`}
-            href={item.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            title={item.url}
-          >
-            <span className="link-text">{shortUrl(item.url)}</span>
-            <ExternalLink size={11} strokeWidth={1.7} />
-          </a>
-        )}
+        <div className="asr-item-meta">
+          <div className="asr-item-meta-row">
+            {item.title && (
+              <span className="asr-item-title" title={item.title}>
+                {item.title}
+              </span>
+            )}
+            {item.author && (
+              <span className="dim-mono asr-item-author">
+                <User size={11} strokeWidth={1.7} style={{ verticalAlign: '-1px', marginRight: 2 }} />
+                {item.author}
+              </span>
+            )}
+          </div>
+          {item.url && (
+            <a
+              className="asr-item-url"
+              href={item.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={item.url}
+            >
+              <span className="link-text">{shortUrl(item.url)}</span>
+              <ExternalLink size={11} strokeWidth={1.7} />
+            </a>
+          )}
+        </div>
       </header>
 
       {expanded && !failed && (
         <div className="asr-item-body">
           <nav className="asr-tabs">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                className={`asr-tab${tab === t.key ? ' active' : ''}`}
-                onClick={() => setTab(t.key)}
-              >
-                {t.label}
-              </button>
-            ))}
+            <span className="asr-tab active">文章整理</span>
             <span style={{ flex: 1 }} />
             <button
               type="button"
@@ -350,32 +317,22 @@ function AsrItemRow({
             >
               <Copy size={12} strokeWidth={1.7} />
             </button>
-            {isHighlight && (
-              <button
-                type="button"
-                className="btn sm icon-only primary"
-                title="用此精华稿启动改写（RW）"
-                disabled={advanceBusy || !body}
-                onClick={onAdvanceToRw}
-              >
-                <Play size={12} strokeWidth={2} fill="currentColor" />
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn sm icon-only primary"
+              title="基于整理后的文章启动改写（RW）"
+              disabled={advanceBusy || !body}
+              onClick={onAdvanceToRw}
+            >
+              <Play size={12} strokeWidth={2} fill="currentColor" />
+            </button>
           </nav>
-          {isHighlight ? (
-            <textarea
-              className="code-pane editable"
-              value={body ?? (loading ? '' : '')}
-              placeholder={loading ? '加载中…' : ''}
-              onChange={(e) => {
-                const v = e.target.value;
-                setCache((c) => ({ ...c, highlight: v }));
-                if (item.highlight_relpath) onHighlightChange(item.highlight_relpath, v);
-              }}
-              rows={16}
-            />
+          {body ? (
+            <div className="article-pane">
+              <ReactMarkdown>{body}</ReactMarkdown>
+            </div>
           ) : (
-            <pre className="code-pane">{loading ? '加载中…' : body ?? ''}</pre>
+            <pre className="code-pane">{loading ? '加载中…' : ''}</pre>
           )}
         </div>
       )}

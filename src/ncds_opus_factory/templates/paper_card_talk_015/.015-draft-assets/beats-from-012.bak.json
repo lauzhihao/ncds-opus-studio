@@ -1,0 +1,717 @@
+[
+  {
+    "zh": "你以为是你在挑东西，",
+    "en": "You think you're the one picking things —",
+    "scene": "title"
+  },
+  {
+    "zh": "其实是算法在挑你。",
+    "en": "really, the algorithm is picking you.",
+    "scene": "title"
+  },
+  {
+    "zh": "同一杯咖啡、同一份外卖、同一双鞋，",
+    "en": "Same coffee, same takeout, same pair of shoes —",
+    "scene": "title"
+  },
+  {
+    "zh": "别人花的钱常常只有你的一半。",
+    "en": "the next person often pays half what you do.",
+    "scene": "title"
+  },
+  {
+    "zh": "不是你不够精——是你被「太懂你」的时代挑中了。",
+    "en": "You're sharp enough — this age just knows you too well.",
+    "scene": "title"
+  },
+  {
+    "zh": "一杯咖啡，藏着一场信息差",
+    "en": "One cup of coffee, one whole information gap",
+    "scene": "ch1",
+    "chapter": 1
+  },
+  {
+    "zh": "你打开斯达巴克斯小程序，",
+    "en": "You open the Sidabakesi mini-app,",
+    "scene": "coffee-app"
+  },
+  {
+    "zh": "一杯拿铁三十二，",
+    "en": "a latte runs you thirty-two,",
+    "scene": "coffee-app"
+  },
+  {
+    "zh": "加份小料逼近五十——",
+    "en": "add a topping and you're closing in on fifty —",
+    "scene": "coffee-app"
+  },
+  {
+    "zh": "这是「便捷」的价格。",
+    "en": "this is the price of \"convenience.\"",
+    "scene": "coffee-app"
+  },
+  {
+    "zh": "但同一杯拿铁，",
+    "en": "But the same latte,",
+    "scene": "xianyu-result"
+  },
+  {
+    "zh": "在小黄鱼搜「代下单」，",
+    "en": "search \"proxy order\" on Little Yellow Fish,",
+    "scene": "xianyu-result"
+  },
+  {
+    "zh": "十八块到手，",
+    "en": "lands in your hand for eighteen yuan,",
+    "scene": "xianyu-result"
+  },
+  {
+    "zh": "走的是同一条订单系统，",
+    "en": "runs through the same order system,",
+    "scene": "xianyu-result"
+  },
+  {
+    "zh": "能积星、能退款、能投诉。",
+    "en": "stars stack, refunds work, complaints register.",
+    "scene": "xianyu-result"
+  },
+  {
+    "zh": "你以为多付的那十四块，",
+    "en": "You assume the extra fourteen yuan",
+    "scene": "feeling-design"
+  },
+  {
+    "zh": "是咖啡更香、奶泡更细、店员笑得更甜？",
+    "en": "buys a better roast, finer foam, a sweeter smile from the barista?",
+    "scene": "feeling-design"
+  },
+  {
+    "zh": "不是。",
+    "en": "It doesn't.",
+    "scene": "feeling-design"
+  },
+  {
+    "zh": "你付的是「我今天值得花三十二块」的那种感觉。",
+    "en": "What you paid for is the feeling that \"today I'm worth thirty-two yuan.\"",
+    "scene": "feeling-design"
+  },
+  {
+    "zh": "这种感觉是被设计出来的，",
+    "en": "That feeling was engineered,",
+    "scene": "feeling-design"
+  },
+  {
+    "zh": "也是商家最贵的产品。",
+    "en": "and it's the priciest thing on the menu.",
+    "scene": "feeling-design"
+  },
+  {
+    "zh": "这套路不只是咖啡——",
+    "en": "And it's not just coffee —",
+    "scene": "many-brands"
+  },
+  {
+    "zh": "某幸会员日、疯狂星期四，",
+    "en": "Some-Luckin members' day, Crazy Thursday,",
+    "scene": "many-brands"
+  },
+  {
+    "zh": "全都有人在代下单，",
+    "en": "every one of them has someone running proxy orders,",
+    "scene": "many-brands"
+  },
+  {
+    "zh": "全都是同一个道理：",
+    "en": "all on the same logic:",
+    "scene": "many-brands"
+  },
+  {
+    "zh": "你付的不是套餐，",
+    "en": "you're not paying for the meal,",
+    "scene": "many-brands"
+  },
+  {
+    "zh": "是你没去搜那五分钟。",
+    "en": "you're paying for the five minutes you didn't spend searching.",
+    "scene": "many-brands"
+  },
+  {
+    "zh": "打开小黄鱼，每天都是会员日。",
+    "en": "Open Little Yellow Fish — every day is members' day.",
+    "scene": "xianyu-result"
+  },
+  {
+    "zh": "互联网这十年最值钱的东西，",
+    "en": "The most valuable thing on the internet this past decade",
+    "scene": "info-gap"
+  },
+  {
+    "zh": "从来不是某个产品，",
+    "en": "has never been any one product —",
+    "scene": "info-gap"
+  },
+  {
+    "zh": "是你不知道、而别人知道的那段信息差。",
+    "en": "it's the gap between what you don't know and what others do.",
+    "scene": "info-gap"
+  },
+  {
+    "zh": "算法时代的两套话术",
+    "en": "The two scripts of the algorithmic age",
+    "scene": "ch2",
+    "chapter": 2
+  },
+  {
+    "zh": "第一套话术叫「赶紧」。",
+    "en": "Script one is called \"hurry up.\"",
+    "scene": "livestream-countdown"
+  },
+  {
+    "zh": "直播间的倒计时永远在响，",
+    "en": "Livestream countdowns never stop ticking,",
+    "scene": "livestream-countdown"
+  },
+  {
+    "zh": "「限时三分钟、最后三单」。",
+    "en": "\"Three-minute flash, last three units.\"",
+    "scene": "livestream-countdown"
+  },
+  {
+    "zh": "三分钟过去自动重置，",
+    "en": "Three minutes pass, the timer quietly resets,",
+    "scene": "livestream-countdown"
+  },
+  {
+    "zh": "「最后三单」永远是三单。",
+    "en": "\"last three units\" is always three units.",
+    "scene": "livestream-countdown"
+  },
+  {
+    "zh": "你冷静下来想一下——",
+    "en": "Stop and think for a second —",
+    "scene": "real-vs-fake-scarcity"
+  },
+  {
+    "zh": "真正的稀缺会让你冷静，",
+    "en": "real scarcity makes you calm,",
+    "scene": "real-vs-fake-scarcity"
+  },
+  {
+    "zh": "因为来不及、也争不过；",
+    "en": "because there's no time and no winning the fight;",
+    "scene": "real-vs-fake-scarcity"
+  },
+  {
+    "zh": "伪造的稀缺只会让你冲动，",
+    "en": "manufactured scarcity only makes you impulsive,",
+    "scene": "real-vs-fake-scarcity"
+  },
+  {
+    "zh": "因为它要的就是你不思考。",
+    "en": "because it needs you not to think.",
+    "scene": "real-vs-fake-scarcity"
+  },
+  {
+    "zh": "一件事越在催你「赶紧」，",
+    "en": "The louder something pushes you to \"hurry,\"",
+    "scene": "need-you-back"
+  },
+  {
+    "zh": "越不是你需要它，",
+    "en": "the less it's the case that you need it —",
+    "scene": "need-you-back"
+  },
+  {
+    "zh": "是它需要你。",
+    "en": "it's the case that it needs you.",
+    "scene": "need-you-back"
+  },
+  {
+    "zh": "第二套话术叫「太懂你」。",
+    "en": "Script two is called \"knowing you too well.\"",
+    "scene": "algo-knows"
+  },
+  {
+    "zh": "你刷过三次同款，",
+    "en": "Scroll past the same item three times,",
+    "scene": "algo-knows"
+  },
+  {
+    "zh": "首页就反复给你推；",
+    "en": "and the feed pushes it at you over and over;",
+    "scene": "algo-knows"
+  },
+  {
+    "zh": "你犹豫五秒没下单，",
+    "en": "hesitate five seconds without ordering,",
+    "scene": "discount-bait"
+  },
+  {
+    "zh": "下一条广告立刻给你打九折。",
+    "en": "and the next ad slides in with 10% off.",
+    "scene": "discount-bait"
+  },
+  {
+    "zh": "这套打法的精髓不是「骗」，",
+    "en": "The essence of this play isn't \"trickery\" —",
+    "scene": "weakest-moment"
+  },
+  {
+    "zh": "是「等」——",
+    "en": "it's \"waiting\" —",
+    "scene": "weakest-moment"
+  },
+  {
+    "zh": "等你最累、最烦、最孤独的那一刻，",
+    "en": "waiting for the moment you're most tired, most annoyed, most alone,",
+    "scene": "weakest-moment"
+  },
+  {
+    "zh": "推一件不贵的东西到你眼前。",
+    "en": "to slide a cheap little thing into view.",
+    "scene": "weakest-moment"
+  },
+  {
+    "zh": "算法不缺耐心，",
+    "en": "The algorithm doesn't lack patience —",
+    "scene": "algo-patience"
+  },
+  {
+    "zh": "缺的只是你的那一秒犹豫。",
+    "en": "it only lacks your one second of hesitation.",
+    "scene": "algo-patience"
+  },
+  {
+    "zh": "所以省钱真正的关键，",
+    "en": "So the real key to saving money",
+    "scene": "emotion-low"
+  },
+  {
+    "zh": "从来不是学会几招，",
+    "en": "has never been learning a few tricks —",
+    "scene": "emotion-low"
+  },
+  {
+    "zh": "是别在情绪最低的时候打开 App。",
+    "en": "it's not opening the app when your mood is at its lowest.",
+    "scene": "emotion-low"
+  },
+  {
+    "zh": "我们为什么愿意付「智商税」",
+    "en": "Why we willingly pay the \"idiot tax\"",
+    "scene": "ch3",
+    "chapter": 3
+  },
+  {
+    "zh": "买台 iPad，",
+    "en": "Buy an iPad,",
+    "scene": "applecare-checkout"
+  },
+  {
+    "zh": "柜台一定会问你——",
+    "en": "and the counter will always ask —",
+    "scene": "applecare-checkout"
+  },
+  {
+    "zh": "「要不要加 AppleCare？仅需两千。」",
+    "en": "\"Add AppleCare? Only two thousand.\"",
+    "scene": "applecare-checkout"
+  },
+  {
+    "zh": "大多数人会犹豫几秒，最后加上。",
+    "en": "Most people hesitate a few seconds and then add it.",
+    "scene": "applecare-checkout"
+  },
+  {
+    "zh": "不是真的怕坏，",
+    "en": "Not because they really fear it'll break,",
+    "scene": "applecare-checkout"
+  },
+  {
+    "zh": "是怕「万一」。",
+    "en": "but because they fear \"what if.\"",
+    "scene": "applecare-checkout"
+  },
+  {
+    "zh": "商家卖给你的从来不是机器，",
+    "en": "What the seller is offering you isn't the device —",
+    "scene": "anxiety-tax"
+  },
+  {
+    "zh": "是你对「万一」的焦虑。",
+    "en": "it's your anxiety about \"what if.\"",
+    "scene": "anxiety-tax"
+  },
+  {
+    "zh": "焦虑越深，溢价越贵。",
+    "en": "The deeper the anxiety, the steeper the premium.",
+    "scene": "anxiety-tax"
+  },
+  {
+    "zh": "同一台手机：",
+    "en": "Take the same phone:",
+    "scene": "new-vs-secondhand"
+  },
+  {
+    "zh": "发布会当天三万人抢首批；",
+    "en": "launch day, thirty thousand people scramble for first batch;",
+    "scene": "new-vs-secondhand"
+  },
+  {
+    "zh": "半年之后上小黄鱼，",
+    "en": "six months later, it hits Little Yellow Fish,",
+    "scene": "new-vs-secondhand"
+  },
+  {
+    "zh": "同款九成新，价格直接腰斩。",
+    "en": "same model, like new, price cut in half.",
+    "scene": "new-vs-secondhand"
+  },
+  {
+    "zh": "你买新品多付的那一半钱，",
+    "en": "The half you pay extra for new",
+    "scene": "new-vs-secondhand-2"
+  },
+  {
+    "zh": "是别人替你交完的智商税；",
+    "en": "is the idiot tax someone else paid on your behalf;",
+    "scene": "new-vs-secondhand-2"
+  },
+  {
+    "zh": "别人卖二手少收的那一半钱，",
+    "en": "the half the second-hand seller gives up",
+    "scene": "new-vs-secondhand-2"
+  },
+  {
+    "zh": "是替你过完了的新鲜感。",
+    "en": "is the novelty they used up for you.",
+    "scene": "new-vs-secondhand-2"
+  },
+  {
+    "zh": "这个逻辑在生活里到处都是——",
+    "en": "This logic is everywhere in life —",
+    "scene": "gym-card"
+  },
+  {
+    "zh": "办一张两千块的健身年卡，",
+    "en": "buy a two-thousand-yuan annual gym membership,",
+    "scene": "gym-card"
+  },
+  {
+    "zh": "一年用不到五次。",
+    "en": "and you use it fewer than five times in a year.",
+    "scene": "gym-card"
+  },
+  {
+    "zh": "不是你懒，",
+    "en": "It isn't that you're lazy —",
+    "scene": "gym-card"
+  },
+  {
+    "zh": "是办卡那一刻，",
+    "en": "it's that the moment you signed up,",
+    "scene": "gym-card"
+  },
+  {
+    "zh": "你已经把「我会变好」买走了。",
+    "en": "you'd already bought \"I'm going to get better.\"",
+    "scene": "gym-card"
+  },
+  {
+    "zh": "卡，只是收据。",
+    "en": "The card is just the receipt.",
+    "scene": "gym-card"
+  },
+  {
+    "zh": "焦虑收费，是这个时代最成熟的商业模式。",
+    "en": "Charging for anxiety is the most mature business model of our age.",
+    "scene": "anxiety-business"
+  },
+  {
+    "zh": "你不是在花钱，是在花注意力",
+    "en": "You're not spending money, you're spending attention",
+    "scene": "ch4",
+    "chapter": 4
+  },
+  {
+    "zh": "想一想你今天点开过哪些 App——",
+    "en": "Think about which apps you opened today —",
+    "scene": "many-apps"
+  },
+  {
+    "zh": "某宝、某东、某书、某团、某猫……",
+    "en": "X-Bao, X-Dong, X-Shu, X-Tuan, X-Mao...",
+    "scene": "many-apps"
+  },
+  {
+    "zh": "每个 App 推过来的，",
+    "en": "What each one is pushing at you",
+    "scene": "many-apps"
+  },
+  {
+    "zh": "都不是商品，",
+    "en": "isn't a product —",
+    "scene": "many-apps"
+  },
+  {
+    "zh": "是「下一个你可能会想要的」。",
+    "en": "it's \"the next thing you might want.\"",
+    "scene": "many-apps"
+  },
+  {
+    "zh": "你今天点开 App，本来是为了搜一件东西，",
+    "en": "You opened the app today to search for one thing —",
+    "scene": "scroll-trap"
+  },
+  {
+    "zh": "三分钟后，",
+    "en": "three minutes later,",
+    "scene": "scroll-trap"
+  },
+  {
+    "zh": "你已经在刷「猜你喜欢」第二十屏。",
+    "en": "you're already twenty screens deep in \"For You.\"",
+    "scene": "scroll-trap"
+  },
+  {
+    "zh": "你以为是自己控制不住，",
+    "en": "You think you're the one who can't stop,",
+    "scene": "scroll-trap"
+  },
+  {
+    "zh": "其实是 App 知道——",
+    "en": "but really the app knows —",
+    "scene": "scroll-trap"
+  },
+  {
+    "zh": "你这一刻最容易被「下一条」拽住。",
+    "en": "this is the moment you're easiest to hook with \"just one more.\"",
+    "scene": "scroll-trap"
+  },
+  {
+    "zh": "它没问你要钱，",
+    "en": "It never asked you for money,",
+    "scene": "attention-gateway"
+  },
+  {
+    "zh": "但拿走了比钱更贵的东西——",
+    "en": "but it took something costlier than money —",
+    "scene": "attention-gateway"
+  },
+  {
+    "zh": "你这段时间的注意力。",
+    "en": "this stretch of your attention.",
+    "scene": "attention-gateway"
+  },
+  {
+    "zh": "而注意力，才是钱包的入口。",
+    "en": "And attention is the gateway to the wallet.",
+    "scene": "attention-gateway"
+  },
+  {
+    "zh": "你以为是你在花钱，",
+    "en": "You think you're the one spending money,",
+    "scene": "attention-spent"
+  },
+  {
+    "zh": "其实是先有人花了你的注意力，",
+    "en": "but someone spent your attention first,",
+    "scene": "attention-spent"
+  },
+  {
+    "zh": "你才花了钱。",
+    "en": "and only then did you spend the money.",
+    "scene": "attention-spent"
+  },
+  {
+    "zh": "所以最简单的省钱动作不是比价，",
+    "en": "So the simplest money-saving move isn't comparing prices —",
+    "scene": "kill-recommend"
+  },
+  {
+    "zh": "是去把所有 App 里的「为你推荐」开关关掉，",
+    "en": "it's turning off every \"For You\" toggle across every app,",
+    "scene": "kill-recommend"
+  },
+  {
+    "zh": "每个月清一次关注列表。",
+    "en": "and clearing out your follow list once a month.",
+    "scene": "kill-recommend"
+  },
+  {
+    "zh": "一开始很不习惯，",
+    "en": "The first few days will feel off,",
+    "scene": "one-week-later"
+  },
+  {
+    "zh": "一周以后你会发现——",
+    "en": "but a week in you'll notice —",
+    "scene": "one-week-later"
+  },
+  {
+    "zh": "屏幕安静了，",
+    "en": "the screen has gone quiet,",
+    "scene": "one-week-later"
+  },
+  {
+    "zh": "钱包和注意力，一起回来了。",
+    "en": "and your wallet and your attention come back together.",
+    "scene": "one-week-later"
+  },
+  {
+    "zh": "五分钟，把决策权拿回手里",
+    "en": "Five minutes — taking the decision back into your hands",
+    "scene": "ch5",
+    "chapter": 5
+  },
+  {
+    "zh": "真正能帮你省钱的，",
+    "en": "The thing that really saves you money",
+    "scene": "five-min-rule"
+  },
+  {
+    "zh": "不是某个 App、某张券、某个插件，",
+    "en": "isn't some app, some coupon, some plugin —",
+    "scene": "five-min-rule"
+  },
+  {
+    "zh": "是一个动作——",
+    "en": "it's a single action —",
+    "scene": "five-min-rule"
+  },
+  {
+    "zh": "下单之前，停五分钟。",
+    "en": "pause five minutes before you check out.",
+    "scene": "five-min-rule"
+  },
+  {
+    "zh": "算法和你之间的差距，",
+    "en": "The gap between the algorithm and you",
+    "scene": "algo-patience-2"
+  },
+  {
+    "zh": "不是它比你聪明，",
+    "en": "isn't that it's smarter than you —",
+    "scene": "algo-patience-2"
+  },
+  {
+    "zh": "是它比你更有耐心。",
+    "en": "it's that it's more patient than you.",
+    "scene": "algo-patience-2"
+  },
+  {
+    "zh": "它可以等你一整天，",
+    "en": "It can wait all day,",
+    "scene": "algo-patience-2"
+  },
+  {
+    "zh": "等你最虚弱的那五秒。",
+    "en": "wait for the five seconds you're weakest.",
+    "scene": "algo-patience-2"
+  },
+  {
+    "zh": "你能赢它的唯一方式，",
+    "en": "The only way you beat it",
+    "scene": "bored-five-min"
+  },
+  {
+    "zh": "是给自己留五分钟的「无聊」，",
+    "en": "is giving yourself five minutes of \"boredom\",",
+    "scene": "bored-five-min"
+  },
+  {
+    "zh": "让冲动自己消化掉。",
+    "en": "and letting the impulse digest itself.",
+    "scene": "bored-five-min"
+  },
+  {
+    "zh": "这五分钟，问自己三个问题——",
+    "en": "In those five minutes, ask yourself three questions —",
+    "scene": "three-questions"
+  },
+  {
+    "zh": "一、下个月还会用它吗？",
+    "en": "First, will I still use this next month?",
+    "scene": "three-questions"
+  },
+  {
+    "zh": "二、是我需要它，",
+    "en": "Second, do I need it,",
+    "scene": "three-questions"
+  },
+  {
+    "zh": "还是它需要被我买走？",
+    "en": "or does it need me to buy it?",
+    "scene": "three-questions"
+  },
+  {
+    "zh": "三、如果今晚不下单，",
+    "en": "Third, if I don't order tonight,",
+    "scene": "three-questions"
+  },
+  {
+    "zh": "明早起来我还想要它吗？",
+    "en": "will I still want it when I wake up tomorrow?",
+    "scene": "three-questions"
+  },
+  {
+    "zh": "答得上来再买，答不上来就关掉 App。",
+    "en": "If you can answer, buy. If you can't, close the app.",
+    "scene": "decision-back"
+  },
+  {
+    "zh": "不上当不是「学会防范」，",
+    "en": "Not getting played isn't \"learning to defend\" —",
+    "scene": "decision-back"
+  },
+  {
+    "zh": "是把决策权从屏幕拿回手里。",
+    "en": "it's taking the decision back from the screen into your own hands.",
+    "scene": "decision-back"
+  },
+  {
+    "zh": "都说钱是赚出来的，",
+    "en": "They say money is earned —",
+    "scene": "save-not-earn"
+  },
+  {
+    "zh": "但你慢慢会明白——",
+    "en": "but slowly you'll come to see —",
+    "scene": "save-not-earn"
+  },
+  {
+    "zh": "钱更是省出来的，",
+    "en": "money is even more so saved,",
+    "scene": "save-not-earn"
+  },
+  {
+    "zh": "是一次次不上当攒下来的。",
+    "en": "saved up one un-played moment at a time.",
+    "scene": "save-not-earn"
+  },
+  {
+    "zh": "这个被算法包围的时代，",
+    "en": "In this age surrounded by algorithms,",
+    "scene": "info-gap-protection"
+  },
+  {
+    "zh": "信息差不是用来套路别人，",
+    "en": "an information gap isn't for playing others —",
+    "scene": "info-gap-protection"
+  },
+  {
+    "zh": "是用来不被别人套路。",
+    "en": "it's for not getting played by them.",
+    "scene": "info-gap-protection"
+  },
+  {
+    "zh": "愿你每一笔花销，",
+    "en": "May every yuan you spend,",
+    "scene": "final-wish"
+  },
+  {
+    "zh": "都是清醒的选择。",
+    "en": "be a fully awake choice.",
+    "scene": "final-wish"
+  }
+]

@@ -656,7 +656,18 @@ def download_via_tikhub(url: str, platform: str, output_dir: Path) -> Path | Non
 
 
 def download_video(url: str, platform: str, output_dir: Path) -> Path | None:
-    """下载视频，根据平台选择最优策略"""
+    """下载视频，根据平台选择最优策略
+
+    幂等 fast-path：output_dir 下已有 <platform>_*.mp4 时直接复用，跳过 TikHub/yt-dlp。
+    调用方（pipeline_runner._execute_asr）通过 .url-stamp 保证目录里的 mp4 与当前 URL 配对，
+    所以这里看到 mp4 就可以放心返回，不必再做 URL→video_id 比对。
+    """
+    if output_dir.exists():
+        existing = sorted(output_dir.glob(f"{platform}_*.mp4"))
+        if existing:
+            cached = existing[0]
+            print(f"  ✅ 复用已下载视频: {cached.name}")
+            return cached
 
     if platform in TIKHUB_FIRST_PLATFORMS:
         # 抖音：优先 TikHub，失败再 yt-dlp

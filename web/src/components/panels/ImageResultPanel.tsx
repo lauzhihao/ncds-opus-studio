@@ -1,0 +1,317 @@
+// image 节点抽屉：按 scenes 卡片栅格 + 每张卡可就地编辑 prompt + 单图重生 +
+// 顶部右整体 开始/停止/重新执行，底部右"用此组图 · 下一步"启动 preview。
+//
+// 数据来源
+//   - episode.json scenes 字典 → prompt 的 source of truth（可编辑回写）
+//   - 节点 outputs.items → 每个 scene 的 image_relpath（null = 未生成 / mock）
+// prompt 编辑走 EpisodeEditorPanel 同款模式：本地 patch + 防抖 putEpisode。
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ImageOff, Play, RefreshCw, Square } from 'lucide-react';
+
+import { api } from '../../api/client';
+import type { Episode, ImageItem, NodeState, PipelineNodeDef } from '../../api/types';
+import { ConfirmDialog } from '../ConfirmDialog';
+
+interface Props {
+  jobId: string;
+  nodeDef: PipelineNodeDef;
+  nodeState: NodeState;
+  onAdvanced?: () => void;
+}
+
+const NEXT_NODE = 'preview';
+
+export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+  const items = useMemo<ImageItem[]>(
+    () => (nodeState.outputs?.items as ImageItem[] | undefined) ?? [],
+    [nodeState.outputs],
+  );
+  const status = nodeState.status;
+
+  const [episode, setEpisode] = useState<Episode | null>(null);
+  const [epErr, setEpErr] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [advanceBusy, setAdvanceBusy] = useState(false);
+  const [regenBusy, setRegenBusy] = useState<Record<string, boolean>>({});
+  const [pendingRerun, setPendingRerun] = useState(false);
+
+  // 加载 episode（拿 scenes 的 prompt 作为可编辑文本的 source of truth）；
+  // 节点 finished_at 变化时重拉（重跑 image 后 prompt 可能没改但 episode mtime 变了）
+  useEffect(() => {
+    api.getEpisode(jobId)
+      .then((ep) => { setEpisode(ep); setEpErr(null); })
+      .catch((e: Error) => setEpErr(e.message));
+  }, [jobId, nodeState.finished_at]);
+
+  // 防抖落盘整份 episode（沿用 EpisodeEditorPanel 模式）
+  const debounceTimer = useRef<number | null>(null);
+  const pendingEpRef = useRef<Episode | null>(null);
+  const [saveTick, setSaveTick] = useState(0);
+  void saveTick;
+
+  const flushEpisode = useCallback(async (): Promise<void> => {
+    if (debounceTimer.current != null) {
+      window.clearTimeout(debounceTimer.current);
+      debounceTimer.current = null;
+    }
+    const ep = pendingEpRef.current;
+    if (!ep) return;
+    pendingEpRef.current = null;
+    setSaveTick((x) => x + 1);
+    try {
+      await api.putEpisode(jobId, ep);
+    } catch (e) {
+      pendingEpRef.current = ep;
+      console.error('[image] save episode failed', e);
+    }
+    setSaveTick((x) => x + 1);
+  }, [jobId]);
+
+  const patchPrompt = useCallback(
+    (sceneId: string, prompt: string) => {
+      setEpisode((prev) => {
+        if (!prev) return prev;
+        const next: Episode = JSON.parse(JSON.stringify(prev));
+        if (next.scenes[sceneId]) {
+          next.scenes[sceneId].prompt = prompt;
+        }
+        pendingEpRef.current = next;
+        return next;
+      });
+      setSaveTick((x) => x + 1);
+      if (debounceTimer.current != null) window.clearTimeout(debounceTimer.current);
+      debounceTimer.current = window.setTimeout(() => {
+        void flushEpisode();
+      }, 600);
+    },
+    [flushEpisode],
+  );
+
+  async function doRun() {
+    setActionBusy(true);
+    try {
+      await api.runNode(jobId, nodeDef.name);
+    } catch (e) {
+      alert(`启动失败: ${(e as Error).message}`);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function doCancel() {
+    setActionBusy(true);
+    try {
+      await api.cancelNode(jobId, nodeDef.name);
+    } catch (e) {
+      alert(`停止失败: ${(e as Error).message}`);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function doRegen(sceneId: string) {
+    setRegenBusy((m) => ({ ...m, [sceneId]: true }));
+    try {
+      // 改了 prompt 后立刻重生：先 flush 草稿落盘 episode，再调 regen
+      await flushEpisode();
+      await api.regenImageScene(jobId, sceneId);
+    } catch (e) {
+      alert(`重生失败: ${(e as Error).message}`);
+    } finally {
+      setRegenBusy((m) => ({ ...m, [sceneId]: false }));
+    }
+  }
+
+  async function doAdvance() {
+    setAdvanceBusy(true);
+    try {
+      await flushEpisode();
+      await api.runNode(jobId, NEXT_NODE);
+      onAdvanced?.();
+    } catch (e) {
+      alert(`启动 PREVIEW 失败: ${(e as Error).message}`);
+    } finally {
+      setAdvanceBusy(false);
+    }
+  }
+
+  function renderActionBtn() {
+    if (status === 'running' || status === 'queued') {
+      return (
+        <button className="btn primary sm" disabled={actionBusy} onClick={doCancel}>
+          <Square size={11} strokeWidth={2.2} fill="currentColor" /> 停止
+        </button>
+      );
+    }
+    if (status === 'done') {
+      return (
+        <button
+          className="btn primary sm"
+          title="清空 image 及下游产物后整体重新跑"
+          disabled={actionBusy}
+          onClick={() => setPendingRerun(true)}
+        >
+          <RefreshCw size={12} strokeWidth={1.9} /> 重新执行
+        </button>
+      );
+    }
+    return (
+      <button className="btn primary sm" disabled={actionBusy} onClick={doRun}>
+        <Play size={12} strokeWidth={2} /> 开始生图
+      </button>
+    );
+  }
+
+  const statusBadge =
+    status === 'running'
+      ? ' · RUNNING'
+      : status === 'queued'
+        ? ' · QUEUED'
+        : status === 'failed'
+          ? ' · FAILED'
+          : '';
+  const hasPending = pendingEpRef.current != null;
+
+  return (
+    <div className="rw-panel-root">
+      <div className="rw-panel-header">
+        <div className="section-h" style={{ margin: 0, flex: 1 }}>
+          IMAGE 生成 · {items.length} 个场景{statusBadge}
+          {hasPending && (
+            <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
+              · 保存中…
+            </span>
+          )}
+        </div>
+        {renderActionBtn()}
+      </div>
+
+      {status === 'running' && (
+        <div className="dim-mono">{nodeState.progress || '正在生图…'}</div>
+      )}
+      {status === 'failed' && nodeState.error && (
+        <div className="asr-error">失败：{nodeState.error}</div>
+      )}
+      {epErr && (
+        <div className="asr-error">episode 加载失败：{epErr}</div>
+      )}
+
+      {items.length === 0 ? (
+        <div className="dim-mono">
+          {status === 'idle' || status === 'failed'
+            ? '尚未生图，点击右上「开始生图」启动。'
+            : status === 'running' || status === 'queued'
+              ? '生图中…'
+              : '暂无场景；先在 PREVIEW 抽屉里添加 scene。'}
+        </div>
+      ) : (
+        <>
+          <div className="image-grid">
+            {items.map((it) => {
+              const prompt = episode?.scenes?.[it.scene_id]?.prompt ?? it.prompt;
+              return (
+                <ImageCard
+                  key={it.scene_id}
+                  jobId={jobId}
+                  item={it}
+                  prompt={prompt}
+                  busy={!!regenBusy[it.scene_id]}
+                  disabled={actionBusy || advanceBusy || status !== 'done'}
+                  onPromptChange={(v) => patchPrompt(it.scene_id, v)}
+                  onRegen={() => doRegen(it.scene_id)}
+                />
+              );
+            })}
+          </div>
+          <div className="image-footer">
+            <button
+              type="button"
+              className="btn primary sm"
+              title="用此组图 · 下一步（启动 PREVIEW）"
+              disabled={advanceBusy || actionBusy || status !== 'done'}
+              onClick={doAdvance}
+            >
+              <Play size={12} strokeWidth={2} fill="currentColor" /> 下一步
+            </button>
+          </div>
+        </>
+      )}
+
+      <ConfirmDialog
+        open={pendingRerun}
+        title="重新执行 IMAGE？"
+        message={<>会清空所有图片产物 + 所有下游节点的状态与产物，然后整体重新生图。</>}
+        confirmLabel="重新执行"
+        danger
+        onConfirm={async () => {
+          await doRun();
+          setPendingRerun(false);
+        }}
+        onCancel={() => setPendingRerun(false)}
+      />
+    </div>
+  );
+}
+
+function ImageCard({
+  jobId,
+  item,
+  prompt,
+  busy,
+  disabled,
+  onPromptChange,
+  onRegen,
+}: {
+  jobId: string;
+  item: ImageItem;
+  prompt: string;
+  busy: boolean;
+  disabled: boolean;
+  onPromptChange: (v: string) => void;
+  onRegen: () => void;
+}) {
+  const hasImage = !!item.image_relpath;
+  return (
+    <article className="image-card">
+      <header className="image-card-head">
+        <span className="image-card-id mono">{item.scene_id}</span>
+      </header>
+      <div className="image-card-preview">
+        {hasImage ? (
+          <img
+            src={`/jobs/${jobId}/files/${item.image_relpath}`}
+            alt={item.scene_id}
+            loading="lazy"
+            draggable={false}
+          />
+        ) : (
+          <div className="image-card-placeholder">
+            <ImageOff size={20} strokeWidth={1.5} />
+            <span>未生成</span>
+          </div>
+        )}
+        {busy && <div className="image-card-busy">生成中…</div>}
+      </div>
+      <textarea
+        className="field image-card-prompt"
+        value={prompt}
+        onChange={(e) => onPromptChange(e.target.value)}
+        placeholder="提示词…"
+        rows={3}
+        spellCheck={false}
+      />
+      <div className="image-card-footer">
+        <button
+          type="button"
+          className="btn sm icon-only ghost"
+          title={busy ? '生成中…' : '按当前 prompt 重生此图'}
+          disabled={disabled || busy}
+          onClick={onRegen}
+        >
+          <RefreshCw size={12} strokeWidth={1.7} />
+        </button>
+      </div>
+    </article>
+  );
+}

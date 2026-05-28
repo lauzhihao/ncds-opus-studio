@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Clock,
   Layers,
   PenBox,
   Plus,
+  Search,
   Trash2,
+  X,
 } from 'lucide-react';
 
 import { api } from '../api/client';
@@ -20,6 +22,18 @@ export function TemplatesPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<JobSummary | null>(null);
+  // 作品列表前端关键字检索：匹配 title / job_id / pipeline_id，全部小写包含
+  const [query, setQuery] = useState('');
+  const filteredJobs = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return jobs;
+    return jobs.filter((j) =>
+      (j.title || '').toLowerCase().includes(q)
+      || j.job_id.toLowerCase().includes(q)
+      || j.pipeline_id.toLowerCase().includes(q),
+    );
+  }, [jobs, query]);
+  const hasQuery = query.trim().length > 0;
 
   useEffect(() => {
     Promise.all([api.listPipelines(), api.listJobs()])
@@ -87,7 +101,33 @@ export function TemplatesPage() {
       <div className="section-title">
         <Clock size={14} strokeWidth={1.6} className="dim" />
         <span className="label">最近作品</span>
-        <span className="count">{jobs.length.toString().padStart(2, '0')}</span>
+        <span className="count">
+          {hasQuery
+            ? `${filteredJobs.length.toString().padStart(2, '0')}/${jobs.length.toString().padStart(2, '0')}`
+            : jobs.length.toString().padStart(2, '0')}
+        </span>
+        <div className="section-search">
+          <Search size={12} strokeWidth={1.7} className="dim" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索作品 / ID"
+            spellCheck={false}
+            aria-label="搜索作品"
+          />
+          {hasQuery && (
+            <button
+              type="button"
+              className="section-search-clear"
+              onClick={() => setQuery('')}
+              title="清空"
+              aria-label="清空搜索"
+            >
+              <X size={11} strokeWidth={1.8} />
+            </button>
+          )}
+        </div>
         <span className="line" />
       </div>
       <div className="tpl-grid">
@@ -95,8 +135,12 @@ export function TemplatesPage() {
           <div className="empty-state">
             还没有作品。从上面挑一个模板，把链接喂进去看看。
           </div>
+        ) : !loading && hasQuery && filteredJobs.length === 0 ? (
+          <div className="empty-state">
+            没有匹配 <strong>{query}</strong> 的作品。
+          </div>
         ) : (
-          jobs.map((j) => (
+          filteredJobs.map((j) => (
             <JobCard
               key={j.job_id}
               job={j}

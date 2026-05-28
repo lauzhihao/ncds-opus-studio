@@ -19,6 +19,17 @@ import os
 
 from pathlib import Path
 
+# 在 import 任何读 os.environ 的模块之前先加载 .env —— 比如 commands/tts.py 顶层就要
+# DASHSCOPE_API_KEY，pipeline_runner 也要 GPT_IMAGE2_*；放在最早处确保下游全部 import
+# 都能拿到。仓库根的 .env 已在 .gitignore，不会进版本库。
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+try:
+    from dotenv import load_dotenv  # python-dotenv 已装
+    load_dotenv(_REPO_ROOT / ".env", override=False)
+except ImportError:
+    # 没装 python-dotenv 也别炸 —— shell env 已经 export 的话同样工作
+    pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse

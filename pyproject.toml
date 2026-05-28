@@ -19,6 +19,8 @@ dependencies = [
     "uvicorn[standard]>=0.27",
     "sse-starlette>=2",
     "pydantic>=2",
+    # .env 加载（仓库根 .env，server 启动时优先于其它 import 触发）
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

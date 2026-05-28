@@ -1,0 +1,356 @@
+/* ──────────────────────────────────────────────────────────────────
+   motion.css · 场景过渡 + Overlay 入场动效库
+   ──────────────────────────────────────────────────────────────────
+   - .scene.active 上 mo-scene-{name} 触发对应 keyframes（10 种 PPT 过渡）
+   - .scene-overlay 上 mo-ov-{name} 触发对应 keyframes（8 种入场扩展，
+     补充 styles.css 已有的 oa-* 老库）
+   - duration/easing 走 CSS variable；episode.json 可 per-scene 覆盖
+   - 全部 transform/opacity/clip-path/filter，1080p GPU 友好
+   ────────────────────────────────────────────────────────────── */
+
+:root {
+  --motion-scene-duration: 600ms;
+  --motion-scene-easing: cubic-bezier(.22, .85, .36, 1);
+  --motion-ov-duration: 600ms;
+  --motion-ov-easing: cubic-bezier(.22, .85, .36, 1);
+}
+
+/* ─── Scene 过渡 keyframes (10 种主类，含方向变种共 20+) ─────── */
+
+/* slide — 整张图从某方向推入 */
+@keyframes mo-scene-slide-left   { from { opacity: 0; transform: translateX(-100%) scale(1.06); } to { opacity: 1; transform: translateX(0) scale(1.06); } }
+@keyframes mo-scene-slide-right  { from { opacity: 0; transform: translateX( 100%) scale(1.06); } to { opacity: 1; transform: translateX(0) scale(1.06); } }
+@keyframes mo-scene-slide-up     { from { opacity: 0; transform: translateY(-100%) scale(1.06); } to { opacity: 1; transform: translateY(0) scale(1.06); } }
+@keyframes mo-scene-slide-down   { from { opacity: 0; transform: translateY( 100%) scale(1.06); } to { opacity: 1; transform: translateY(0) scale(1.06); } }
+
+/* wipe — clip-path 揭幕 */
+@keyframes mo-scene-wipe-left    { from { clip-path: inset(0 0 0 100%); opacity: 0; } to { clip-path: inset(0); opacity: 1; } }
+@keyframes mo-scene-wipe-right   { from { clip-path: inset(0 100% 0 0); opacity: 0; } to { clip-path: inset(0); opacity: 1; } }
+@keyframes mo-scene-wipe-up      { from { clip-path: inset(100% 0 0 0); opacity: 0; } to { clip-path: inset(0); opacity: 1; } }
+@keyframes mo-scene-wipe-down    { from { clip-path: inset(0 0 100% 0); opacity: 0; } to { clip-path: inset(0); opacity: 1; } }
+@keyframes mo-scene-wipe-circle  { from { clip-path: circle(0% at 50% 50%); opacity: 0; } to { clip-path: circle(75% at 50% 50%); opacity: 1; } }
+
+/* zoom — 整张图缩放入场 */
+@keyframes mo-scene-zoom-in      { from { opacity: 0; transform: scale(.6); }  to { opacity: 1; transform: scale(1.06); } }
+@keyframes mo-scene-zoom-out     { from { opacity: 0; transform: scale(1.4); } to { opacity: 1; transform: scale(1.06); } }
+
+/* push — 新场景从外推入，比 slide 更有"推走旧场景"的电影感（单场景模拟） */
+@keyframes mo-scene-push-left    { from { opacity: 0; transform: translateX( 100%) scale(1); }   to { opacity: 1; transform: translateX(0) scale(1.06); } }
+@keyframes mo-scene-push-right   { from { opacity: 0; transform: translateX(-100%) scale(1); }   to { opacity: 1; transform: translateX(0) scale(1.06); } }
+
+/* flip — 3D 翻面 */
+@keyframes mo-scene-flip-h       { from { opacity: 0; transform: perspective(1200px) rotateY( 90deg) scale(1.06); transform-origin: center; } to { opacity: 1; transform: perspective(1200px) rotateY(0) scale(1.06); transform-origin: center; } }
+@keyframes mo-scene-flip-v       { from { opacity: 0; transform: perspective(1200px) rotateX(-90deg) scale(1.06); transform-origin: center; } to { opacity: 1; transform: perspective(1200px) rotateX(0) scale(1.06); transform-origin: center; } }
+
+/* iris — 光圈 */
+@keyframes mo-scene-iris-in      { from { clip-path: circle(0% at 50% 50%);   opacity: 0; } to { clip-path: circle(120% at 50% 50%); opacity: 1; } }
+@keyframes mo-scene-iris-out     { from { clip-path: circle(120% at 50% 50%); opacity: 0; } to { clip-path: circle(0% at 50% 50%);   opacity: 1; } }
+
+/* mask-grid — 简化版（真正 5×5 mosaic 需要 SVG，这里做对比度+旋转代偿） */
+@keyframes mo-scene-mask-grid {
+  0%   { opacity: 0; transform: rotate(-2deg) scale(.94); filter: contrast(1.3) saturate(1.2); }
+  50%  { opacity: .85; transform: rotate(.5deg) scale(1.02); filter: contrast(1.15); }
+  100% { opacity: 1; transform: rotate(0) scale(1.06); filter: none; }
+}
+
+/* glitch — 数字噪点 + 抖动 + hue rotate */
+@keyframes mo-scene-glitch {
+  0%   { opacity: 0; transform: translate(-8px,  4px) scale(1.06); filter: hue-rotate(180deg) saturate(2); clip-path: inset(0); }
+  20%  { opacity: .7; transform: translate( 10px, -6px) scale(1.06); filter: hue-rotate(-90deg) saturate(1.8); clip-path: inset(20% 0 30% 0); }
+  40%  { opacity: .9; transform: translate( -6px,  3px) scale(1.06); filter: hue-rotate( 60deg) saturate(1.4); clip-path: inset(0 10% 50% 0); }
+  60%  { opacity: 1; transform: translate(  3px, -2px) scale(1.06); filter: hue-rotate(-20deg); clip-path: inset(0); }
+  80%  { transform: translate( -1px,  1px) scale(1.06); filter: hue-rotate(0); }
+  100% { opacity: 1; transform: translate(0) scale(1.06); filter: none; }
+}
+
+/* ink-bleed — 墨水从一角扩散开来（本片暖纸/红墨水主题最贴的过渡） */
+@keyframes mo-scene-ink-bleed {
+  0%   { opacity: 0; clip-path: circle(0% at 30% 40%);   filter: blur(10px) saturate(.6); transform: scale(1.10); }
+  50%  { opacity: .9; clip-path: circle(60% at 30% 40%);  filter: blur(3px)  saturate(.85); transform: scale(1.08); }
+  100% { opacity: 1; clip-path: circle(160% at 30% 40%); filter: blur(0)    saturate(1);   transform: scale(1.06); }
+}
+
+/* ─── 应用规则：scene.active + mo-scene-* 触发对应 keyframes ──── */
+.scene.active[class*="mo-scene-"] {
+  transition: none;
+  animation-duration: var(--motion-scene-duration);
+  animation-timing-function: var(--motion-scene-easing);
+  animation-fill-mode: forwards;
+}
+
+.scene.active.mo-scene-slide-left   { animation-name: mo-scene-slide-left; }
+.scene.active.mo-scene-slide-right  { animation-name: mo-scene-slide-right; }
+.scene.active.mo-scene-slide-up     { animation-name: mo-scene-slide-up; }
+.scene.active.mo-scene-slide-down   { animation-name: mo-scene-slide-down; }
+.scene.active.mo-scene-wipe-left    { animation-name: mo-scene-wipe-left; }
+.scene.active.mo-scene-wipe-right   { animation-name: mo-scene-wipe-right; }
+.scene.active.mo-scene-wipe-up      { animation-name: mo-scene-wipe-up; }
+.scene.active.mo-scene-wipe-down    { animation-name: mo-scene-wipe-down; }
+.scene.active.mo-scene-wipe-circle  { animation-name: mo-scene-wipe-circle; }
+.scene.active.mo-scene-zoom-in      { animation-name: mo-scene-zoom-in; }
+.scene.active.mo-scene-zoom-out     { animation-name: mo-scene-zoom-out; }
+.scene.active.mo-scene-push-left    { animation-name: mo-scene-push-left; }
+.scene.active.mo-scene-push-right   { animation-name: mo-scene-push-right; }
+.scene.active.mo-scene-flip-h       { animation-name: mo-scene-flip-h; }
+.scene.active.mo-scene-flip-v       { animation-name: mo-scene-flip-v; }
+.scene.active.mo-scene-iris-in      { animation-name: mo-scene-iris-in; }
+.scene.active.mo-scene-iris-out     { animation-name: mo-scene-iris-out; }
+.scene.active.mo-scene-mask-grid    { animation-name: mo-scene-mask-grid; }
+.scene.active.mo-scene-glitch       { animation-name: mo-scene-glitch; animation-timing-function: steps(6, end); }
+.scene.active.mo-scene-ink-bleed    { animation-name: mo-scene-ink-bleed; animation-timing-function: cubic-bezier(.4, 0, .2, 1); }
+
+/* ─── Overlay 入场 keyframes (扩展库：8 种 mo-ov-*) ────────────
+   旧 oa-fly-* / oa-fade / oa-zoom / oa-stamp-hit / oa-blur 在
+   styles.css 里已定义，本文件提供更丰富的入场动效供 episode.json 选用。
+   ────────────────────────────────────────────────────────── */
+
+@keyframes mo-ov-zoom-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.4)  rotate(var(--os-rotate, 0deg)); }
+  60%  { opacity: 1; transform: translate(-50%, -50%) scale(1.15) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1)    rotate(var(--os-rotate, 0deg)); }
+}
+
+/* typewriter：从左到右 clip 揭示（适合金句） */
+@keyframes mo-ov-typewriter {
+  from { clip-path: inset(0 100% 0 0); opacity: 1; }
+  to   { clip-path: inset(0); opacity: 1; }
+}
+.scene.active .scene-overlay.mo-ov-typewriter { opacity: 1; }
+
+/* handwrite：从下往上揭示 + 微缩 */
+@keyframes mo-ov-handwrite {
+  0%   { opacity: 0; clip-path: inset(100% 0 0 0); transform: translate(-50%, -50%) scale(.96) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; clip-path: inset(0);          transform: translate(-50%, -50%) scale(1)   rotate(var(--os-rotate, 0deg)); }
+}
+
+/* ink-bleed：墨水洇染（散焦→清晰） */
+@keyframes mo-ov-ink-bleed {
+  0%   { opacity: 0; filter: blur(6px); transform: translate(-50%, -50%) scale(1.2) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; filter: blur(0);   transform: translate(-50%, -50%) scale(1)   rotate(var(--os-rotate, 0deg)); }
+}
+
+/* slide-clip：从下方滑出 + clip 揭示（标题感） */
+@keyframes mo-ov-slide-clip {
+  0%   { opacity: 0; clip-path: inset(100% 0 0 0); transform: translate(-50%, calc(-50% + 30px)) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; clip-path: inset(0);          transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+
+/* iris：圆形扩散揭示 */
+@keyframes mo-ov-iris {
+  0%   { opacity: 0; clip-path: circle(0% at 50% 50%);  transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; clip-path: circle(80% at 50% 50%); transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+
+/* glitch：故障感入场 */
+@keyframes mo-ov-glitch {
+  0%   { opacity: 0; transform: translate(-50%, -50%) translateX(-6px) rotate(var(--os-rotate, 0deg)); filter: hue-rotate(120deg); }
+  25%  { opacity: .8; transform: translate(-50%, -50%) translateX( 4px) rotate(var(--os-rotate, 0deg)); filter: hue-rotate(-60deg); }
+  50%  { opacity: 1; transform: translate(-50%, -50%) translateX(-2px) rotate(var(--os-rotate, 0deg)); filter: hue-rotate(30deg); }
+  100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); filter: none; }
+}
+
+/* bounce：从上方弹下 + 弹性收尾 */
+@keyframes mo-ov-bounce {
+  0%   { opacity: 0; transform: translate(-50%, calc(-50% - 100px)) rotate(var(--os-rotate, 0deg)); }
+  60%  { opacity: 1; transform: translate(-50%, calc(-50% +  10px)) rotate(var(--os-rotate, 0deg)); }
+  80%  { transform:           translate(-50%, calc(-50% -   6px)) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+
+/* drift-in：从对角飘入 + 旋转回正 */
+@keyframes mo-ov-drift-in {
+  0%   { opacity: 0; transform: translate(calc(-50% - 80px), calc(-50% + 80px)) rotate(calc(var(--os-rotate, 0deg) - 12deg)); }
+  100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+
+/* spin-in：旋转入场（带回正） */
+@keyframes mo-ov-spin-in {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.3) rotate(calc(var(--os-rotate, 0deg) - 360deg)); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1)  rotate(var(--os-rotate, 0deg)); }
+}
+
+/* drop-in：从顶部重力下落 + 弹性落定 */
+@keyframes mo-ov-drop-in {
+  0%   { opacity: 0; transform: translate(-50%, calc(-50% - 200px)) rotate(var(--os-rotate, 0deg)); animation-timing-function: cubic-bezier(.55, .055, .675, .19); }
+  60%  { opacity: 1; transform: translate(-50%, calc(-50% + 18px)) rotate(var(--os-rotate, 0deg)); animation-timing-function: cubic-bezier(.215, .61, .355, 1); }
+  78%  { transform:            translate(-50%, calc(-50% - 8px)) rotate(var(--os-rotate, 0deg)); }
+  92%  { transform:            translate(-50%, calc(-50% + 3px)) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
+}
+
+/* shake-attention：先放大震荡后回位（强调） */
+@keyframes mo-ov-shake-attention {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.8) rotate(var(--os-rotate, 0deg)); }
+  20%  { opacity: 1; transform: translate(-50%, -50%) scale(1.15) rotate(calc(var(--os-rotate, 0deg) + 4deg)); }
+  40%  { transform: translate(-50%, -50%) scale(1.08) rotate(calc(var(--os-rotate, 0deg) - 5deg)); }
+  60%  { transform: translate(-50%, -50%) scale(1.1)  rotate(calc(var(--os-rotate, 0deg) + 3deg)); }
+  80%  { transform: translate(-50%, -50%) scale(1.05) rotate(calc(var(--os-rotate, 0deg) - 2deg)); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(var(--os-rotate, 0deg)); }
+}
+
+/* unfold：水平展开（像扇子打开） */
+@keyframes mo-ov-unfold {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scaleX(0) rotate(var(--os-rotate, 0deg)); transform-origin: center; }
+  100% { opacity: 1; transform: translate(-50%, -50%) scaleX(1) rotate(var(--os-rotate, 0deg)); transform-origin: center; }
+}
+
+/* 应用 */
+.scene.active .scene-overlay[class*="mo-ov-"] {
+  animation-duration: var(--motion-ov-duration);
+  animation-timing-function: var(--motion-ov-easing);
+  animation-fill-mode: forwards;
+  animation-delay: var(--oa-delay, 0ms);
+}
+.scene.active .scene-overlay.mo-ov-zoom-pop    { animation-name: mo-ov-zoom-pop;    animation-timing-function: cubic-bezier(.34, 1.56, .64, 1); }
+.scene.active .scene-overlay.mo-ov-typewriter  { animation-name: mo-ov-typewriter;  animation-timing-function: steps(20, end); }
+.scene.active .scene-overlay.mo-ov-handwrite   { animation-name: mo-ov-handwrite;   animation-timing-function: ease-out; }
+.scene.active .scene-overlay.mo-ov-ink-bleed   { animation-name: mo-ov-ink-bleed; }
+.scene.active .scene-overlay.mo-ov-slide-clip  { animation-name: mo-ov-slide-clip; }
+.scene.active .scene-overlay.mo-ov-iris        { animation-name: mo-ov-iris; }
+.scene.active .scene-overlay.mo-ov-glitch      { animation-name: mo-ov-glitch;      animation-timing-function: steps(6); }
+.scene.active .scene-overlay.mo-ov-bounce      { animation-name: mo-ov-bounce;      animation-timing-function: cubic-bezier(.6, -0.28, .735, .045); }
+.scene.active .scene-overlay.mo-ov-drift-in    { animation-name: mo-ov-drift-in; }
+.scene.active .scene-overlay.mo-ov-spin-in     { animation-name: mo-ov-spin-in;        animation-timing-function: cubic-bezier(.34, 1.2, .64, 1); }
+.scene.active .scene-overlay.mo-ov-drop-in     { animation-name: mo-ov-drop-in; }
+.scene.active .scene-overlay.mo-ov-shake-attention { animation-name: mo-ov-shake-attention; animation-timing-function: cubic-bezier(.36, .07, .19, .97); }
+.scene.active .scene-overlay.mo-ov-unfold      { animation-name: mo-ov-unfold;          animation-timing-function: cubic-bezier(.16, 1, .3, 1); }
+
+/* ─── 图片内层 Ken Burns / Pan / Parallax ─────────────────────────────
+   作用在 .image-stage（light DOM wrapper，包 image-slot）。
+   注意：原本挂在 image-slot::part(image) 上，但 chrome 对跨 shadow DOM 的
+   ::part + animation 不真正启动 animation 实例（computed style 有 animation-name
+   但 getAnimations() 空、transform 全程不变），所以图片完全不动。挂到 light DOM
+   wrapper 上规避这一点。
+   与外层 .scene { transform: scale(1.06) } 叠加，所以这里 scale 取 1.0~1.12
+   区间避免画面过度放大。每个 scene 仅在首次激活时触发，跨多 beat 持续慢推。
+   ───────────────────────────────────────────────────────────────── */
+:root {
+  --motion-img-duration: 6800ms;
+  --motion-img-easing: cubic-bezier(.4, 0, .2, 1);
+  --motion-img-delay: 120ms;        /* 让 scene 自身的 opacity fade-in 先吃掉一拍 */
+}
+
+/* image-slot.js 用 left:50%/top:50% + transform: translate(-50%,-50%) 居中内层 <img>，
+   所以这里每个 keyframe 都必须把 translate(-50%,-50%) 作为第一段写进去，
+   再叠 scale / 旋转 / 微 pan，否则图会跳到容器右下角只显示一部分。
+   平移百分比是相对元素自身（unscaled）尺寸，calc(-50% ± delta%) 即可表达"在中心
+   附近左右/上下漂"，无需额外的嵌套 translate。 */
+@keyframes mo-img-zoom-in   { from { transform: translate(-50%, -50%) scale(1.00); }                                  to { transform: translate(-50%, -50%) scale(1.12); } }
+@keyframes mo-img-zoom-out  { from { transform: translate(-50%, -50%) scale(1.14); }                                  to { transform: translate(-50%, -50%) scale(1.00); } }
+@keyframes mo-img-pan-l     { from { transform: translate(calc(-50% + 2.5%), -50%) scale(1.10); }                     to { transform: translate(calc(-50% - 2.5%), -50%) scale(1.10); } }
+@keyframes mo-img-pan-r     { from { transform: translate(calc(-50% - 2.5%), -50%) scale(1.10); }                     to { transform: translate(calc(-50% + 2.5%), -50%) scale(1.10); } }
+@keyframes mo-img-pan-u     { from { transform: translate(-50%, calc(-50% + 2.0%)) scale(1.10); }                     to { transform: translate(-50%, calc(-50% - 2.0%)) scale(1.10); } }
+@keyframes mo-img-pan-d     { from { transform: translate(-50%, calc(-50% - 2.0%)) scale(1.10); }                     to { transform: translate(-50%, calc(-50% + 2.0%)) scale(1.10); } }
+@keyframes mo-img-diag-br   { from { transform: translate(calc(-50% + 1.6%), calc(-50% + 1.6%)) scale(1.06); }        to { transform: translate(calc(-50% - 1.6%), calc(-50% - 1.6%)) scale(1.14); } }
+@keyframes mo-img-diag-tl   { from { transform: translate(calc(-50% - 1.6%), calc(-50% - 1.6%)) scale(1.06); }        to { transform: translate(calc(-50% + 1.6%), calc(-50% + 1.6%)) scale(1.14); } }
+@keyframes mo-img-parallax  {
+  /* perspective() 放在 translate 后面，先在 3D 空间产生倾斜再整体平移回中央 */
+  from { transform: translate(-50%, -50%) perspective(2200px) scale(1.06) rotateX( 1.4deg) rotateY(-1.4deg); }
+  to   { transform: translate(-50%, -50%) perspective(2200px) scale(1.12) rotateX(-1.0deg) rotateY( 1.0deg); }
+}
+@keyframes mo-img-wobble    {
+  0%   { transform: translate(-50%, -50%) scale(1.08) rotate(-.4deg); }
+  50%  { transform: translate(-50%, -50%) scale(1.12) rotate( .35deg); }
+  100% { transform: translate(-50%, -50%) scale(1.08) rotate(-.25deg); }
+}
+@keyframes mo-img-breathe   {
+  0%, 100% { transform: translate(-50%, -50%) scale(1.04); filter: brightness(1); }
+  50%      { transform: translate(-50%, -50%) scale(1.10); filter: brightness(1.04); }
+}
+
+.scene.active .image-stage {
+  animation-duration: var(--motion-img-duration);
+  animation-timing-function: var(--motion-img-easing);
+  animation-delay: var(--motion-img-delay);
+  animation-fill-mode: both;
+  will-change: transform, filter;
+}
+
+.scene.active.mo-img-zoom-in   .image-stage { animation-name: mo-img-zoom-in; }
+.scene.active.mo-img-zoom-out  .image-stage { animation-name: mo-img-zoom-out; }
+.scene.active.mo-img-pan-l     .image-stage { animation-name: mo-img-pan-l; }
+.scene.active.mo-img-pan-r     .image-stage { animation-name: mo-img-pan-r; }
+.scene.active.mo-img-pan-u     .image-stage { animation-name: mo-img-pan-u; }
+.scene.active.mo-img-pan-d     .image-stage { animation-name: mo-img-pan-d; }
+.scene.active.mo-img-diag-br   .image-stage { animation-name: mo-img-diag-br; }
+.scene.active.mo-img-diag-tl   .image-stage { animation-name: mo-img-diag-tl; }
+.scene.active.mo-img-parallax  .image-stage { animation-name: mo-img-parallax; }
+.scene.active.mo-img-wobble    .image-stage { animation-name: mo-img-wobble; animation-timing-function: ease-in-out; }
+.scene.active.mo-img-breathe   .image-stage { animation-name: mo-img-breathe; animation-timing-function: ease-in-out; animation-duration: 5200ms; }
+
+/* 动效守门：未启用时禁掉内层 keyframes，首帧静默。
+   编辑模式（body.edit-mode）下豁免：用户摆 overlay 时需要看到镜头实际推/拉，
+   才能判断 overlay 在画面某个区域（相框/手部/物件）上的位置是否对齐。
+   其他守门规则（mo-scene-* 入场、字幕 cap-enter-* 等）不豁免，避免编辑时频繁干扰。 */
+body:not(.motion-enabled):not(.edit-mode) .scene.active[class*="mo-img-"] .image-stage {
+  animation: none !important;
+}
+
+/* ─── 更多 PPT 风文字入场 (mo-ov-* 扩展) ──────────────────────────── */
+
+/* letter-spread：字距从压缩→张开，配合微缩 fade-in（标题/金句） */
+@keyframes mo-ov-letter-spread {
+  0%   { opacity: 0; letter-spacing: -.04em; transform: translate(-50%, -50%) scale(.94) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; letter-spacing:  .10em; transform: translate(-50%, -50%) scale(1)   rotate(var(--os-rotate, 0deg)); }
+}
+
+/* elastic-pop：弹簧式过冲收尾（强调短词） */
+@keyframes mo-ov-elastic-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.2)  rotate(var(--os-rotate, 0deg)); }
+  55%  { opacity: 1; transform: translate(-50%, -50%) scale(1.22) rotate(var(--os-rotate, 0deg)); }
+  72%  { transform:            translate(-50%, -50%) scale(.92) rotate(var(--os-rotate, 0deg)); }
+  86%  { transform:            translate(-50%, -50%) scale(1.05) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1)   rotate(var(--os-rotate, 0deg)); }
+}
+
+/* tilt-in：从顶部向下翻倒立体感（小标签） */
+@keyframes mo-ov-tilt-in {
+  0%   { opacity: 0; transform: translate(-50%, -50%) perspective(900px) rotateX( 70deg) scale(.92); transform-origin: top center; }
+  100% { opacity: 1; transform: translate(-50%, -50%) perspective(900px) rotateX(  0deg) scale(1);   transform-origin: top center; }
+}
+
+/* fold-down：上沿为铰链向下展开（横幅 / 长引言） */
+@keyframes mo-ov-fold-down {
+  0%   { opacity: 0; transform: translate(-50%, -50%) perspective(800px) rotateX(-110deg); transform-origin: bottom center; }
+  100% { opacity: 1; transform: translate(-50%, -50%) perspective(800px) rotateX(   0deg); transform-origin: bottom center; }
+}
+
+/* blur-pulse：先大焦外散光再清晰落定（梦境感） */
+@keyframes mo-ov-blur-pulse {
+  0%   { opacity: 0; filter: blur(14px) brightness(1.5); transform: translate(-50%, -50%) scale(1.18) rotate(var(--os-rotate, 0deg)); }
+  55%  { opacity: 1; filter: blur(4px)  brightness(1.1); transform: translate(-50%, -50%) scale(1.04) rotate(var(--os-rotate, 0deg)); }
+  100% { opacity: 1; filter: blur(0)    brightness(1);   transform: translate(-50%, -50%) scale(1)    rotate(var(--os-rotate, 0deg)); }
+}
+
+/* rise-glow：从下浮起 + 中段炽光闪烁（情绪点） */
+@keyframes mo-ov-rise-glow {
+  0%   { opacity: 0; transform: translate(-50%, calc(-50% + 26px)) rotate(var(--os-rotate, 0deg)); text-shadow: 0 0 0 transparent; }
+  55%  { opacity: 1; transform: translate(-50%, calc(-50% -  4px)) rotate(var(--os-rotate, 0deg)); text-shadow: 0 0 32px rgba(193,57,43,.7), 0 0 10px rgba(193,57,43,.55); }
+  100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); text-shadow: 0 0 0 transparent; }
+}
+
+/* shimmer-sweep：金色光斑横扫文字（高光强调）
+   依赖 background-clip:text + 文字本身透明，专门为这个动效定制底色，
+   不能和别的 os-* 颜色样式叠加。 */
+@keyframes mo-ov-shimmer-sweep {
+  0%   { background-position: -180% 0; opacity: 0; }
+  18%  { opacity: 1; }
+  100% { background-position:  180% 0; opacity: 1; }
+}
+.scene-overlay.mo-ov-shimmer-sweep {
+  background: linear-gradient(105deg, var(--ink) 0%, var(--ink) 32%, #f3d36b 46%, #c1392b 54%, var(--ink) 68%, var(--ink) 100%);
+  background-size: 220% 100%;
+  background-position: -180% 0;
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+          color: transparent !important;
+}
+
+.scene.active .scene-overlay.mo-ov-letter-spread { animation-name: mo-ov-letter-spread; }
+.scene.active .scene-overlay.mo-ov-elastic-pop   { animation-name: mo-ov-elastic-pop;   animation-timing-function: cubic-bezier(.34, 1.56, .64, 1); }
+.scene.active .scene-overlay.mo-ov-tilt-in       { animation-name: mo-ov-tilt-in;       animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+.scene.active .scene-overlay.mo-ov-fold-down     { animation-name: mo-ov-fold-down;     animation-timing-function: cubic-bezier(.22, .85, .36, 1); }
+.scene.active .scene-overlay.mo-ov-blur-pulse    { animation-name: mo-ov-blur-pulse; }
+.scene.active .scene-overlay.mo-ov-rise-glow     { animation-name: mo-ov-rise-glow; }
+.scene.active .scene-overlay.mo-ov-shimmer-sweep { animation-name: mo-ov-shimmer-sweep; animation-duration: 2000ms; animation-timing-function: linear; }

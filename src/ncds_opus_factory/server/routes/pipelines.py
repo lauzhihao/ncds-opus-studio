@@ -146,9 +146,14 @@ async def delete_job(job_id: str) -> dict[str, Any]:
 
 
 @router.post("/jobs/{job_id}/nodes/{node}/run")
-async def run_node(job_id: str, node: str) -> dict[str, Any]:
+async def run_node(
+    job_id: str,
+    node: str,
+    body: dict[str, Any] | None = Body(default=None),
+) -> dict[str, Any]:
+    params = (body or {}).get("params") if isinstance(body, dict) else None
     try:
-        await PIPELINE_RUNNER.run_node(job_id, node)
+        await PIPELINE_RUNNER.run_node(job_id, node, params)
     except KeyError as e:
         raise HTTPException(404, str(e))
     except (ValueError, RuntimeError) as e:
@@ -173,7 +178,7 @@ class SelectModelBody(BaseModel):
 @router.post("/jobs/{job_id}/nodes/rw/rewrite/{model_id}")
 async def rewrite_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
     try:
-        PIPELINE_RUNNER.rewrite_rw_model(job_id, model_id)
+        await PIPELINE_RUNNER.rewrite_rw_model(job_id, model_id)
     except KeyError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -190,6 +195,42 @@ async def select_rw_model(job_id: str, body: SelectModelBody) -> dict[str, Any]:
     except (ValueError, FileNotFoundError) as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "selected_model_id": body.model_id}
+
+
+@router.post("/jobs/{job_id}/nodes/image/regen/{scene_id}")
+async def regen_image_scene(job_id: str, scene_id: str) -> dict[str, Any]:
+    """重生 image 节点下某个 scene 的图片，不影响其他场景和下游节点。"""
+    try:
+        await PIPELINE_RUNNER.regen_image_scene(job_id, scene_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "job_id": job_id, "scene_id": scene_id}
+
+
+@router.post("/jobs/{job_id}/scenes/{scene_id}/regen-image")
+async def regen_scene_image_from_preview(job_id: str, scene_id: str) -> dict[str, Any]:
+    """preview 抽屉里点「生成图片」用：不要求 image 节点 done，直出图片。"""
+    try:
+        rel = await PIPELINE_RUNNER.regen_scene_image_from_preview(job_id, scene_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"image_relpath": rel}
+
+
+@router.post("/jobs/{job_id}/nodes/tts/regen/{index}")
+async def regen_tts_beat(job_id: str, index: int) -> dict[str, Any]:
+    """重生 tts 节点下某条字幕的音频，不影响其他句和下游节点。"""
+    try:
+        await PIPELINE_RUNNER.regen_tts_beat(job_id, index)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "job_id": job_id, "index": index}
 
 
 @router.put("/jobs/{job_id}/inputs")

@@ -49,8 +49,8 @@ export const api = {
   deleteJob: (id: string) => del<{ deleted: string }>(`/jobs/${id}`),
   updateJobTitle: (jobId: string, title: string) =>
     put<{ job_id: string; title: string }>(`/jobs/${jobId}/title`, { title }),
-  runNode: (jobId: string, node: string) =>
-    post<JobState>(`/jobs/${jobId}/nodes/${node}/run`),
+  runNode: (jobId: string, node: string, params?: Record<string, unknown>) =>
+    post<JobState>(`/jobs/${jobId}/nodes/${node}/run`, params ? { params } : undefined),
   cancelNode: (jobId: string, node: string) =>
     post<{ cancelled: boolean; job_id: string; node: string }>(
       `/jobs/${jobId}/nodes/${node}/cancel`,
@@ -63,6 +63,14 @@ export const api = {
     put<{ ok: boolean; job_id: string; selected_model_id: string }>(
       `/jobs/${jobId}/nodes/rw/select`,
       { model_id: modelId },
+    ),
+  regenImageScene: (jobId: string, sceneId: string) =>
+    post<{ ok: boolean; job_id: string; scene_id: string }>(
+      `/jobs/${jobId}/nodes/image/regen/${encodeURIComponent(sceneId)}`,
+    ),
+  regenTtsBeat: (jobId: string, index: number) =>
+    post<{ ok: boolean; job_id: string; index: number }>(
+      `/jobs/${jobId}/nodes/tts/regen/${index}`,
     ),
   writeFile: (jobId: string, relpath: string, text: string) =>
     put<{ ok: boolean; relpath: string; bytes: number }>(
@@ -87,4 +95,10 @@ export const api = {
   getEpisode: (jobId: string) => get<Episode>(`/jobs/${jobId}/episode`),
   putEpisode: (jobId: string, ep: Episode) =>
     put<{ ok: boolean }>(`/jobs/${jobId}/episode`, ep),
+  regenSceneImage: (jobId: string, sceneId: string) =>
+    fetch(`/jobs/${jobId}/scenes/${sceneId}/regen-image`, { method: 'POST' })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        return (await r.json()) as { image_relpath: string };
+      }),
 };

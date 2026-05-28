@@ -1,0 +1,1073 @@
+{
+  "__schema__": "ncds-paper-card-talk/v1",
+  "__doc__": "暖纸卡片口播视频 per-episode 元数据，唯一真理源。HTML/JS/TTS/图生图全部从这个文件读取；引擎层文件 (player.js / overlays.js / tweaks*.jsx / styles.css / HTML 骨架) 不含任何 per-episode 字段。",
+  "meta": {
+    "slug": "015-draft",
+    "title": "如何终结大型双标现场？",
+    "disclaimer": "观点仅供参考　无不良引导",
+    "titleOptions": [
+      "孩子是张白纸，执笔的人是你",
+      "上梁不正，下梁歪",
+      "你刷手机的样子，就是他十年后的样子",
+      "孩子用我的卡偷充一万多，错的却是我"
+    ]
+  },
+  "fonts": [
+    {
+      "family": "XY Kaiti",
+      "src": "/fonts/xy-kaiti/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZS Fangsong",
+      "src": "/fonts/zs-fangsong/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "Mao Zedong",
+      "src": "/fonts/mao-zedong/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "Fengsao",
+      "src": "/fonts/fengsao/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "Huangyou",
+      "src": "/fonts/huangyou/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "Huanxi Shouzha",
+      "src": "/fonts/huanxi-shouzha/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "PP Fangfang",
+      "src": "/fonts/pp-fangfang/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "PP Katong",
+      "src": "/fonts/pp-katong/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "PP Keai",
+      "src": "/fonts/pp-keai/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "PP Naila",
+      "src": "/fonts/pp-naila/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "PP Riji",
+      "src": "/fonts/pp-riji/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "PP Shouxie",
+      "src": "/fonts/pp-shouxie/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "PP Xiaogou",
+      "src": "/fonts/pp-xiaogou/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "XK Naila",
+      "src": "/fonts/xk-naila/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Dundun",
+      "src": "/fonts/zqk-dundun/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Guaiguai",
+      "src": "/fonts/zqk-guaiguai/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Jingsu",
+      "src": "/fonts/zqk-jingsu/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Jingya",
+      "src": "/fonts/zqk-jingya/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Keai",
+      "src": "/fonts/zqk-keai/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Lengku",
+      "src": "/fonts/zqk-lengku/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Naihei",
+      "src": "/fonts/zqk-naihei/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Nainai",
+      "src": "/fonts/zqk-nainai/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Qiaoke",
+      "src": "/fonts/zqk-qiaoke/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Shouhui",
+      "src": "/fonts/zqk-shouhui/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Shuaihei",
+      "src": "/fonts/zqk-shuaihei/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Shuma",
+      "src": "/fonts/zqk-shuma/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Yayun",
+      "src": "/fonts/zqk-yayun/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Youhuabi",
+      "src": "/fonts/zqk-youhuabi/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Zhiya",
+      "src": "/fonts/zqk-zhiya/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZQK Ziyou",
+      "src": "/fonts/zqk-ziyou/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZS Cukai",
+      "src": "/fonts/zs-cukai/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZS Moran",
+      "src": "/fonts/zs-moran/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZS Qingkai",
+      "src": "/fonts/zs-qingkai/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "ZS Shiguang",
+      "src": "/fonts/zs-shiguang/Regular.woff2",
+      "weight": 400,
+      "style": "normal",
+      "format": "woff2",
+      "display": "swap"
+    },
+    {
+      "family": "Noto Sans SC"
+    },
+    {
+      "family": "Noto Serif SC"
+    },
+    {
+      "family": "Inter"
+    }
+  ],
+  "visual": {
+    "palette": "paper",
+    "kenBurns": true,
+    "showSubtitleEn": true,
+    "capZhSize": 60,
+    "capEnSize": 40
+  },
+  "playback": {
+    "__doc__": "浏览器内字幕推进 / 音频 playbackRate 的运行时速度",
+    "rate": 0.95
+  },
+  "audio": {
+    "tts": {
+      "__doc__": "tts_gen.py 调 DashScope CosyVoice 合成音频时使用的参数",
+      "engine": "dashscope-cosyvoice",
+      "model": "cosyvoice-v3-flash",
+      "voice": "longtian_v3",
+      "sampleRate": 22050,
+      "format": "mp3",
+      "rate": 1.1
+    }
+  },
+  "image": {
+    "__doc__": "pic_gen.py 调 gpt-image-2 的参数：noTextHint 会追加到每条 scene.prompt 末尾，用作通用负面提示",
+    "engine": "gpt-image-2",
+    "size": "1536x1024",
+    "quality": "auto",
+    "noTextHint": "严格要求：整张图绝对不能出现任何中文字、汉字、英文字母、阿拉伯数字或者标点。所有标签、标牌、招牌、徽章、吊牌内部必须完全空白（留出贴标签的位置），不要画任何文字或文字纹理。"
+  },
+  "beats": [
+    {
+      "zh": "孩子十岁那年，拿我的信用卡，",
+      "en": "When my kid was ten, he took my credit card,",
+      "scene": "S1-01"
+    },
+    {
+      "zh": "在一款手游里充了一万多。",
+      "en": "and ran up over ten grand in a mobile game.",
+      "scene": "S1-01"
+    },
+    {
+      "zh": "直到收到账单我俩才发现，",
+      "en": "We only found out when the bill came—",
+      "scene": "S1-01"
+    },
+    {
+      "zh": "当场气炸，上去就是一顿“男女混双”。",
+      "en": "and we both let him have it.",
+      "scene": "S1-01"
+    },
+    {
+      "zh": "可冷静下来，我问了自己一句：",
+      "en": "But once I calmed down, I asked myself:",
+      "scene": "S1-02"
+    },
+    {
+      "zh": "这抽卡的瘾，到底是跟谁学的？",
+      "en": "where did this habit even come from?",
+      "scene": "S1-02"
+    },
+    {
+      "zh": "那几年，我天天抱着手机氪原神，",
+      "en": "Back then, I was glued to my phone, whaling on gacha,",
+      "scene": "S1-03"
+    },
+    {
+      "zh": "光抽卡就充了好几千；",
+      "en": "thousands of yuan just on pulls;",
+      "scene": "S1-03"
+    },
+    {
+      "zh": "累了，就刷抖音看小姐姐跳舞。",
+      "en": "and when I was tired, I scrolled girls dancing.",
+      "scene": "S1-03"
+    },
+    {
+      "zh": "他妈妈也没闲着，",
+      "en": "His mom was no better—",
+      "scene": "S1-03"
+    },
+    {
+      "zh": "不是追剧，就是抱着手机逛购物车。",
+      "en": "binging dramas or filling her shopping cart.",
+      "scene": "S1-03"
+    },
+    {
+      "zh": "一家三口坐一块儿，",
+      "en": "Three of us in one room,",
+      "scene": "S1-04"
+    },
+    {
+      "zh": "三块屏幕三道光，谁也不看谁。",
+      "en": "three glowing screens, no one looking at anyone.",
+      "scene": "S1-04"
+    },
+    {
+      "zh": "孩子那一万多，",
+      "en": "His ten grand—",
+      "scene": "S1-04"
+    },
+    {
+      "zh": "不过是把我充的那几千，照着描了一遍。",
+      "en": "just my few thousand, traced over again.",
+      "scene": "S1-04"
+    },
+    {
+      "zh": "老话难听，可句句在理——",
+      "en": "An old saying, harsh but true:",
+      "scene": "S1-05"
+    },
+    {
+      "zh": "上梁不正，下梁歪。",
+      "en": "a crooked top beam bends the one below.",
+      "scene": "S1-05"
+    },
+    {
+      "zh": "你想要个什么样的孩子，",
+      "en": "Want to know what your child will be?",
+      "scene": "S1-05"
+    },
+    {
+      "zh": "先看看自己立成了什么样。",
+      "en": "Look at what you've become.",
+      "scene": "S1-05"
+    },
+    {
+      "zh": "你是不是也这样：",
+      "en": "Sound familiar?",
+      "scene": "S1-06"
+    },
+    {
+      "zh": "一边吼他“别玩手机好好学”，",
+      "en": "Yelling “put the phone down and study,”",
+      "scene": "S1-06"
+    },
+    {
+      "zh": "一边自己刷到半夜？",
+      "en": "while you scroll till midnight?",
+      "scene": "S1-06"
+    },
+    {
+      "zh": "这叫言行不一，",
+      "en": "That's a double standard,",
+      "scene": "S1-06"
+    },
+    {
+      "zh": "孩子最先看穿的，就是这个。",
+      "en": "the first thing a kid sees through.",
+      "scene": "S1-06"
+    },
+    {
+      "zh": "孩子不是听你说什么长大的，",
+      "en": "Kids don't grow up on what you say,",
+      "scene": "S1-07"
+    },
+    {
+      "zh": "是看你做什么长大的。",
+      "en": "they grow up on what you do.",
+      "scene": "S1-07"
+    },
+    {
+      "zh": "你天天耳濡目染塞给他的是屏幕，",
+      "en": "You steep him in screens every day,",
+      "scene": "S1-07"
+    },
+    {
+      "zh": "却怪他放不下屏幕——这不公平。",
+      "en": "then blame him for not letting go. Not fair.",
+      "scene": "S1-07"
+    },
+    {
+      "zh": "尤其是男孩子——",
+      "en": "A boy, especially—",
+      "scene": "S1-08"
+    },
+    {
+      "zh": "他就是父亲的小时候。",
+      "en": "he is his father's childhood lived again.",
+      "scene": "S1-08"
+    },
+    {
+      "zh": "当爹的今天活成什么样，",
+      "en": "However the father lives today,",
+      "scene": "S1-08"
+    },
+    {
+      "zh": "儿子明天多半就长成什么样。",
+      "en": "the son likely becomes tomorrow.",
+      "scene": "S1-08"
+    },
+    {
+      "zh": "我知道，不少家长这会儿在想：",
+      "en": "I know what some parents are thinking:",
+      "scene": "S1-09"
+    },
+    {
+      "zh": "那我给他买台学习机？",
+      "en": "buy him a study tablet?",
+      "scene": "S1-09"
+    },
+    {
+      "zh": "报个自律班？换个能管控的手机？",
+      "en": "A discipline class? A locked-down phone?",
+      "scene": "S1-09"
+    },
+    {
+      "zh": "我劝你把钱包收起来。",
+      "en": "Put your wallet away.",
+      "scene": "S1-10"
+    },
+    {
+      "zh": "这叫舍本逐末。",
+      "en": "That's chasing the leaf, missing the root.",
+      "scene": "S1-10"
+    },
+    {
+      "zh": "一台学习机，",
+      "en": "No tablet",
+      "scene": "S1-10"
+    },
+    {
+      "zh": "管不住一个天天看着爸妈刷手机的孩子。",
+      "en": "can rein in a kid who watches you scroll all day.",
+      "scene": "S1-10"
+    },
+    {
+      "zh": "记住一句话：",
+      "en": "Remember this:",
+      "scene": "S1-11"
+    },
+    {
+      "zh": "孩子是一张白纸，执笔的人是你。",
+      "en": "the child is a blank sheet; you hold the pen.",
+      "scene": "S1-11"
+    },
+    {
+      "zh": "你画成什么样，他就长成什么样。",
+      "en": "Whatever you draw is what he becomes.",
+      "scene": "S1-11"
+    },
+    {
+      "zh": "所以要改的，从来不是那张纸。",
+      "en": "So what needs fixing was never the paper.",
+      "scene": "S1-12"
+    },
+    {
+      "zh": "是握笔的那只手——是你自己。",
+      "en": "It's the hand that holds the pen—it's you.",
+      "scene": "S1-12"
+    },
+    {
+      "zh": "别整那些复杂的。",
+      "en": "Skip the complicated stuff.",
+      "scene": "S1-13"
+    },
+    {
+      "zh": "从今天起，只改一件事——",
+      "en": "From today, change just one thing—",
+      "scene": "S1-13"
+    },
+    {
+      "zh": "孩子放学回家，你的第一个动作：",
+      "en": "when he gets home, your first move:",
+      "scene": "S1-13"
+    },
+    {
+      "zh": "放下手机，离开电脑。",
+      "en": "put down the phone, leave the screen.",
+      "scene": "S1-13"
+    },
+    {
+      "zh": "然后陪他一起，",
+      "en": "Then, side by side,",
+      "scene": "S1-14"
+    },
+    {
+      "zh": "做一件不花一分钱的事：",
+      "en": "do one thing that costs nothing:",
+      "scene": "S1-14"
+    },
+    {
+      "zh": "一起做平板支撑，一起练引体向上，",
+      "en": "planks together, pull-ups together,",
+      "scene": "S1-14"
+    },
+    {
+      "zh": "一起做几个俯卧撑。",
+      "en": "a few push-ups together.",
+      "scene": "S1-14"
+    },
+    {
+      "zh": "不用买装备，不用报班。",
+      "en": "No gear, no classes.",
+      "scene": "S1-15"
+    },
+    {
+      "zh": "家里那块地板、小区那根单杠，就够了。",
+      "en": "The floor at home, a bar downstairs—enough.",
+      "scene": "S1-15"
+    },
+    {
+      "zh": "越简单的事，越容易持之以恒。",
+      "en": "The simpler it is, the easier to keep up.",
+      "scene": "S1-15"
+    },
+    {
+      "zh": "你可能会问：为啥非得是流汗的事？",
+      "en": "You might ask: why must it be sweat?",
+      "scene": "S1-16"
+    },
+    {
+      "zh": "打把游戏、买点东西，不也开心吗？",
+      "en": "Isn't a game or some shopping fun too?",
+      "scene": "S1-16"
+    },
+    {
+      "zh": "因为刷手机、买买买给你的，",
+      "en": "Because scrolling and shopping give you",
+      "scene": "S1-17"
+    },
+    {
+      "zh": "是转瞬即逝的多巴胺——",
+      "en": "dopamine—gone in a flash—",
+      "scene": "S1-17"
+    },
+    {
+      "zh": "来得快，去得也快，越刺激越空。",
+      "en": "quick to come, quick to go, emptier after.",
+      "scene": "S1-17"
+    },
+    {
+      "zh": "而陪他咬牙撑完最后一组，",
+      "en": "But grinding out that last set with him,",
+      "scene": "S1-18"
+    },
+    {
+      "zh": "看他从全身发抖到能多撑十秒，",
+      "en": "watching him hold ten more seconds,",
+      "scene": "S1-18"
+    },
+    {
+      "zh": "给的是内啡肽——",
+      "en": "that's endorphins—",
+      "scene": "S1-18"
+    },
+    {
+      "zh": "来得慢，却细水长流，扎扎实实。",
+      "en": "slow to arrive, but steady and lasting.",
+      "scene": "S1-18"
+    },
+    {
+      "zh": "我们想给孩子的，从来不是那一下的爽，",
+      "en": "What we want to give was never that quick high,",
+      "scene": "S1-19"
+    },
+    {
+      "zh": "是能撑他走一辈子的那股长劲儿。",
+      "en": "but strength to carry him a lifetime.",
+      "scene": "S1-19"
+    },
+    {
+      "zh": "一起流过汗的人，话才打得开。",
+      "en": "People who've sweated together open up.",
+      "scene": "S1-20"
+    },
+    {
+      "zh": "练到瘫在地板上一起喘气的时候，",
+      "en": "Sprawled on the floor catching our breath,",
+      "scene": "S1-20"
+    },
+    {
+      "zh": "那些平时憋着的心里话，反倒冒出来了。",
+      "en": "the things he'd bottled up finally came out.",
+      "scene": "S1-20"
+    },
+    {
+      "zh": "原本想顶的嘴、想吵的架，",
+      "en": "The back-talk, the brewing fight—",
+      "scene": "S1-21"
+    },
+    {
+      "zh": "撑完两组平板支撑，也就烟消云散了。",
+      "en": "two sets of planks and it melts away.",
+      "scene": "S1-21"
+    },
+    {
+      "zh": "这种一块儿熬下来的成就感，",
+      "en": "The pride of pushing through together—",
+      "scene": "S1-22"
+    },
+    {
+      "zh": "是你吼他十年都吼不出来的。",
+      "en": "ten years of yelling could never make it.",
+      "scene": "S1-22"
+    },
+    {
+      "zh": "别急。你刷了十年手机，",
+      "en": "Don't rush. You scrolled for ten years,",
+      "scene": "S1-23"
+    },
+    {
+      "zh": "他也跟着看了十年，",
+      "en": "he watched for ten,",
+      "scene": "S1-23"
+    },
+    {
+      "zh": "不可能一礼拜就扭过来。",
+      "en": "a week won't undo it.",
+      "scene": "S1-23"
+    },
+    {
+      "zh": "你先放下手机，先迈出那一步，",
+      "en": "Put your phone down, take that first step,",
+      "scene": "S1-24"
+    },
+    {
+      "zh": "他会慢慢跟上——",
+      "en": "and he'll slowly follow—",
+      "scene": "S1-24"
+    },
+    {
+      "zh": "上行下效，从来都会传染。",
+      "en": "what you do above, he copies below.",
+      "scene": "S1-24"
+    },
+    {
+      "zh": "中间你一定会犯懒，",
+      "en": "You'll get lazy along the way,",
+      "scene": "S1-25"
+    },
+    {
+      "zh": "会想“就刷一会儿”。",
+      "en": "telling yourself “just a quick scroll.”",
+      "scene": "S1-25"
+    },
+    {
+      "zh": "记住：你低头的样子，",
+      "en": "Remember: the way you bow to the screen,",
+      "scene": "S1-25"
+    },
+    {
+      "zh": "他全看在眼里。",
+      "en": "he sees all of it.",
+      "scene": "S1-25"
+    },
+    {
+      "zh": "如果今天刷到这条的是孩子——",
+      "en": "If it's a kid watching this—",
+      "scene": "S1-26"
+    },
+    {
+      "zh": "也许你爸妈，做得并不够好。",
+      "en": "maybe your parents didn't do well enough.",
+      "scene": "S1-26"
+    },
+    {
+      "zh": "但你不必等他们变，",
+      "en": "But you needn't wait for them.",
+      "scene": "S1-26"
+    },
+    {
+      "zh": "你可以先成为家里那个，",
+      "en": "You can be the one in your family",
+      "scene": "S1-26"
+    },
+    {
+      "zh": "先放下手机的人。",
+      "en": "who puts the phone down first.",
+      "scene": "S1-26"
+    },
+    {
+      "zh": "改变一个家，",
+      "en": "Changing a family",
+      "scene": "S1-27"
+    },
+    {
+      "zh": "从来可以从任何一个人开始。",
+      "en": "can always start with one person.",
+      "scene": "S1-27"
+    },
+    {
+      "zh": "所以，别再给孩子上“政治课”了，",
+      "en": "So stop lecturing your kid—",
+      "scene": "S1-28"
+    },
+    {
+      "zh": "改上“体育课”吧。",
+      "en": "take him to “gym class” instead.",
+      "scene": "S1-28"
+    },
+    {
+      "zh": "你想让他成为什么样的人，",
+      "en": "Whoever you want him to be,",
+      "scene": "S1-28"
+    },
+    {
+      "zh": "自己先身体力行，活成那个样子。",
+      "en": "live it out yourself first.",
+      "scene": "S1-28"
+    },
+    {
+      "zh": "那张白纸还在，笔也还在你手里。",
+      "en": "The blank sheet remains; the pen is still yours.",
+      "scene": "S1-29"
+    },
+    {
+      "zh": "从今晚陪他流的第一身汗开始，重新画。",
+      "en": "Start redrawing tonight—with the first sweat you share.",
+      "scene": "S1-29"
+    }
+  ],
+  "scenes": {
+    "S1-01": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一个十岁男孩剪影缩在沙发角落，双手攥着发光手机；前景一张信用卡和一长条账单，账单上数字与文字处全部留白。父母两个剪影立在后景，姿态愤怒。视觉重心在账单和孩子，上方留白。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-02": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。男孩剪影居中坐着低头，头顶上方一个由留白勾出的大问号。构图极简，四周大量留白。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-03": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。左侧父亲剪影瘫在沙发上举着发光手机，周围漂浮抽卡卡牌与竖屏短视频小方框剪影；右侧母亲剪影靠在另一头，手机旁漂浮购物袋与电视剧画框剪影。中间留出空当。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-04": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一家三口并排坐在沙发上，各自低头盯着一块发光手机，三道冷光打在脸上，彼此背对、互不交流。底部留白。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-05": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一座房屋骨架的象征画面：顶上的横梁明显歪斜，底下的梁被带得跟着倾斜；上梁上隐约一个大人剪影，下梁上一个小孩剪影。极简、象征性强，大量留白。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-06": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一面镜子：镜中一个大人一手指着前方训斥，另一只手背在身后、藏着一台发光的手机。镜面构图，重心在那只藏手机的手。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-07": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。前景一个大人剪影低头看发光手机，地面的影子里一个缩小的孩子剪影做着一模一样的低头姿势。重心在“影子复制”的对应关系上。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-08": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一个父亲剪影与一个小男孩剪影并肩站立，姿态、动作一模一样，父亲略大、孩子略小，像同一个人的两个年龄叠在一起。大量留白。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-09": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。孩子面前堆着一台学习机、几张培训班传单和一部新手机，孩子却面无表情、眼神飘向别处。重心在那堆“花钱买的东西”。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-10": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。天平一端是一摞钞票和一台学习机，另一端空着；孩子的目光越过这一切，望向角落里正低头刷手机的父母剪影。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-11": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一张大白纸铺满画面，一只握着毛笔的大人的手正在落笔，纸上渐渐显出一个孩子的轮廓。重心在笔尖与显形的轮廓。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-12": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。特写一只握着毛笔的大人的手，背景虚化的白纸。重心全在这只手上。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-13": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一个大人剪影把发光手机扣在桌上、从电脑前起身，转身面向刚进门、背着书包的孩子。重心在“放下与转身”的动作上。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-14": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。父亲与儿子两个剪影并排，一起做平板支撑、一旁是单杠上引体向上的姿态。动作一致，氛围较暖。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-15": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。极简静物：一块空地板，旁边一根小区里的单杠，朴素无装饰。大量留白。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-16": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。画面一分为二：一边是游戏手柄与购物袋剪影，一边是哑铃与汗珠剪影，中间一个犹豫的问号。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-17": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一束烟花在空中一闪，下方是渐渐破灭的泡沫。象征短暂的快感。冷色、空旷。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-18": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。父子俩满头是汗、瘫坐在地板上相视点头，神情踏实满足。暖光。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-19": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一条很长、向远处延伸的路，父亲与孩子两个剪影并肩往前走。重心在长路与背影。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-20": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。父子俩并排瘫坐在地板上喘气，一个侧过头跟另一个说话。亲近、放松。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-21": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一团代表争吵的乌云正在散开，露出后面清朗的留白。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-22": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。父子俩完成训练后对视、轻轻击掌的剪影。重心在两人之间的连接。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-23": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一本日历的纸页正被一页页翻过，旁边一条蜿蜒向上的长路。象征需要时间。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-24": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。前景一个大人剪影迈出一步，身后一个孩子剪影踩着同样的步子跟上。脚步呼应。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-25": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一个大人偷偷低头摸出手机，门缝后面一双孩子的眼睛正静静看着。重心在那双眼睛。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-26": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一个孩子单独的剪影，主动把发光手机扣在桌上、抬起头。重心在“主动”的姿态。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-27": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一束光从窗户斜照进略显昏暗的房间，照亮地板上的一小片。希望感。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-28": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一块黑板上密密麻麻的说教文字被一道大叉划掉（文字处留白，只示意被划掉），旁边换成父子俩一起做平板支撑的剪影。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    },
+    "S1-29": {
+      "prompt": "扁平插画。米黄纸质底，黑色剪影 + 灰白基调，颜色克制（剪影黑、深灰、米黄）。一张白纸与一只握笔的大人的手，窗外透进一片温暖的光。收束、留余韵。",
+      "label": "",
+      "motion": {
+        "enter": "fade",
+        "duration": 700
+      },
+      "imageFit": "contain"
+    }
+  },
+  "__fontsDoc__": "自定义字体：把 .woff2 文件放进 .{slug}-assets/fonts/ 子目录，在 fonts[] 数组里声明 { family, src, weight, style, format, display }，bootstrap.js 会自动生成 @font-face；chapter.style.numFont / chapter.style.subtitleFont / overlay.style.font 直接引用 family 名即可"
+}

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- 标题 / 品牌 / disclaimer / body class / 所有业务脚本全部由 bootstrap.js 从 episode.json 注入 -->
+<title></title>
+<meta name="viewport" content="width=1920">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Noto+Serif+SC:wght@500;700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href=".015-draft-assets/styles.css">
+
+<!-- React + Babel：仅 tweaks-panel.jsx 用 -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div class="viewport">
+  <div class="stage" id="stage">
+
+    <!-- 顶部栏 -->
+    <header class="top-bar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <!-- 对角线笔刷 / 钢笔 icon（Ionicons brush 风格） -->
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+            <path fill="currentColor" d="M136.6 138.79a64.003 64.003 0 0 0-43.31 41.35L0 460l14.69 14.69L164.8 324.58c-2.99-6.26-4.8-13.18-4.8-20.58c0-26.51 21.49-48 48-48s48 21.49 48 48s-21.49 48-48 48c-7.4 0-14.32-1.81-20.58-4.8L37.31 497.31L52 512l279.86-93.29a64.003 64.003 0 0 0 41.35-43.31L416 224L288 96l-151.4 42.79zm361.34-64.62l-60.11-60.11c-18.75-18.75-49.16-18.75-67.91 0l-56.55 56.55l128.02 128.02l56.55-56.55c18.75-18.75 18.75-49.15 0-67.91z"/>
+          </svg>
+        </div>
+        <div class="brand-title" id="brandTitle"></div>
+      </div>
+      <div></div>
+      <div class="disclaimer"></div>
+    </header>
+
+    <!-- 中央卡片 -->
+    <main class="card-area">
+      <div class="card">
+        <div class="scene-stack" id="sceneStack"><!-- 由 player.js 填充 --></div>
+      </div>
+    </main>
+
+    <!-- 底部双语字幕 -->
+    <footer class="subtitle-band" id="band">
+      <div class="subtitle-zh" id="capZh">　</div>
+      <div class="subtitle-en" id="capEn">　</div>
+    </footer>
+
+    <!-- 录制倒数覆盖层（仅 enterRecording 时显示） -->
+    <div class="rec-countdown" id="recCountdown" aria-hidden="true"></div>
+
+  </div>
+</div>
+
+<!-- 控制条（竖向贴左侧黑边；按钮 icon-only, hover 出 tooltip）
+     icon set: Ionicons (MIT), inline SVG，fill/stroke=currentColor 随 hover/primary 状态自然换色 -->
+<div class="controls" id="controls">
+  <button class="primary" id="playBtn" data-label="播放" data-state="paused">
+    <svg class="ico ico-play" viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M133 440a35.37 35.37 0 0 1-17.5-4.67c-12-6.8-19.46-20-19.46-34.33V111c0-14.37 7.46-27.53 19.46-34.33a35.13 35.13 0 0 1 35.77.45l247.85 148.36a36 36 0 0 1 0 61l-247.89 148.4A35.5 35.5 0 0 1 133 440Z"/></svg>
+    <svg class="ico ico-pause" viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M208 432h-48a16 16 0 0 1-16-16V96a16 16 0 0 1 16-16h48a16 16 0 0 1 16 16v320a16 16 0 0 1-16 16zM352 432h-48a16 16 0 0 1-16-16V96a16 16 0 0 1 16-16h48a16 16 0 0 1 16 16v320a16 16 0 0 1-16 16z"/></svg>
+  </button>
+  <button id="restartBtn" data-label="重头">
+    <svg class="ico" viewBox="0 0 512 512" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32" d="M320 146s24.36-12-64-12a160 160 0 1 0 160 160"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32" d="m256 58l80 80l-80 80"/></svg>
+  </button>
+  <button id="prevBtn" data-label="上一句">
+    <svg class="ico" viewBox="0 0 512 512" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="48" d="M328 112L184 256l144 144"/></svg>
+  </button>
+  <button id="nextBtn" data-label="下一句">
+    <svg class="ico" viewBox="0 0 512 512" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="48" d="M184 112l144 144l-144 144"/></svg>
+  </button>
+  <span class="progress" id="progress">
+    <input id="progressInput" type="number" min="1" value="1" aria-label="跳到指定 beat" data-label="跳到指定 beat">
+    <span class="progress-sep">/</span>
+    <button id="progressTotal" type="button" data-label="跳到末尾">0</button>
+  </span>
+  <label class="rate-control">节奏 <input type="range" id="rate" min="0.6" max="1.6" step="0.05" value="1"></label>
+  <button id="recBtn" data-label="录制模式">
+    <svg class="ico" viewBox="0 0 512 512" aria-hidden="true"><circle cx="256" cy="256" r="208" fill="none" stroke="currentColor" stroke-width="32"/><circle cx="256" cy="256" r="128" fill="currentColor"/></svg>
+  </button>
+  <button id="editBtn" data-label="Edit overlay (E)">
+    <svg class="ico" viewBox="0 0 512 512" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="44" d="M358.62 129.28L86.49 402.08L70 442l39.92-16.49l272.8-272.13l-24.1-24.1zM413.07 74.84l-11.79 11.78l24.1 24.1l11.79-11.79a16.51 16.51 0 0 0 0-23.34l-.75-.75a16.51 16.51 0 0 0-23.35 0z"/></svg>
+  </button>
+</div>
+
+<div class="rec-flash" id="recFlash">录制模式 · 按 Esc 退出</div>
+
+<!-- 自适应缩放：把 1920×1080 等比缩放到视口 -->
+<script>
+(function () {
+  const stage = document.getElementById('stage');
+  function fit() {
+    const sx = window.innerWidth / 1920;
+    const sy = window.innerHeight / 1080;
+    const s = Math.min(sx, sy);
+    stage.style.transform = 'scale(' + s + ')';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+})();
+</script>
+
+<!-- 唯一引擎入口：bootstrap.js fetch episode.json 并按依赖顺序加载其余脚本 -->
+<script src=".015-draft-assets/bootstrap.js"></script>
+
+</body>
+</html>

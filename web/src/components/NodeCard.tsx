@@ -52,6 +52,9 @@ function NodeCardImpl({ data }: { data: NodeCardData }) {
   const Icon = getIcon(def.name);
   const isInput = def.kind === 'input';
   const isOutput = def.kind === 'output';
+  // asr 节点卡片只显示一句概要；子阶段（下载/提取音频/转写/整理）只在抽屉里追加展示
+  const displayProgress =
+    def.name === 'asr' ? '高精度语音转文字' : (state.progress || '执行中…');
 
   return (
     <div
@@ -78,7 +81,7 @@ function NodeCardImpl({ data }: { data: NodeCardData }) {
         {state.status === 'running' && (
           <div className="progress-line">
             <span className="spinner" />
-            <span>{state.progress || '执行中…'}</span>
+            <span>{displayProgress}</span>
           </div>
         )}
         {state.status === 'failed' && state.error && (

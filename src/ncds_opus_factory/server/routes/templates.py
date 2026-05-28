@@ -54,6 +54,24 @@ def _default_image_cfg() -> dict[str, Any]:
     }
 
 
+def _template_fonts(template_id: str) -> list[dict[str, Any]]:
+    """从模板自带 episode.json 拉 fonts 数组。
+
+    字体清单是模板资源声明（驱动 @font-face 注入 + Inspector 字体下拉），由模板
+    单点维护；starter / mock 产出 episode 时统一从这里取，避免出现"fonts:[]
+    但磁盘上明明有字体目录"的脱节。仅认得 paper_card_talk_014；其它模板返回空。
+    """
+    if template_id != "paper_card_talk_014":
+        return []
+    tpl_ep = _TEMPLATES_ROOT / template_id / ".014-draft-assets" / "episode.json"
+    try:
+        ep = json.loads(tpl_ep.read_text(encoding="utf-8"))
+        fonts = ep.get("fonts")
+        return fonts if isinstance(fonts, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
 def make_starter_episode(template_id: str, title: str) -> dict[str, Any]:
     """组装一个最小可用的 paper-card-talk 风格 episode starter。
 
@@ -76,7 +94,7 @@ def make_starter_episode(template_id: str, title: str) -> dict[str, Any]:
             "disclaimer": "",
             "titleOptions": [title],
         },
-        "fonts": [],
+        "fonts": _template_fonts(template_id),
         "visual": {
             "palette": "paper",
             "bandStyle": "paper",

@@ -8,12 +8,15 @@
 // 不调任何接口，前端正则一次抽完。
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ExternalLink,
   Film,
   Hash,
   Link2,
+  Lock,
   Play,
+  Plus,
   Trash2,
   User,
 } from 'lucide-react';
@@ -25,6 +28,9 @@ interface Props {
   jobId: string;
   nodeDef: PipelineNodeDef;
   nodeState: NodeState;
+  // 兄弟 asr 节点的 status；done/running/queued 时本 panel 锁编辑，
+  // 防止用户在已下游产物的 job 上换 URL（要换就派生新 job）。
+  asrStatus?: NodeState['status'];
   onStarted: () => void;
 }
 
@@ -93,7 +99,29 @@ export function parseShares(raw: string): ParsedShare[] {
   return result;
 }
 
-export function InputPanel({ jobId, nodeState, onStarted }: Props) {
+export function InputPanel({ jobId, nodeState, asrStatus, onStarted }: Props) {
+  const nav = useNavigate();
+  // 锁定条件：asr 不是 idle 也不是 failed —— 即 queued/running/done。
+  // failed 时仍允许编辑，方便用户改 URL 重试。
+  const locked = asrStatus === 'queued' || asrStatus === 'running' || asrStatus === 'done';
+  const [forking, setForking] = useState(false);
+
+  async function doFork() {
+    setForking(true);
+    try {
+      const state = await api.createJob({
+        pipeline_id: 'paper_card_talk_015',
+        title: `作品 ${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`,
+        inputs: { url: '' },
+      });
+      nav(`/jobs/${state.job_id}`);
+    } catch (e: unknown) {
+      alert(`新建失败：${(e as Error).message}`);
+    } finally {
+      setForking(false);
+    }
+  }
+
   // shares 是首要状态：从持久化的 outputs.shares 还原；缺失时按 urls 兜底成最小卡片
   const initialShares = useMemo<ParsedShare[]>(() => {
     const out = nodeState.outputs ?? {};
@@ -113,7 +141,7 @@ export function InputPanel({ jobId, nodeState, onStarted }: Props) {
   // 刚加入的 url 集合，用于触发 .flash CSS 动画；1.2s 动画结束后自动剔除
   const [flashUrls, setFlashUrls] = useState<Set<string>>(new Set());
 
-  const canStart = shares.length > 0 && !starting;
+  const canStart = shares.length > 0 && !starting && !locked;
 
   // textarea 变化时：解析到新链接 → 按 url 去重合并入 shares → 清空 textarea
   // 没识别到链接的内容保留在 textarea，让用户能看到原文继续编辑
@@ -184,6 +212,26 @@ export function InputPanel({ jobId, nodeState, onStarted }: Props) {
 
   return (
     <div>
+      {locked && (
+        <div className="input-locked-banner">
+          <Lock size={14} strokeWidth={1.7} />
+          <span className="banner-text">
+            {asrStatus === 'done'
+              ? 'ASR 已完成，本作品的输入已锁定。要换素材请新建作品。'
+              : 'ASR 进行中，输入已锁定。'}
+          </span>
+          <button
+            className="btn primary sm"
+            disabled={forking}
+            onClick={doFork}
+            style={{ marginLeft: 'auto' }}
+          >
+            <Plus size={12} strokeWidth={1.8} />
+            {forking ? '新建中…' : '新建作品'}
+          </button>
+        </div>
+      )}
+
       {/* —— 粘贴区 —— */}
       <div className="section-h">
         <Link2 size={12} strokeWidth={1.7} /> 粘贴抖音分享文本 · 自动识别作者 / 标签 / 链接
@@ -194,7 +242,9 @@ export function InputPanel({ jobId, nodeState, onStarted }: Props) {
           value={text}
           placeholder={HINT}
           rows={6}
-          autoFocus
+          autoFocus={!locked}
+          disabled={locked}
+          readOnly={locked}
           onChange={(e) => setText(e.target.value)}
           style={{
             fontFamily: 'var(--font-mono)',
@@ -202,13 +252,17 @@ export function InputPanel({ jobId, nodeState, onStarted }: Props) {
             lineHeight: 1.6,
             minHeight: 140,
             whiteSpace: 'pre-wrap',
+            opacity: locked ? 0.55 : 1,
+            cursor: locked ? 'not-allowed' : 'text',
           }}
         />
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
           <span className="dim-mono">
-            {text.trim()
-              ? '未识别出抖音链接'
-              : '粘贴抖音分享文本，识别后自动并入下方列表'}
+            {locked
+              ? '已锁定（asr 已开始或完成）'
+              : text.trim()
+                ? '未识别出抖音链接'
+                : '粘贴抖音分享文本，识别后自动并入下方列表'}
           </span>
         </div>
       </div>
@@ -236,8 +290,8 @@ export function InputPanel({ jobId, nodeState, onStarted }: Props) {
               {starting
                 ? '启动中…'
                 : shares.length > 1
-                  ? `开始流程（${shares.length} 条）`
-                  : '开始流程'}
+                  ? `开始创作（${shares.length} 条）`
+                  : '开始创作'}
             </button>
           </div>
           <div className="parsed-list">
@@ -248,6 +302,7 @@ export function InputPanel({ jobId, nodeState, onStarted }: Props) {
                 item={s}
                 onRemove={() => removeShare(i)}
                 flash={flashUrls.has(s.url)}
+                locked={locked}
               />
             ))}
           </div>
@@ -262,11 +317,13 @@ function ParsedCard({
   item,
   onRemove,
   flash,
+  locked,
 }: {
   index: number;
   item: ParsedShare;
   onRemove: () => void;
   flash?: boolean;
+  locked?: boolean;
 }) {
   const href = item.originalUrl || item.url;
   return (
@@ -323,7 +380,12 @@ function ParsedCard({
           <ExternalLink size={11} strokeWidth={1.7} />
         </a>
       </div>
-      <button className="btn sm icon-only ghost danger" onClick={onRemove} title="从粘贴框中移除">
+      <button
+        className="btn sm icon-only ghost danger"
+        onClick={onRemove}
+        title={locked ? '已锁定，无法移除' : '从粘贴框中移除'}
+        disabled={locked}
+      >
         <Trash2 size={12} strokeWidth={1.6} />
       </button>
     </article>

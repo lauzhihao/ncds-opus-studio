@@ -235,6 +235,7 @@ export function JobCanvasPage() {
           jobId={jobId}
           nodeDef={pipeline.nodes.find((n) => n.name === openNode)!}
           nodeState={job.nodes[openNode] ?? defaultIdleState(pipeline.nodes.find((n) => n.name === openNode)!)}
+          siblingNodes={job.nodes}
           onClose={() => setOpenNode(null)}
           onRun={() => handleRun(openNode)}
         />
