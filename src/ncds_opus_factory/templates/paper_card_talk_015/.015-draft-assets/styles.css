@@ -907,3 +907,58 @@ body:not(.motion-enabled) .subtitle-en[class*="cap-enter-"] {
 }
 
 body.tts-missing .tts-notice { display: block; }
+
+/* ─── 简笔画层（storyboard sketches）────────────────────────────────
+   director agent 设计、IMAGE 节点出的白底黑剪影 <img>，叠在容器图上。
+   mix-blend-mode:multiply 把纯白底抠成透明（白×底=底），黑剪影合成到暖纸背景。
+   .sketch-layer 与 .overlay-layer 平级、全屏定位（pos/size 相对整屏），preview(014)
+   与 render(015) 行为一致。入场用独立 sk-enter-* keyframes（与文字 overlay 解耦）。 */
+.sketch-layer {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 3;                 /* 在容器图之上、文字 overlay (z-index:4) 之下 */
+}
+.scene-sketch {
+  position: absolute;
+  width: var(--sk-size, 30%);
+  height: auto;
+  transform: translate(-50%, -50%);
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+@keyframes sk-enter-fade  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sk-enter-zoom {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(.6); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes sk-enter-drift {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 18px)); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@keyframes sk-enter-bounce {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.3); }
+  60%  { opacity: 1; transform: translate(-50%, -50%) scale(1.12); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes sk-enter-ink {
+  from { opacity: 0; filter: blur(8px); transform: translate(-50%, -50%) scale(1.08); }
+  to   { opacity: 1; filter: blur(0);   transform: translate(-50%, -50%) scale(1); }
+}
+.scene.active .scene-sketch[class*="sk-enter-"] {
+  animation-duration: var(--sk-dur, 600ms);
+  animation-delay: var(--oa-delay, 0ms);
+  animation-fill-mode: both;
+  animation-timing-function: cubic-bezier(.34, 1.56, .64, 1);
+}
+.scene.active .scene-sketch.sk-enter-fade   { animation-name: sk-enter-fade;   animation-timing-function: ease-out; }
+.scene.active .scene-sketch.sk-enter-zoom   { animation-name: sk-enter-zoom; }
+.scene.active .scene-sketch.sk-enter-drift  { animation-name: sk-enter-drift;  animation-timing-function: ease-out; }
+.scene.active .scene-sketch.sk-enter-bounce { animation-name: sk-enter-bounce; }
+.scene.active .scene-sketch.sk-enter-ink    { animation-name: sk-enter-ink;    animation-timing-function: ease-out; }
+/* 未启用动效（录制守门 / 静态预览）：直接落到终态，不跑入场 */
+body:not(.motion-enabled) .scene.active .scene-sketch[class*="sk-enter-"] {
+  animation: none;
+  opacity: 1;
+}

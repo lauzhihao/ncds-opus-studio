@@ -318,11 +318,14 @@
     }
   },
   "image": {
-    "__doc__": "pic_gen.py 调 gpt-image-2 的参数：noTextHint 会追加到每条 scene.prompt 末尾，用作通用负面提示",
+    "__doc__": "gpt-image-2 参数：noTextHint 追加到每条 scene.prompt 末尾作通用负面提示；sketchStylePrefix/sketchSize 用于 storyboard 简笔画（白底黑剪影，渲染层 mix-blend-mode:multiply 抠白）",
     "engine": "gpt-image-2",
     "size": "1536x1024",
     "quality": "auto",
-    "noTextHint": "严格要求：整张图绝对不能出现任何中文字、汉字、英文字母、阿拉伯数字或者标点。所有标签、标牌、招牌、徽章、吊牌内部必须完全空白（留出贴标签的位置），不要画任何文字或文字纹理。"
+    "noTextHint": "严格要求：整张图绝对不能出现任何中文字、汉字、英文字母、阿拉伯数字或者标点。所有标签、标牌、招牌、徽章、吊牌内部必须完全空白（留出贴标签的位置），不要画任何文字或文字纹理。",
+    "sketchSize": "1024x1024",
+    "sketchContainerGuide": "容器图作为简笔画的背景底图：只画场景的极简轮廓与大留白，主体人物/道具留给简笔画，构图克制。",
+    "sketchStylePrefix": "Minimalist pictogram in the universal public-signage style, like airport wayfinding icons. Flat solid-black silhouette on a plain pure-white background. Simple rounded head, smooth thick rounded limbs, no neck, no face, no fingers, no interior lines, no outline -- filled black shapes only. Limbs clearly separated from the torso so the silhouette reads at a glance. Flat front or side view, no perspective, no foreshortening, no cast shadow. One single subject or symbol, generous empty negative space, pure black and white, no gray, no gradient, no color."
   },
   "beats": [
     {

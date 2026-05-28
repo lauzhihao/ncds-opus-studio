@@ -1,10 +1,10 @@
 """/render_015 —— paper_card_talk_015 模板的一键渲染。
 
-与 014 的区别：015 按 scene 整段配音（scene-<sid>.mp3 + episode.beats[].audioFile/
-audioStart/audioEnd），渲染用 015 模板自带的 render.mjs（它自己起 http.server +
-puppeteer 录屏 + ffmpeg 按 episode 的 scene mp3 concat 合音）。
+015 按 scene 整段配音（scene-<sid>.mp3 + episode.beats[].audioFile/audioStart/
+audioEnd），渲染用 015 模板自带的 render.mjs（它自己起 http.server + puppeteer
+录屏 + ffmpeg 按 episode 的 scene mp3 concat 合音）。
 
-调用约定（同 014）：
+调用约定：
 - episode_path : 用户编辑后的 episode.json（来自 02_rw 节点，含 tts 写回的时间戳）
 - audio_dir    : scene-<sid>.mp3 目录（来自 04_tts 节点的整段合成）
 - picture_dir  : 图片目录，可空（来自 03_image 节点）

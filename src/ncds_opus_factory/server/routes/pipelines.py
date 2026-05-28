@@ -24,7 +24,10 @@ from collections.abc import AsyncGenerator
 from dataclasses import asdict
 from typing import Any
 
+from pathlib import Path
+
 from fastapi import APIRouter, Body, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -34,6 +37,9 @@ from ncds_opus_factory.server.state import PIPELINE_RUNNER
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ncds_opus_factory/templates（封面取模板自带 episode + pictures 的首场景图）
+_TEMPLATES_ROOT = Path(__file__).resolve().parents[2] / "templates"
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +112,43 @@ async def get_pipeline(pipeline_id: str) -> dict[str, Any]:
     if pipeline_id not in PIPELINE_REGISTRY:
         raise HTTPException(404, f"pipeline not found: {pipeline_id}")
     return _serialize_pipeline(pipeline_id)
+
+
+@router.get("/pipelines/{pipeline_id}/cover")
+async def pipeline_cover(pipeline_id: str) -> FileResponse:
+    """模板封面：取模板自带 episode.json 第一个非章节场景的样例图。
+    无现成图则 404，前端回退到数字 marker。"""
+    if pipeline_id not in PIPELINE_REGISTRY:
+        raise HTTPException(404, f"pipeline not found: {pipeline_id}")
+    assets = _TEMPLATES_ROOT / pipeline_id / ".015-draft-assets"
+    ep_path = assets / "episode.json"
+    if not ep_path.is_file():
+        raise HTTPException(404, "no template episode")
+    try:
+        ep = json.loads(ep_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise HTTPException(404, "template episode unreadable")
+    for b in ep.get("beats") or []:
+        sid = b.get("scene")
+        if sid and not str(sid).startswith("ch"):
+            pic = assets / "pictures" / f"{sid}.webp"
+            if pic.is_file():
+                return FileResponse(str(pic))
+            break
+    raise HTTPException(404, "no template cover image")
+
+
+@router.get("/jobs/{job_id}/cover")
+async def job_cover(job_id: str) -> FileResponse:
+    """作品封面：成片首帧优先，回退首场景容器图；都没有 404（前端回退 marker）。"""
+    try:
+        PIPELINE_RUNNER.get_job(job_id)
+    except KeyError:
+        raise HTTPException(404, f"job not found: {job_id}")
+    path = await PIPELINE_RUNNER.job_cover_path(job_id)
+    if path is None:
+        raise HTTPException(404, "no cover yet")
+    return FileResponse(str(path))
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +252,18 @@ async def regen_image_scene(job_id: str, scene_id: str) -> dict[str, Any]:
     return {"ok": True, "job_id": job_id, "scene_id": scene_id}
 
 
+@router.post("/jobs/{job_id}/nodes/image/regen-sketch/{scene_id}/{n}")
+async def regen_image_sketch(job_id: str, scene_id: str, n: int) -> dict[str, Any]:
+    """重生 image 节点下某个 scene 的第 n 幅简笔画（1-based），不影响容器图和其他简笔画。"""
+    try:
+        rel = await PIPELINE_RUNNER.regen_image_sketch(job_id, scene_id, n)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "job_id": job_id, "scene_id": scene_id, "n": n, "image_relpath": rel}
+
+
 @router.post("/jobs/{job_id}/scenes/{scene_id}/regen-image")
 async def regen_scene_image_from_preview(job_id: str, scene_id: str) -> dict[str, Any]:
     """preview 抽屉里点「生成图片」用：不要求 image 节点 done，直出图片。"""
@@ -219,18 +274,6 @@ async def regen_scene_image_from_preview(job_id: str, scene_id: str) -> dict[str
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"image_relpath": rel}
-
-
-@router.post("/jobs/{job_id}/nodes/tts/regen/{index}")
-async def regen_tts_beat(job_id: str, index: int) -> dict[str, Any]:
-    """重生 tts 节点下某条字幕的音频（014 逐句），不影响其他句和下游节点。"""
-    try:
-        await PIPELINE_RUNNER.regen_tts_beat(job_id, index)
-    except KeyError as e:
-        raise HTTPException(404, str(e))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"ok": True, "job_id": job_id, "index": index}
 
 
 @router.post("/jobs/{job_id}/nodes/tts/regen-scene/{scene_id}")

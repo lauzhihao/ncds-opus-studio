@@ -13,7 +13,7 @@
 - tts、image：已真接入（DashScope CosyVoice / gpt-image-2）
 - asr：已真接入（spawn skills/video-pipeline/video_pipeline.py，只产 transcript + polished 清洗稿；爆款精华已下放到 rw 节点）
 - rw：已真接入（spawn scripts/content_rewrite_runner.mjs，paper_card_talk profile）
-- render：已真接入（commands/render_014.run）
+- render：已真接入（commands/render_015.run）
 - lines：UI-only，不在此处执行
 """
 
@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_factory.pipelines import PIPELINE_REGISTRY, PipelineDef, get_pipeline
+from ncds_opus_factory.server import storyboard_director
 
 logger = logging.getLogger(__name__)
 
@@ -186,13 +187,21 @@ class PipelineRunner:
                 continue
             try:
                 data = json.loads(sf.read_text(encoding="utf-8"))
-                # 摘要：不带 nodes 详情
+                # 运行状态：任一节点 running/queued 即视为"执行中"（按 pipeline 顺序取首个）
+                running_node: str | None = None
+                for name, n in (data.get("nodes") or {}).items():
+                    if (n or {}).get("status") in ("running", "queued"):
+                        running_node = name
+                        break
+                # 摘要：不带 nodes 详情，但带一个运行状态标记给作品列表用
                 out.append({
                     "job_id": data["job_id"],
                     "pipeline_id": data["pipeline_id"],
                     "title": data.get("title", ""),
                     "created_at": data["created_at"],
                     "updated_at": data["updated_at"],
+                    "running": running_node is not None,
+                    "running_node": running_node,
                 })
             except Exception as exc:
                 logger.warning("[pipeline] read %s failed: %s", sf, exc)
@@ -241,6 +250,42 @@ class PipelineRunner:
         if not ep.exists():
             return None
         return json.loads(ep.read_text(encoding="utf-8"))
+
+    async def job_cover_path(self, job_id: str) -> Path | None:
+        """作品封面图的本地路径，按优先级取「第一帧」：
+        1) 渲染成片 06_render/output.mp4 的首帧（ffmpeg 抽到 06_render/cover.jpg，缓存）
+        2) 第一个非章节场景的容器图 03_image/<首场景>.webp
+        3) 都没有 → None（前端回退到数字 marker）
+        """
+        job_dir = self.video_jobs_dir / job_id
+        render_dir = job_dir / "06_render"
+        cover = render_dir / "cover.jpg"
+        mp4 = render_dir / "output.mp4"
+
+        if mp4.is_file():
+            # 成片在、且封面比成片新 → 用缓存；否则（重渲染过 / 没抽过）重新抽首帧
+            if cover.is_file() and cover.stat().st_mtime >= mp4.stat().st_mtime:
+                return cover
+            try:
+                await asyncio.to_thread(_extract_first_frame, mp4, cover)
+                if cover.is_file():
+                    return cover
+            except Exception as exc:
+                logger.warning("[pipeline] cover extract failed for %s: %s", job_id, exc)
+        elif cover.is_file():
+            return cover
+
+        # 回退：第一个非章节场景的容器图
+        ep = self.get_episode(job_id)
+        if ep:
+            for b in ep.get("beats") or []:
+                sid = b.get("scene")
+                if sid and not str(sid).startswith("ch"):
+                    pic = job_dir / "03_image" / f"{sid}.webp"
+                    if pic.is_file():
+                        return pic
+                    break
+        return None
 
     def write_episode(self, job_id: str, episode: dict[str, Any]) -> None:
         ep = self.video_jobs_dir / job_id / "02_rw" / "episode.json"
@@ -483,9 +528,9 @@ class PipelineRunner:
         """preview 抽屉里点「生成图片」时调用。不要求 image 节点 done，
         独立于 pipeline 流水线，直接出图并写到 03_image/{scene_id}.webp。
 
-        文件名约定：纯 {scene_id}.webp（不带序号前缀）—— 014 模板的 player.js
-        line 64 用 picSrcFor(sceneId) = ASSET_ROOT + '/pictures/' + sceneId + '.webp'
-        来拼图片 URL；preview.py 路由把 .014-draft-assets/pictures/{sceneId}.webp
+        文件名约定：纯 {scene_id}.webp（不带序号前缀）—— 015 模板的 player.js
+        用 picSrcFor(sceneId) = ASSET_ROOT + '/pictures/' + sceneId + '.webp'
+        来拼图片 URL；preview.py 路由把 .015-draft-assets/pictures/{sceneId}.webp
         映射到 03_image/{sceneId}.webp。前缀 NN- 会让模板取不到 job 产出。
 
         实现：复用 _generate_scene_image（gpt-image-2 → Pillow → WebP）。
@@ -558,63 +603,79 @@ class PipelineRunner:
             raise ValueError(f"unknown scene: {scene_id}")
         await self.regen_scene_image_from_preview(job_id, scene_id)
 
-    async def regen_tts_beat(self, job_id: str, index: int) -> None:
-        """重生 tts 节点里指定 beat 的音频。force 模式覆盖 04_tts/NNNN.mp3。"""
+    async def regen_image_sketch(self, job_id: str, scene_id: str, n: int) -> str:
+        """重生 image 节点里指定 scene 的第 n 幅简笔画（白底黑剪影，1-based）。
+        force 覆盖 03_image/{sid}-sk{n}.webp，更新 outputs.items[].sketches[].image_relpath。
+        """
         state = self._load(job_id)
-        n = state.nodes.get("tts")
-        if n is None:
-            raise KeyError("tts node not found")
-        if n.status != "done":
-            raise ValueError("tts node not done; run tts first")
-        items = list((n.outputs or {}).get("items") or [])
-        target = next((it for it in items if it.get("index") == index), None)
-        if target is None:
-            raise ValueError(f"unknown beat index: {index}")
+        img = state.nodes.get("image")
+        if img is None:
+            raise KeyError("image node not found")
+        if img.status != "done":
+            raise ValueError("image node not done; run image first")
 
         ep = self.get_episode(job_id)
         if ep is None:
             raise ValueError("episode.json not found")
-        beats = ep.get("beats") or []
-        if index < 1 or index > len(beats):
-            raise ValueError(f"beat index out of range: {index}")
-        zh = str(beats[index - 1].get("zh") or "").strip()
-        if not zh:
-            raise ValueError(f"beat {index} has empty zh")
+        sc = (ep.get("scenes") or {}).get(scene_id)
+        if not isinstance(sc, dict):
+            raise ValueError(f"unknown scene: {scene_id}")
+        sketches = sc.get("sketches") or []
+        if n < 1 or n > len(sketches):
+            raise ValueError(f"sketch index out of range: {n}")
+        sp = str((sketches[n - 1] or {}).get("prompt") or "").strip()
+        if not sp:
+            raise ValueError(f"sketch {scene_id}-sk{n} has empty prompt")
 
-        cfg = (ep.get("audio") or {}).get("tts") or {}
-        total = len(beats)
-        width = max(4, len(str(total)))
-        name = f"{index:0{width}d}.mp3"
-        out_path = self.video_jobs_dir / job_id / "04_tts" / name
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        if out_path.is_file():
-            out_path.unlink()
+        image_cfg = ep.get("image") or {}
+        quality = image_cfg.get("quality") or "auto"
+        no_text_hint = image_cfg.get("noTextHint") or ""
+        sketch_size = image_cfg.get("sketchSize") or "1024x1024"
+        sketch_prefix = str(image_cfg.get("sketchStylePrefix") or "").strip()
+        full = " ".join(p for p in (sketch_prefix, sp, no_text_hint) if p)
 
-        from ncds_opus_factory.commands import tts as tts_cmd
+        rel = f"03_image/{scene_id}-sk{n}.webp"
+        target = self.video_jobs_dir / job_id / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_file():
+            target.unlink()
 
         def on_progress(text: str) -> None:
-            self._push_progress(job_id, "tts", f"[regen #{index}] {text}")
+            self._push_progress(job_id, "image", f"[regen {scene_id}-sk{n}] {text}")
 
+        on_progress("简笔画重生中…")
         await asyncio.to_thread(
-            tts_cmd._synth_one,
-            zh,
-            out_path,
-            voice=cfg.get("voice", tts_cmd.DEFAULT_VOICE),
-            rate=cfg.get("rate", tts_cmd.DEFAULT_RATE),
-            sample_rate=cfg.get("sampleRate", tts_cmd.DEFAULT_SAMPLE_RATE),
-            model=cfg.get("model", tts_cmd.DEFAULT_MODEL),
-            on_progress=on_progress,
+            _generate_scene_image,
+            scene_id=f"{scene_id}-sk{n}", prompt=full, size=sketch_size,
+            quality=quality, target=target, job_id=job_id,
         )
 
+        # 同步 image 节点 outputs.items[].sketches
         state = self._load(job_id)
-        n = state.nodes.get("tts")
-        if n is None:
-            return
-        n.outputs["items"] = items
-        n.finished_at = time.time()
-        state.updated_at = time.time()
-        self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
+        img = state.nodes.get("image")
+        if img and img.outputs:
+            items = list(img.outputs.get("items") or [])
+            for it in items:
+                if it.get("scene_id") != scene_id:
+                    continue
+                sk_items = list(it.get("sketches") or [])
+                hit = next((s for s in sk_items if s.get("index") == n), None)
+                if hit is not None:
+                    hit["image_relpath"] = rel
+                    hit.pop("error", None)
+                else:
+                    sk_items.append({"index": n, "prompt": sp, "image_relpath": rel})
+                it["sketches"] = sk_items
+                break
+            img.outputs["items"] = items
+            img.finished_at = time.time()
+            state.updated_at = time.time()
+            self._save(state)
+            self.bus.publish(
+                job_id,
+                {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)},
+            )
+        return rel
 
     async def regen_tts_scene(self, job_id: str, scene_id: str) -> None:
         """015：重生指定 scene 的整段音频（spawn tts_gen.py --only sid --force）。
@@ -705,6 +766,8 @@ class PipelineRunner:
             outputs = await self._execute_rw(job_id)
         elif node_name == "lines":
             outputs = await self._execute_lines(job_id)
+        elif node_name == "storyboard":
+            outputs = await self._execute_storyboard(job_id)
         elif node_name == "render":
             outputs = await self._execute_render(job_id)
         else:
@@ -768,12 +831,9 @@ class PipelineRunner:
     # 真接入：tts 节点
     # ------------------------------------------------------------
     async def _execute_tts(self, job_id: str) -> dict[str, Any]:
-        """按 02_rw/episode.json 合成配音。
-        - 015 pipeline：按 scene 整段合成（scene-<sid>.mp3 + 字级时间戳写回 beats），韵律更连贯
-        - 014 pipeline：逐句合成 04_tts/NNNN.mp3（旧）
+        """按 02_rw/episode.json 按 scene 整段合成配音（scene-<sid>.mp3 + 字级时间戳
+        写回 beats），韵律更连贯。spawn 015 模板自带的 tts_gen.py。
         """
-        state = self._load(job_id)
-        pipeline_id = state.pipeline_id
         job_dir = self.video_jobs_dir / job_id
         ep = self.get_episode(job_id)
         if ep is None:
@@ -789,75 +849,33 @@ class PipelineRunner:
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "tts", text)
 
-        # —— 015：scene 整段合成 ——
-        if pipeline_id == "paper_card_talk_015":
-            repo_root = Path(__file__).resolve().parents[3]
-            tts_gen = (
-                repo_root / "src" / "ncds_opus_factory" / "templates"
-                / "paper_card_talk_015" / ".015-draft-assets" / "tts_gen.py"
-            )
-            if not tts_gen.is_file():
-                raise RuntimeError(f"015 tts_gen.py not found: {tts_gen}")
-            ep_path = job_dir / "02_rw" / "episode.json"
-            on_progress(f"按 scene 整段合成（{len(beats_raw)} beats）…")
-            await asyncio.to_thread(
-                _run_tts_gen_015,
-                script=tts_gen,
-                episode_path=ep_path,
-                audio_dir=out_dir,
-                on_line=on_progress,
-            )
-            # 读回 tts_gen 写好时间戳的 episode，组装 beat 级 items（audio 指向 scene mp3）
-            ep2 = json.loads(ep_path.read_text(encoding="utf-8"))
-            items = _rebuild_tts_items_015(ep2)
-            scene_files = {it["audio_relpath"] for it in items if it.get("audio_relpath")}
-            on_progress(f"完成：{len(scene_files)} 段 scene 音频 · {len(items)} beats")
-            return {
-                "items": items,
-                "audio_dir": str(out_dir),
-                "mode": "segmented",
-                "scene_count": len(scene_files),
-                "audio_count": len(scene_files),
-            }
-
-        # —— 014：逐句合成（旧）——
-        zh_list = [str(b.get("zh") or "") for b in beats_raw]
-        cfg = (ep.get("audio") or {}).get("tts") or {}
-
-        from ncds_opus_factory.commands import tts as tts_cmd
-
-        result = await asyncio.to_thread(
-            tts_cmd.run,
-            beats=zh_list,
-            output_dir=str(out_dir),
-            voice=cfg.get("voice", tts_cmd.DEFAULT_VOICE),
-            rate=cfg.get("rate", tts_cmd.DEFAULT_RATE),
-            sample_rate=cfg.get("sampleRate", tts_cmd.DEFAULT_SAMPLE_RATE),
-            model=cfg.get("model", tts_cmd.DEFAULT_MODEL),
-            on_progress=on_progress,
+        repo_root = Path(__file__).resolve().parents[3]
+        tts_gen = (
+            repo_root / "src" / "ncds_opus_factory" / "templates"
+            / "paper_card_talk_015" / ".015-draft-assets" / "tts_gen.py"
         )
-
-        # 生成 items 列表给前端 TtsResultPanel 用（文件名约定与 tts_cmd.run 内部一致）
-        total = len(beats_raw)
-        width = max(4, len(str(total)))
-        items: list[dict[str, Any]] = []
-        for i, b in enumerate(beats_raw, start=1):
-            name = f"{i:0{width}d}.mp3"
-            items.append({
-                "index": i,
-                "zh": str(b.get("zh") or ""),
-                "scene": str(b.get("scene") or ""),
-                "audio_relpath": f"04_tts/{name}",
-            })
-
+        if not tts_gen.is_file():
+            raise RuntimeError(f"tts_gen.py not found: {tts_gen}")
+        ep_path = job_dir / "02_rw" / "episode.json"
+        on_progress(f"按 scene 整段合成（{len(beats_raw)} beats）…")
+        await asyncio.to_thread(
+            _run_tts_gen_015,
+            script=tts_gen,
+            episode_path=ep_path,
+            audio_dir=out_dir,
+            on_line=on_progress,
+        )
+        # 读回 tts_gen 写好时间戳的 episode，组装 beat 级 items（audio 指向 scene mp3）
+        ep2 = json.loads(ep_path.read_text(encoding="utf-8"))
+        items = _rebuild_tts_items_015(ep2)
+        scene_files = {it["audio_relpath"] for it in items if it.get("audio_relpath")}
+        on_progress(f"完成：{len(scene_files)} 段 scene 音频 · {len(items)} beats")
         return {
             "items": items,
             "audio_dir": str(out_dir),
-            "audio_count": result["new_count"] + result["skipped"],
-            "new_count": result["new_count"],
-            "skipped": result["skipped"],
-            "model": result["model"],
-            "voice": result["voice"],
+            "mode": "segmented",
+            "scene_count": len(scene_files),
+            "audio_count": len(scene_files),
         }
 
     # ------------------------------------------------------------
@@ -866,7 +884,7 @@ class PipelineRunner:
     async def _execute_image(self, job_id: str) -> dict[str, Any]:
         """按 02_rw/episode.json scenes[].prompt 批量调 gpt-image-2 出图 → WebP。
 
-        复刻 014 自带 pic_gen.py 的 orchestration：
+        复刻模板自带 pic_gen.py 的 orchestration：
         - beats 出场顺序去重 → scene_id 列表
         - 跳过 ch* 章节卡（CSS 渲染，不需要图）
         - 每个 scene 用 gpt_image/gpt_image_gen.py 出 PNG，Pillow 转 WebP 落 03_image/{sid}.webp
@@ -897,6 +915,10 @@ class PipelineRunner:
         size = image_cfg.get("size") or "1536x1024"
         quality = image_cfg.get("quality") or "auto"
         no_text_hint = image_cfg.get("noTextHint") or ""
+        # 简笔画：白底黑剪影方图，圣经前置 + 通用零文字负面后置；渲染层用
+        # mix-blend-mode:multiply 抠掉白底，所以出图链路与容器图完全一样（不需透明）。
+        sketch_size = image_cfg.get("sketchSize") or "1024x1024"
+        sketch_prefix = str(image_cfg.get("sketchStylePrefix") or "").strip()
 
         out_dir = job_dir / "03_image"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -908,53 +930,88 @@ class PipelineRunner:
 
         items: list[dict[str, Any]] = []
         ok = sk = fail = 0
+        sketch_ok = sketch_fail = 0
+        n_scenes = len(scene_order)
         for i, sid in enumerate(scene_order, start=1):
             sc = scenes_def.get(sid) or {}
             prompt = str(sc.get("prompt") or "").strip()
             if sid.startswith("ch"):
                 items.append({"scene_id": sid, "prompt": prompt, "image_relpath": None,
-                              "skipped_reason": "chapter card"})
+                              "skipped_reason": "chapter card", "sketches": []})
                 continue
             if not prompt:
                 items.append({"scene_id": sid, "prompt": "", "image_relpath": None,
-                              "skipped_reason": "empty prompt"})
+                              "skipped_reason": "empty prompt", "sketches": []})
                 fail += 1
                 continue
 
+            # —— 容器图（背景底图） ——
             target = out_dir / f"{sid}.webp"
+            container_rel: str | None = None
+            container_err: str | None = None
             if target.is_file():
-                items.append({"scene_id": sid, "prompt": prompt,
-                              "image_relpath": f"03_image/{sid}.webp"})
+                container_rel = f"03_image/{sid}.webp"
                 sk += 1
-                on_progress(f"[{i}/{len(scene_order)}] {sid} 已存在，跳过")
-                continue
+                on_progress(f"[{i}/{n_scenes}] {sid} 容器图已存在，跳过")
+            else:
+                full_prompt = f"{prompt} {no_text_hint}".strip() if no_text_hint else prompt
+                on_progress(f"[{i}/{n_scenes}] {sid} 容器图生成中…")
+                try:
+                    await asyncio.to_thread(
+                        _generate_scene_image,
+                        scene_id=sid, prompt=full_prompt, size=size,
+                        quality=quality, target=target, job_id=job_id,
+                    )
+                    container_rel = f"03_image/{sid}.webp"
+                    ok += 1
+                except Exception as exc:
+                    logger.warning("[pipeline] image scene %s failed: %s", sid, exc)
+                    on_progress(f"[{i}/{n_scenes}] {sid} 容器图失败: {exc}")
+                    container_err = str(exc)
+                    fail += 1
 
-            full_prompt = f"{prompt} {no_text_hint}".strip() if no_text_hint else prompt
-            on_progress(f"[{i}/{len(scene_order)}] {sid} 生成中…")
-            try:
-                await asyncio.to_thread(
-                    _generate_scene_image,
-                    scene_id=sid,
-                    prompt=full_prompt,
-                    size=size,
-                    quality=quality,
-                    target=target,
-                    job_id=job_id,
-                )
-                items.append({"scene_id": sid, "prompt": prompt,
-                              "image_relpath": f"03_image/{sid}.webp"})
-                ok += 1
-            except Exception as exc:
-                logger.warning("[pipeline] image scene %s failed: %s", sid, exc)
-                on_progress(f"[{i}/{len(scene_order)}] {sid} 失败: {exc}")
-                items.append({"scene_id": sid, "prompt": prompt, "image_relpath": None,
-                              "error": str(exc)})
-                fail += 1
+            # —— 简笔画层（白底黑剪影，逐幅出；容器失败也照出，渲染层各管各的） ——
+            sketches_def = sc.get("sketches") or []
+            sketch_items: list[dict[str, Any]] = []
+            for n, skd in enumerate(sketches_def, start=1):
+                sp = str((skd or {}).get("prompt") or "").strip()
+                if not sp:
+                    continue
+                srel = f"03_image/{sid}-sk{n}.webp"
+                stgt = out_dir / f"{sid}-sk{n}.webp"
+                if stgt.is_file():
+                    sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
+                    continue
+                sfull = " ".join(p for p in (sketch_prefix, sp, no_text_hint) if p)
+                on_progress(f"[{i}/{n_scenes}] {sid} 简笔画 {n}/{len(sketches_def)} 生成中…")
+                try:
+                    await asyncio.to_thread(
+                        _generate_scene_image,
+                        scene_id=f"{sid}-sk{n}", prompt=sfull, size=sketch_size,
+                        quality=quality, target=stgt, job_id=job_id,
+                    )
+                    sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
+                    sketch_ok += 1
+                except Exception as exc:
+                    logger.warning("[pipeline] sketch %s-sk%d failed: %s", sid, n, exc)
+                    on_progress(f"[{i}/{n_scenes}] {sid} 简笔画 {n} 失败: {exc}")
+                    sketch_items.append({"index": n, "prompt": sp, "image_relpath": None,
+                                         "error": str(exc)})
+                    sketch_fail += 1
+
+            item: dict[str, Any] = {"scene_id": sid, "prompt": prompt,
+                                    "image_relpath": container_rel, "sketches": sketch_items}
+            if container_err:
+                item["error"] = container_err
+            items.append(item)
 
         if ok == 0 and fail > 0:
             raise RuntimeError(f"all {fail} scene image generations failed")
 
-        on_progress(f"image 完成：ok={ok} skipped={sk} failed={fail}")
+        on_progress(
+            f"image 完成：容器 ok={ok} skipped={sk} failed={fail} · "
+            f"简笔画 ok={sketch_ok} failed={sketch_fail}"
+        )
 
         return {
             "items": items,
@@ -963,6 +1020,8 @@ class PipelineRunner:
             "ok": ok,
             "skipped": sk,
             "failed": fail,
+            "sketch_ok": sketch_ok,
+            "sketch_failed": sketch_fail,
         }
 
     # ------------------------------------------------------------
@@ -1293,9 +1352,11 @@ class PipelineRunner:
     # 02_rw/episode.json 的 beats[] 完成；后端只确认数据齐了就 done）
     # ------------------------------------------------------------
     async def _execute_lines(self, job_id: str) -> dict[str, Any]:
-        """读 02_rw/draft.md 定稿 → 调 opus 结构化成 episode.json（meta + beats + scenes）。
-        合并模板骨架（保留 audio/visual/playback/fonts/image 等渲染配置），只覆盖
-        meta/beats/scenes 三个字段，写 02_rw/episode.json，供 tts/image/render 消费。
+        """读 02_rw/draft.md 定稿 → 调 opus 结构化成逐句字幕 beats[]。
+
+        只产脚本层（meta + beats），scenes 留空 {} 交给下游 storyboard 节点的
+        director agent 产出。合并模板骨架（保留 audio/visual/playback/fonts/image
+        等渲染配置），写 02_rw/episode.json。
         """
         pipeline_id = self._load(job_id).pipeline_id
         draft_path = self.video_jobs_dir / job_id / "02_rw" / "draft.md"
@@ -1311,7 +1372,7 @@ class PipelineRunner:
             self._push_progress(job_id, "lines", text)
 
         system_prompt, user_prompt = _build_lines_prompt(draft)
-        on_progress("调 opus 结构化为 beats + scenes…")
+        on_progress("调 opus 结构化为 beats…")
         raw = await asyncio.to_thread(
             _call_opus_for_rw, user_prompt, system_prompt, "claude-opus-4-7"
         )
@@ -1328,14 +1389,11 @@ class PipelineRunner:
             raise RuntimeError(f"opus 输出非法 JSON：{exc}；tail={cleaned[-300:]}") from exc
 
         beats = parsed.get("beats") if isinstance(parsed, dict) else None
-        scenes_in = parsed.get("scenes") if isinstance(parsed, dict) else None
         meta_in = parsed.get("meta") if isinstance(parsed, dict) else None
         if not isinstance(beats, list) or not beats:
             raise RuntimeError("结构化结果缺 beats[] 或为空")
-        if not isinstance(scenes_in, dict) or not scenes_in:
-            raise RuntimeError("结构化结果缺 scenes{} 或为空")
 
-        # 规整 beats（只留约定字段）
+        # 规整 beats（只留约定字段；scene 留空串，待 storyboard 回填）
         norm_beats: list[dict[str, Any]] = []
         for b in beats:
             if not isinstance(b, dict):
@@ -1346,31 +1404,16 @@ class PipelineRunner:
             norm_beats.append({
                 "zh": zh,
                 "en": str(b.get("en") or ""),
-                "scene": str(b.get("scene") or ""),
+                "scene": "",
                 "chapter": b.get("chapter") if isinstance(b.get("chapter"), int) else None,
             })
         if not norm_beats:
             raise RuntimeError("beats 全部为空")
 
-        # 规整 scenes：补 player 友好字段（motion 缺失 player 会跳过，但 prompt 必须有）
-        norm_scenes: dict[str, dict[str, Any]] = {}
-        for sid, sc in scenes_in.items():
-            prompt = ""
-            if isinstance(sc, dict):
-                prompt = str(sc.get("prompt") or "").strip()
-            elif isinstance(sc, str):
-                prompt = sc.strip()
-            norm_scenes[str(sid)] = {"prompt": prompt, "label": "", "overlays": []}
-        # beats 引用但 scenes 缺的 scene_id 补空 prompt，避免 image 节点 KeyError
-        for b in norm_beats:
-            sid = b["scene"]
-            if sid and sid not in norm_scenes:
-                norm_scenes[sid] = {"prompt": "", "label": "", "overlays": []}
-
-        # 合并模板骨架（按 pipeline 选 014/015 模板）
+        # 合并 015 模板骨架；scenes 留空等 storyboard 产出
         episode = _load_template_episode(pipeline_id)
         episode["beats"] = norm_beats
-        episode["scenes"] = norm_scenes
+        episode["scenes"] = {}
         if isinstance(meta_in, dict):
             meta = dict(episode.get("meta") or {})
             if meta_in.get("title"):
@@ -1383,24 +1426,89 @@ class PipelineRunner:
 
         ep_path = self.video_jobs_dir / job_id / "02_rw" / "episode.json"
         ep_path.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
-        on_progress(f"完成：{len(norm_beats)} 条 beats · {len(norm_scenes)} 个 scenes")
+        on_progress(f"完成：{len(norm_beats)} 条 beats（scenes 待分镜产出）")
 
         return {
             "episode_relpath": "02_rw/episode.json",
             "beats_count": len(norm_beats),
-            "scenes_count": len(norm_scenes),
+        }
+
+    # ------------------------------------------------------------
+    # storyboard（分镜）节点：director agent 产出视觉层 scenes{}
+    # ------------------------------------------------------------
+    async def _execute_storyboard(self, job_id: str) -> dict[str, Any]:
+        """读 lines 产出的 beats[] → 调 director agent（whisper-reel 导演人格）切子场景
+        + 设计容器图 prompt 与简笔画 → 回填 beats[].scene + 写 scenes{} 到 episode.json。
+
+        scenes 的简笔画风格圣经（sketchStylePrefix）取自 episode.image，缺省用
+        storyboard_director.DEFAULT_SKETCH_STYLE_PREFIX 兜底。
+        """
+        ep = self.get_episode(job_id)
+        if ep is None:
+            raise ValueError("episode.json not found; run lines first")
+        beats_raw = ep.get("beats") or []
+        if not beats_raw:
+            raise ValueError("episode.beats is empty; run lines first")
+
+        # 组装 director 输入 beats（带 1-based index）
+        beats_in = [
+            {"index": i, "zh": str(b.get("zh") or ""), "en": str(b.get("en") or "")}
+            for i, b in enumerate(beats_raw, start=1)
+        ]
+        image_cfg = ep.get("image") or {}
+        style_bible = (
+            str(image_cfg.get("sketchStylePrefix") or "").strip()
+            or storyboard_director.DEFAULT_SKETCH_STYLE_PREFIX
+        )
+        container_guide = str(image_cfg.get("sketchContainerGuide") or "").strip()
+        palette = str((ep.get("visual") or {}).get("palette") or "").strip()
+
+        def on_progress(text: str) -> None:
+            self._push_progress(job_id, "storyboard", text)
+
+        system_prompt, user_prompt = storyboard_director.build_director_prompt(
+            ep.get("meta") or {},
+            beats_in,
+            style_bible=style_bible,
+            container_guide=container_guide,
+            palette=palette,
+        )
+        on_progress(f"调 director agent 分镜（{len(beats_in)} beats）…")
+        raw = await asyncio.to_thread(
+            _call_opus_for_rw, user_prompt, system_prompt, "claude-opus-4-7"
+        )
+
+        scene_by_beat, scenes = storyboard_director.parse_director_output(raw, beats_raw)
+
+        # 回填 beats[].scene
+        for i, b in enumerate(beats_raw, start=1):
+            b["scene"] = scene_by_beat.get(i, b.get("scene") or "")
+        ep["beats"] = beats_raw
+        ep["scenes"] = scenes
+
+        ep_path = self.video_jobs_dir / job_id / "02_rw" / "episode.json"
+        ep_path.write_text(json.dumps(ep, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        sketch_total = sum(len(s.get("sketches") or []) for s in scenes.values())
+        groups = sorted({s.get("group") or sid for sid, s in scenes.items()})
+        on_progress(
+            f"完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 幅简笔画"
+        )
+        return {
+            "episode_relpath": "02_rw/episode.json",
+            "scenes_count": len(scenes),
+            "sketches_count": sketch_total,
+            "groups_count": len(groups),
+            "beats_count": len(beats_raw),
         }
 
     # ------------------------------------------------------------
     # 真接入：render 节点
     # ------------------------------------------------------------
     async def _execute_render(self, job_id: str) -> dict[str, Any]:
-        """出 1920x1080 MP4。按 pipeline 选渲染器：
-        - 015：commands/render_015（015 render.mjs，scene 整段合音）
-        - 014：commands/render_014（逐句 mp3）
+        """出 1920x1080 MP4（commands/render_015，015 render.mjs，scene 整段合音）。
         依赖 02_rw/episode.json + 04_tts/*.mp3 + 03_image/*.webp。
         """
-        pipeline_id = self._load(job_id).pipeline_id
         job_dir = self.video_jobs_dir / job_id
         episode_path = job_dir / "02_rw" / "episode.json"
         if not episode_path.is_file():
@@ -1416,12 +1524,8 @@ class PipelineRunner:
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "render", text)
 
-        if pipeline_id == "paper_card_talk_015":
-            from ncds_opus_factory.commands import render_015 as render_cmd
-            on_progress("启动 render_015（scene 整段合音）")
-        else:
-            from ncds_opus_factory.commands import render_014 as render_cmd
-            on_progress("启动 render_014（puppeteer + ffmpeg）")
+        from ncds_opus_factory.commands import render_015 as render_cmd
+        on_progress("启动 render_015（scene 整段合音）")
 
         result = await asyncio.to_thread(
             render_cmd.run,
@@ -2013,39 +2117,33 @@ def _build_rw_prompt(
 
 
 def _build_lines_prompt(draft_md: str) -> tuple[str, str]:
-    """LINES 阶段：把 RW 定稿 markdown 文章结构化成 paper-card-talk 的
-    {meta, beats, scenes} JSON。beats 是逐句字幕，scenes 给每个画面配出图 prompt。
+    """LINES 阶段：把 RW 定稿 markdown 文章结构化成逐句字幕 beats[]。
+
+    只产脚本层（meta + beats），**不产 scenes / 分镜**——画面切分与简笔画设计
+    交给下游独立的 storyboard（分镜）节点的 director agent。
     """
     system_prompt = (
         "你是 paper-card-talk 短视频脚本结构化助手。把给定文章拆成短视频的逐句字幕"
-        "（beats）和分镜（scenes）。只输出一个合法 JSON 对象，禁止代码块或任何额外文本。"
+        "（beats）。只输出一个合法 JSON 对象，禁止代码块或任何额外文本。"
+        "不要产出任何画面 / 分镜 / 图像描述——那是后续分镜环节的事。"
     )
     user_prompt = "\n".join([
-        "把下面这篇文章结构化成 paper-card-talk 短视频脚本 JSON。",
+        "把下面这篇文章结构化成 paper-card-talk 短视频的逐句字幕 JSON。",
         "",
         "【输出格式】只输出一个 JSON 对象，结构严格如下，不要代码块包裹、不要解释：",
         "{",
         '  "meta": { "title": "短标题（≤20字）", "subtitle": "", "tags": [] },',
         '  "beats": [',
-        '    { "zh": "单句中文字幕", "en": "英文翻译（可空串）", "scene": "scene_id", "chapter": 整数或null }',
-        "  ],",
-        '  "scenes": {',
-        '    "scene_id": { "prompt": "该画面的图像生成提示词" }',
-        "  }",
+        '    { "zh": "单句中文字幕", "en": "英文翻译（可空串）", "chapter": 整数或null }',
+        "  ]",
         "}",
         "",
         "【beats 要求】",
         "- 把文章正文切成单句字幕，每句 10-30 字，朗朗上口、可朗读；",
         "- 全篇 30-80 条；不要把整段塞进一条；",
-        "- scene 命名：开场用 intro，结尾用 outro，正文按章节用 chap1_xxx / chap2_xxx（xxx 是语义后缀，如 chap1_hook）；",
-        "- 同一个 scene 下可以有多条连续 beat（共享一张图）；",
         "- 每个章节的首条 beat 标 chapter 编号（1..N），其余 beat 的 chapter 写 null；",
+        "- 不要输出 scene 字段，也不要输出 scenes —— 画面切分交给下游分镜环节；",
         "- 只能改写、压缩、重组文章信息，不得编造文章未出现的人物 / 数据 / 平台。",
-        "",
-        "【scenes 要求】",
-        "- 必须覆盖 beats 里出现的每一个 scene_id；",
-        "- 每个 scene 的 prompt 用中文描述画面：扁平插画风格、米黄纸质底、克制配色、画面留白方便贴字幕；",
-        "- prompt 里不要出现任何文字 / 数字（图上不放字）。",
         "",
         "== 文章 ==",
         draft_md,
@@ -2054,22 +2152,33 @@ def _build_lines_prompt(draft_md: str) -> tuple[str, str]:
     return system_prompt, user_prompt
 
 
-def _load_template_episode(pipeline_id: str = "paper_card_talk_014") -> dict[str, Any]:
-    """读对应模板自带 episode.json 作为 LINES 结构化输出的骨架（保留 audio/visual/
-    playback/fonts/image 等渲染配置，只覆盖 meta/beats/scenes）。"""
-    if pipeline_id == "paper_card_talk_015":
-        tpl = (
-            Path(__file__).resolve().parents[1]
-            / "templates" / "paper_card_talk_015"
-            / ".015-draft-assets" / "episode.json"
-        )
-    else:
-        tpl = (
-            Path(__file__).resolve().parents[1]
-            / "templates" / "paper_card_talk_014"
-            / ".014-draft-assets" / "episode.json"
-        )
+def _load_template_episode(pipeline_id: str = "paper_card_talk_015") -> dict[str, Any]:
+    """读模板自带 episode.json 作为 LINES 结构化输出的骨架（保留 audio/visual/
+    playback/fonts/image 等渲染配置，只覆盖 meta/beats）。pipeline_id 参数保留
+    供未来多模板扩展，当前只有 015。"""
+    tpl = (
+        Path(__file__).resolve().parents[1]
+        / "templates" / "paper_card_talk_015"
+        / ".015-draft-assets" / "episode.json"
+    )
     return json.loads(tpl.read_text(encoding="utf-8"))
+
+
+def _extract_first_frame(mp4: Path, out: Path) -> None:
+    """ffmpeg 抽 mp4 首帧到 out（jpg）。同步、在 to_thread 里调。"""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(out.suffix + ".part")
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", str(mp4),
+        "-frames:v", "1", "-q:v", "3",
+        str(tmp),
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if res.returncode != 0 or not tmp.is_file():
+        tail = (res.stderr or res.stdout or "").strip()[-300:]
+        raise RuntimeError(f"ffmpeg first-frame failed: {tail}")
+    tmp.rename(out)
 
 
 def _generate_scene_image(
@@ -2141,12 +2250,12 @@ def _load_template_fonts() -> list[dict[str, Any]]:
 
     字体清单是模板资源声明（决定浏览器 @font-face 注入 + Inspector 字体下拉选项），
     不是 rw 模型该决定的内容。所以 rw 产出 episode.json 时直接 inherit 模板的字体清单。
-    单一真理源 = templates/paper_card_talk_014/.014-draft-assets/episode.json#fonts。
+    单一真理源 = templates/paper_card_talk_015/.015-draft-assets/episode.json#fonts。
     """
     tpl_ep = (
         Path(__file__).resolve().parents[1]
-        / "templates" / "paper_card_talk_014"
-        / ".014-draft-assets" / "episode.json"
+        / "templates" / "paper_card_talk_015"
+        / ".015-draft-assets" / "episode.json"
     )
     try:
         ep = json.loads(tpl_ep.read_text(encoding="utf-8"))

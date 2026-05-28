@@ -165,6 +165,21 @@ export function JobCanvasPage() {
 
   const stats = useMemo(() => computeStats(job), [job]);
 
+  // 节点抽屉锁定：节点已 done 且其下游节点已被触发(queued/running/done)且未彻底失败 →
+  // 锁住该节点抽屉（防误触重跑冲掉下游产物）；下游彻底失败 或 下游还没触发(idle) → 不锁。
+  // 含 input(START)：START 永远 done，下游是 asr —— asr 一旦触发(queued/running/done)
+  // 即锁住 START，防止同一作品被重复启动；asr 失败或未启动则不锁。output 节点不参与。
+  const lockedForOpen = useMemo(() => {
+    if (!openNode || !job || !pipeline) return false;
+    const nd = pipeline.nodes.find((n) => n.name === openNode);
+    if (!nd || nd.kind === 'output') return false;
+    if (job.nodes[openNode]?.status !== 'done') return false;
+    const succ = pipeline.nodes.find((n) => n.deps.includes(openNode));
+    if (!succ) return false;
+    const ss = job.nodes[succ.name]?.status;
+    return ss === 'queued' || ss === 'running' || ss === 'done';
+  }, [openNode, job, pipeline]);
+
   if (!jobId) return <div style={{ padding: 20 }}>missing jobId</div>;
 
   return (
@@ -236,6 +251,7 @@ export function JobCanvasPage() {
           nodeDef={pipeline.nodes.find((n) => n.name === openNode)!}
           nodeState={job.nodes[openNode] ?? defaultIdleState(pipeline.nodes.find((n) => n.name === openNode)!)}
           siblingNodes={job.nodes}
+          locked={lockedForOpen}
           onClose={() => setOpenNode(null)}
           onRun={() => handleRun(openNode)}
         />

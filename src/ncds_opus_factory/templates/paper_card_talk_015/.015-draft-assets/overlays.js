@@ -320,5 +320,68 @@
     if (patch.style && typeof patch.style === 'object') applyStyleObject(el, patch.style);
   }
 
-  window.__overlays = { renderInto, onBeat, clear, updateLive, STYLES, ANIMS };
+  // ── 简笔画层（storyboard sketches）─────────────────────────────────
+  // 白底黑剪影 <img>，作为 sceneEl 下的 .sketch-layer（与 .overlay-layer 平级，全屏定位），
+  // CSS mix-blend-mode:multiply 把白底抠成透明、黑剪影合成到背景上。复用 overlay 的
+  // at.match 机制：元素带 data-at-match / data-pending-motion，player 的 onBeat 扫整个
+  // sceneEl 自然命中并触发飞入。motion 用独立 sk-enter-* class，与文字 overlay 的 keyframe
+  // 解耦（避免 typewriter/slide-clip 等文字专用动效套到图片上）。
+  const SK_ENTER = {
+    'fade': 'sk-enter-fade', 'zoom-pop': 'sk-enter-zoom', 'zoom-in': 'sk-enter-zoom',
+    'drift-in': 'sk-enter-drift', 'bounce': 'sk-enter-bounce', 'ink-bleed': 'sk-enter-ink',
+    'slide-clip': 'sk-enter-drift', 'handwrite': 'sk-enter-fade',
+  };
+  function sketchEnterClass(motion) {
+    const e = motion && motion.enter;
+    return (e && SK_ENTER[e]) || 'sk-enter-zoom';
+  }
+
+  function renderSketches(sceneEl, sketches, opts) {
+    const edit = !!(opts && opts.edit);
+    const srcFor = (opts && opts.srcFor) || null;
+    sceneEl.querySelectorAll(':scope > .sketch-layer').forEach((e) => e.remove());
+    if (!Array.isArray(sketches) || sketches.length === 0) return;
+
+    const layer = document.createElement('div');
+    layer.className = 'sketch-layer';
+    sceneEl.appendChild(layer);
+
+    sketches.forEach((sk, i) => {
+      if (!sk) return;
+      const img = document.createElement('img');
+      img.className = 'scene-sketch';
+      img.alt = '';
+      img.draggable = false;
+      const src = srcFor ? srcFor(i + 1) : (sk.src || '');
+      if (src) img.src = src;
+      const x = (sk.pos && sk.pos.x != null) ? sk.pos.x : 50;
+      const y = (sk.pos && sk.pos.y != null) ? sk.pos.y : 50;
+      img.style.left = x + '%';
+      img.style.top = y + '%';
+      img.style.setProperty('--sk-size', (sk.size != null ? sk.size : 30) + '%');
+      img.style.setProperty('--sk-dur', ((sk.motion && sk.motion.duration) || 600) + 'ms');
+      img.dataset.sketchIndex = String(i + 1);
+
+      const enterClass = sketchEnterClass(sk.motion);
+      const delay = (sk.motion && sk.motion.delay != null) ? sk.motion.delay : (i * 150);
+      img.style.setProperty('--oa-delay', delay + 'ms');
+
+      layer.appendChild(img);
+
+      // at.match：跟台词关键词飞入（同 overlay）。先藏起来、摘掉 motion class，
+      // onBeat 命中 beat.zh 含 match 时还原 display + 加 motion class 触发动效。
+      if (!edit && sk.at && sk.at.match) {
+        img.dataset.atMatch = String(sk.at.match);
+        img.dataset.atDelay = String(sk.at.delay || 0);
+        img.dataset.pendingMotion = enterClass;
+        img.style.display = 'none';
+      } else {
+        img.classList.add(enterClass);
+      }
+    });
+
+    void layer.offsetHeight;
+  }
+
+  window.__overlays = { renderInto, onBeat, clear, updateLive, renderSketches, STYLES, ANIMS };
 })();

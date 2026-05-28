@@ -1,20 +1,20 @@
 """HTML 预览路由：给 PREVIEW 节点的 iframe 提供"模板 + 用户 episode + 已生成素材"的合成视图。
 
-模板形态：paper_card_talk_014（014-draft.html + .014-draft-assets/，含内置 edit-mode + inspector）
+模板形态：paper_card_talk_015（015-draft.html + .015-draft-assets/，含内置 edit-mode + inspector）
 
 URL 形态
 --------
-GET  /preview/{job_id}/                                  → 014-draft.html
-GET  /preview/{job_id}/014-draft.html                    → 同上
-GET  /preview/{job_id}/.014-draft-assets/episode.json
+GET  /preview/{job_id}/                                  → 015-draft.html
+GET  /preview/{job_id}/015-draft.html                    → 同上
+GET  /preview/{job_id}/.015-draft-assets/episode.json
         → video-jobs/{job_id}/02_rw/episode.json，没有 404（rw 节点必须先跑）
-GET  /preview/{job_id}/.014-draft-assets/audio/<file>
+GET  /preview/{job_id}/.015-draft-assets/audio/<file>
         → video-jobs/{job_id}/04_tts/<file>，没有 404（tts 节点必须先跑）
-GET  /preview/{job_id}/.014-draft-assets/pictures/<file>
+GET  /preview/{job_id}/.015-draft-assets/pictures/<file>
         → video-jobs/{job_id}/03_image/<file>，没有 404（image 节点必须先跑）
-GET  /preview/{job_id}/.014-draft-assets/fonts/<path>
+GET  /preview/{job_id}/.015-draft-assets/fonts/<path>
         → 模板内置字体目录（35 个家族）
-GET  /preview/{job_id}/.014-draft-assets/<其他>
+GET  /preview/{job_id}/.015-draft-assets/<其他>
         → 模板原资产（bootstrap / player / edit-mode / inspector 等脚本与样式）
 
 设计原则
@@ -23,18 +23,18 @@ GET  /preview/{job_id}/.014-draft-assets/<其他>
 数据。模板目录只提供引擎层（HTML / JS / CSS / 字体）。这样用户看到"模板自带的旧
 内容"必然是 bug——产物缺失就明确 404。
 
-编辑写盘端点（被 014 内置 edit-mode.js / inspector.jsx / tweaks.jsx 调用，全 iframe 相对路径）
+编辑写盘端点（被 015 内置 edit-mode.js / inspector.jsx / tweaks.jsx 调用，全 iframe 相对路径）
 GET  /preview/{job_id}/__ping                            → 200 OK，启用编辑 UI
 POST /preview/{job_id}/__save_overlays                   → 按 scene+index 深合并 patch 到 overlays[]
 POST /preview/{job_id}/__save_episode                    → 按 dot-path 写回 episode（meta/visual/playback 等）
 POST /preview/{job_id}/__add_overlay                     → 给指定 scene 追加 overlay
 POST /preview/{job_id}/__del_overlay                     → 删指定 scene 的指定 overlay
-GET  /preview/{job_id}/__reload_events                   → SSE 空连接（保持 014 dev-reload.js 不发疯重连，但永不推 reload）
+GET  /preview/{job_id}/__reload_events                   → SSE 空连接（保持 015 dev-reload.js 不发疯重连，但永不推 reload）
 
 安全
 ----
 target 路径必须落在 模板目录或 job 目录之下，否则 403。
-POST body 里的 `slug` 字段忽略（保留兼容 014 原协议）；落点完全由 URL 里的 {job_id} 决定。
+POST body 里的 `slug` 字段忽略（保留兼容原协议）；落点完全由 URL 里的 {job_id} 决定。
 所有写盘走 PIPELINE_RUNNER.write_episode，自动触发下游节点 invalidate。
 """
 
@@ -58,10 +58,10 @@ router = APIRouter()
 # preview.py 路径：routes/preview.py
 # parents[0]=routes, [1]=server, [2]=ncds_opus_factory, [3]=src, [4]=repo root
 _PACKAGE_DIR = Path(__file__).resolve().parents[2]  # ncds_opus_factory/
-_TEMPLATE_DIR = _PACKAGE_DIR / "templates" / "paper_card_talk_014"
-_ASSETS_DIR_NAME = ".014-draft-assets"
+_TEMPLATE_DIR = _PACKAGE_DIR / "templates" / "paper_card_talk_015"
+_ASSETS_DIR_NAME = ".015-draft-assets"
 _ASSETS_PREFIX = _ASSETS_DIR_NAME + "/"
-_HTML_FILE = "014-draft.html"
+_HTML_FILE = "015-draft.html"
 
 
 def _safe_join(base: Path, relpath: str) -> Path:
@@ -88,7 +88,7 @@ def _require_job(job_id: str) -> None:
 
 @router.get("/preview/{job_id}/__ping")
 async def preview_ping(job_id: str) -> dict[str, Any]:
-    """014 bootstrap.js 用 GET __ping 判定编辑 UI 是否启用；200 → 启用。"""
+    """015 bootstrap.js 用 GET __ping 判定编辑 UI 是否启用；200 → 启用。"""
     _require_job(job_id)
     return {"ok": True, "service": "ncds-opus-studio:preview"}
 
@@ -97,7 +97,7 @@ async def preview_ping(job_id: str) -> dict[str, Any]:
 async def preview_reload_events(job_id: str) -> StreamingResponse:
     """SSE 空连接：保持 dev-reload.js 不退化到指数退避重连，但永不推 reload。
 
-    014 自带的 watchfiles 热重载是开发期 fs watcher，studio 用户面前不需要它（编辑
+    015 自带的 watchfiles 热重载是开发期 fs watcher，studio 用户面前不需要它（编辑
     操作走 episode.json patch、iframe 自己重渲；磁盘上脚本文件用户改不到）。
     所以这里给个 hello 之后只发 keep-alive 注释行，浏览器认为连接活着就不再重连。
     """
@@ -127,7 +127,7 @@ def _deep_merge(dst: Any, patch: Any) -> Any:
     """patch dict 深合并进 dst dict。list / 标量 整体替换；dict 递归合并。
 
     复刻 ~/projects/ncds-materials/.014-draft-assets/edit-server.py 的同名实现，
-    保持和 014 客户端的预期 (deep merge + 整体替换) 一致。
+    保持和 015 客户端的预期 (deep merge + 整体替换) 一致。
     """
     if not isinstance(dst, dict) or not isinstance(patch, dict):
         return patch

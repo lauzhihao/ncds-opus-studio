@@ -291,10 +291,29 @@ function ImageCard({
   onRegen: () => void;
 }) {
   const hasImage = !!item.image_relpath;
+  const sketches = item.sketches ?? [];
+  const [skBusy, setSkBusy] = useState<Record<number, boolean>>({});
+
+  async function doRegenSketch(n: number) {
+    setSkBusy((m) => ({ ...m, [n]: true }));
+    try {
+      await api.regenImageSketch(jobId, item.scene_id, n);
+    } catch (e) {
+      alert(`简笔画重生失败: ${(e as Error).message}`);
+    } finally {
+      setSkBusy((m) => ({ ...m, [n]: false }));
+    }
+  }
+
   return (
     <article className="image-card">
       <header className="image-card-head">
         <span className="image-card-id mono">{item.scene_id}</span>
+        {sketches.length > 0 && (
+          <span className="dim-mono" style={{ fontSize: 'var(--text-2xs)' }}>
+            {sketches.length} 简笔画
+          </span>
+        )}
       </header>
       <div className="image-card-preview">
         {hasImage ? (
@@ -312,11 +331,43 @@ function ImageCard({
         )}
         {busy && <div className="image-card-busy">生成中…</div>}
       </div>
+
+      {sketches.length > 0 && (
+        <div className="image-sketches">
+          {sketches.map((sk) => (
+            <div key={sk.index} className="image-sketch" title={sk.prompt}>
+              {sk.image_relpath ? (
+                <img
+                  src={`/jobs/${jobId}/files/${sk.image_relpath}`}
+                  alt={`sk${sk.index}`}
+                  loading="lazy"
+                  draggable={false}
+                />
+              ) : (
+                <div className="image-sketch-ph">
+                  <ImageOff size={13} strokeWidth={1.5} />
+                </div>
+              )}
+              <button
+                type="button"
+                className="image-sketch-regen"
+                title={skBusy[sk.index] ? '生成中…' : `按当前 prompt 重生简笔画 sk${sk.index}`}
+                disabled={disabled || skBusy[sk.index]}
+                onClick={() => doRegenSketch(sk.index)}
+              >
+                <RefreshCw size={10} strokeWidth={1.9} />
+              </button>
+              {skBusy[sk.index] && <div className="image-sketch-busy" />}
+            </div>
+          ))}
+        </div>
+      )}
+
       <textarea
         className="field image-card-prompt"
         value={prompt}
         onChange={(e) => onPromptChange(e.target.value)}
-        placeholder="提示词…"
+        placeholder="容器图提示词…"
         rows={3}
         spellCheck={false}
       />
@@ -324,7 +375,7 @@ function ImageCard({
         <button
           type="button"
           className="btn sm icon-only ghost"
-          title={busy ? '生成中…' : '按当前 prompt 重生此图'}
+          title={busy ? '生成中…' : '按当前 prompt 重生容器图'}
           disabled={disabled || busy}
           onClick={onRegen}
         >

@@ -50,6 +50,9 @@ export interface JobSummary {
   title: string;
   created_at: number;
   updated_at: number;
+  // 任一节点 running/queued 时为 true；running_node 是首个执行中节点名
+  running?: boolean;
+  running_node?: string | null;
 }
 
 // RW 节点 outputs.drafts 中的一条；与 pipeline_runner._execute_rw 输出对齐。
@@ -70,12 +73,31 @@ export interface LinesOutputs {
   beats_count: number;
 }
 
-// IMAGE 节点 outputs.items 中的一条；与 pipeline_runner._mock_outputs("image") 对齐。
+// IMAGE 节点 outputs.items[].sketches 中的一条；与 _execute_image 简笔画产物对齐。
+export interface ImageSketchItem {
+  index: number;
+  prompt: string;
+  image_relpath: string | null;
+  error?: string | null;
+}
+
+// IMAGE 节点 outputs.items 中的一条；与 pipeline_runner._execute_image 对齐。
 // image_relpath 为 null 时表示未生成（mock 模式或单图重生中）。
+// sketches：该 scene 的简笔画层产物（白底黑剪影，渲染层 multiply 抠白）。
 export interface ImageItem {
   scene_id: string;
   prompt: string;
   image_relpath: string | null;
+  sketches?: ImageSketchItem[];
+}
+
+// STORYBOARD（分镜）节点 outputs；与 pipeline_runner._execute_storyboard 对齐。
+export interface StoryboardOutputs {
+  episode_relpath: string;
+  scenes_count: number;
+  sketches_count: number;
+  groups_count: number;
+  beats_count: number;
 }
 
 // TTS 节点 outputs.items 中的一条；与 pipeline_runner._mock_outputs("tts") 对齐。
@@ -156,11 +178,25 @@ export interface Beat {
 export interface Scene {
   prompt: string;
   label?: string;
+  group?: string;
+  imageFit?: 'cover' | 'contain' | 'fill';
   motion?: { enter: string; duration?: number };
   overlays?: Overlay[];
+  // 简笔画层：director agent 设计、IMAGE 节点出图，渲染层叠在容器图上（multiply 抠白）
+  sketches?: Sketch[];
   num?: string;
   type?: string;
   subtitle?: string;
+}
+
+// scenes[id].sketches[] 中的一条；与 storyboard_director._norm_sketch 对齐。
+export interface Sketch {
+  prompt: string;
+  pos: { x: number; y: number };
+  size: number;
+  motion?: { enter: string; duration?: number; delay?: number };
+  // 跟台词关键词飞入：beat.zh 含 match 时入场；缺省=子场景切入即显
+  at?: { match: string; delay?: number };
 }
 
 export interface Overlay {

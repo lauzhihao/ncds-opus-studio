@@ -344,7 +344,7 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
 }
 
 // 按 scene 把 beats 分组（连续相同 scene 合一组）。一组共享一个整段 scene mp3。
-// 014 逐句（items 无 scene）退化为每 beat 一组（key 用 index）。
+// items 无 scene 时退化为每 beat 一组（key 用 index）。
 interface TtsSceneGroup {
   key: string;
   scene: string;

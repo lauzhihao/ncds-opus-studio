@@ -68,9 +68,9 @@ export const api = {
     post<{ ok: boolean; job_id: string; scene_id: string }>(
       `/jobs/${jobId}/nodes/image/regen/${encodeURIComponent(sceneId)}`,
     ),
-  regenTtsBeat: (jobId: string, index: number) =>
-    post<{ ok: boolean; job_id: string; index: number }>(
-      `/jobs/${jobId}/nodes/tts/regen/${index}`,
+  regenImageSketch: (jobId: string, sceneId: string, n: number) =>
+    post<{ ok: boolean; job_id: string; scene_id: string; n: number; image_relpath: string }>(
+      `/jobs/${jobId}/nodes/image/regen-sketch/${encodeURIComponent(sceneId)}/${n}`,
     ),
   regenTtsScene: (jobId: string, sceneId: string) =>
     post<{ ok: boolean; job_id: string; scene_id: string }>(

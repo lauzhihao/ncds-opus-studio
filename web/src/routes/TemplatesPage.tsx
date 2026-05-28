@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Clock,
   Layers,
+  Loader2,
   PenBox,
   Plus,
   Search,
@@ -44,6 +45,17 @@ export function TemplatesPage() {
       .catch((e: unknown) => console.error('load templates page failed', e))
       .finally(() => setLoading(false));
   }, []);
+
+  // 有作品在执行时轮询刷新作品列表，让"执行中"遮罩在节点跑完后自动消失。
+  // 返回模板中心不会中断后端 RUNNING（它是独立的 server 任务），这里只是被动反映状态。
+  const anyRunning = useMemo(() => jobs.some((j) => j.running), [jobs]);
+  useEffect(() => {
+    if (!anyRunning) return;
+    const id = window.setInterval(() => {
+      api.listJobs().then((jl) => setJobs(jl.jobs)).catch(() => {});
+    }, 4000);
+    return () => window.clearInterval(id);
+  }, [anyRunning]);
 
   async function startFromTemplate(pid: string) {
     setCreating(pid);
@@ -169,6 +181,23 @@ export function TemplatesPage() {
   );
 }
 
+// 封面图：加载失败（404 / 尚未生成）时回退到数字 marker。
+function CoverImage({ src, marker }: { src: string; marker: string }) {
+  const [ok, setOk] = useState(true);
+  return ok ? (
+    <img
+      className="cover-img"
+      src={src}
+      alt=""
+      loading="lazy"
+      draggable={false}
+      onError={() => setOk(false)}
+    />
+  ) : (
+    <span className="marker">{marker}</span>
+  );
+}
+
 function JobCard({
   job,
   onOpen,
@@ -185,10 +214,18 @@ function JobCard({
     return m ? m[1] : job.job_id.slice(0, 2).toUpperCase();
   })();
   return (
-    <article className="tpl-card" onClick={onOpen} title="点击进入画布">
+    <article className={`tpl-card${job.running ? ' is-running' : ''}`} onClick={onOpen} title="点击进入画布">
       <div className="cover">
-        <span className="marker">{marker}</span>
+        <CoverImage src={`/jobs/${job.job_id}/cover`} marker={marker} />
         <span className="badge">{job.pipeline_id}</span>
+        {job.running && (
+          <>
+            <span className="run-pill"><span className="run-dot" />执行中</span>
+            <div className="tpl-running-mask" aria-label="执行中">
+              <Loader2 size={22} strokeWidth={2} className="spin" />
+            </div>
+          </>
+        )}
       </div>
       <div className="body">
         <div className="name">{job.title || '未命名作品'}</div>
@@ -214,9 +251,11 @@ function JobCard({
           </button>
           <button
             className="btn sm icon-only danger"
-            title="删除"
+            title={job.running ? '执行中，暂不可删除' : '删除'}
+            disabled={!!job.running}
             onClick={(e) => {
               e.stopPropagation();
+              if (job.running) return;
               onDelete();
             }}
           >
@@ -248,7 +287,7 @@ function TemplateCard({
   return (
     <article className="tpl-card" onClick={onCreate}>
       <div className="cover">
-        <span className="marker">{marker}</span>
+        <CoverImage src={`/pipelines/${pipeline.id}/cover`} marker={marker} />
         <span className="badge">Pipeline · {pipeline.nodes.length}</span>
       </div>
       <div className="body">

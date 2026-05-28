@@ -59,11 +59,11 @@ def _template_fonts(template_id: str) -> list[dict[str, Any]]:
 
     字体清单是模板资源声明（驱动 @font-face 注入 + Inspector 字体下拉），由模板
     单点维护；starter / mock 产出 episode 时统一从这里取，避免出现"fonts:[]
-    但磁盘上明明有字体目录"的脱节。仅认得 paper_card_talk_014；其它模板返回空。
+    但磁盘上明明有字体目录"的脱节。仅认得 paper_card_talk_015；其它模板返回空。
     """
-    if template_id != "paper_card_talk_014":
+    if template_id != "paper_card_talk_015":
         return []
-    tpl_ep = _TEMPLATES_ROOT / template_id / ".014-draft-assets" / "episode.json"
+    tpl_ep = _TEMPLATES_ROOT / template_id / ".015-draft-assets" / "episode.json"
     try:
         ep = json.loads(tpl_ep.read_text(encoding="utf-8"))
         fonts = ep.get("fonts")

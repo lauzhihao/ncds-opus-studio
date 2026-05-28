@@ -6,9 +6,6 @@
 
 from __future__ import annotations
 
-from ncds_opus_factory.pipelines.paper_card_talk_014 import (
-    PIPELINE as PAPER_CARD_TALK_014,
-)
 from ncds_opus_factory.pipelines.paper_card_talk_015 import (
     PIPELINE as PAPER_CARD_TALK_015,
 )
@@ -18,10 +15,9 @@ from ncds_opus_factory.pipelines.types import (
     PipelineNode,
 )
 
-# 015 排在前面 = 模板中心默认推荐（scene 整段配音 + 字级时间戳）
+# 单模板：paper_card_talk_015（scene 整段配音 + 字级时间戳 + 分镜简笔画）
 PIPELINE_REGISTRY: dict[str, PipelineDef] = {
     PAPER_CARD_TALK_015.id: PAPER_CARD_TALK_015,
-    PAPER_CARD_TALK_014.id: PAPER_CARD_TALK_014,
 }
 
 

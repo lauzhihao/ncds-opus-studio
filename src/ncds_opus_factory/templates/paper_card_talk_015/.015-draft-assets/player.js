@@ -64,6 +64,10 @@
   function picSrcFor(sceneId) {
     return bustedUrl(PIC_DIR + '/' + sceneId + '.webp');
   }
+  // 简笔画图片路径：pictures/<scene-id>-sk<n>.webp（n 从 1）
+  function picSketchSrcFor(sceneId, n) {
+    return bustedUrl(PIC_DIR + '/' + sceneId + '-sk' + n + '.webp');
+  }
 
   // 应用 scene 级 motion 配置：加 mo-scene-* class + 写 duration/easing CSS var
   function applySceneMotion(el, motion) {
@@ -286,6 +290,11 @@
     if (!sceneWasActive && window.__overlays) {
       const def = scenes[newSceneId] || {};
       window.__overlays.renderInto(sceneEl, def.overlays);
+      if (window.__overlays.renderSketches) {
+        window.__overlays.renderSketches(sceneEl, def.sketches, {
+          srcFor: (n) => picSketchSrcFor(newSceneId, n),
+        });
+      }
     }
 
     // 每条 beat 都给 overlays 一次机会：at.match 命中时 overlay 才入场
@@ -416,6 +425,11 @@
       if (window.__overlays) {
         const def = scenes[sceneId] || {};
         window.__overlays.renderInto(sceneEl, def.overlays);
+        if (window.__overlays.renderSketches) {
+          window.__overlays.renderSketches(sceneEl, def.sketches, {
+            srcFor: (n) => picSketchSrcFor(sceneId, n),
+          });
+        }
       }
     }
   }
