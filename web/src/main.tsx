@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
 import { TemplatesPage } from './routes/TemplatesPage';
 import { JobCanvasPage } from './routes/JobCanvasPage';
+import { ToastProvider } from './components/Toast';
 import { applyThemeFromStorage } from './hooks/useTheme';
 import './styles/themes.css';
 import './styles/global.scss';
@@ -14,14 +15,16 @@ applyThemeFromStorage();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter
-      basename="/studio"
-      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-    >
-      <Routes>
-        <Route path="/" element={<TemplatesPage />} />
-        <Route path="/jobs/:jobId" element={<JobCanvasPage />} />
-      </Routes>
-    </BrowserRouter>
+    <ToastProvider>
+      <BrowserRouter
+        basename="/studio"
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
+        <Routes>
+          <Route path="/" element={<TemplatesPage />} />
+          <Route path="/jobs/:jobId" element={<JobCanvasPage />} />
+        </Routes>
+      </BrowserRouter>
+    </ToastProvider>
   </React.StrictMode>,
 );

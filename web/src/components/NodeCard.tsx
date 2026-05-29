@@ -32,6 +32,15 @@ const STATUS_LABEL: Record<NodeState['status'], string> = {
   failed: 'FAILED',
 };
 
+// 仅用于 aria-label 的中文状态（屏幕阅读器播报用，不改可视徽章）
+const STATUS_ZH: Record<NodeState['status'], string> = {
+  idle: '待机',
+  queued: '排队中',
+  running: '执行中',
+  done: '已完成',
+  failed: '失败',
+};
+
 function getIcon(name: string): typeof Cog {
   switch (name) {
     case 'input': return Globe;
@@ -59,10 +68,20 @@ function NodeCardImpl({ data }: { data: NodeCardData }) {
   return (
     <div
       className={`node kind-${def.kind} status-${state.status}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`${def.label}，状态：${STATUS_ZH[state.status]}。按 Enter 打开详情`}
       onClick={(e) => {
         // 让 React Flow 自己处理 drag-start；正常 click 才打开抽屉
         if ((e.target as HTMLElement).closest('.react-flow__handle')) return;
         onOpen();
+      }}
+      onKeyDown={(e) => {
+        // 键盘可达：Enter / Space 打开抽屉（等价于点击整卡）
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
       }}
     >
       {!isInput && <Handle type="target" position={Position.Top} />}

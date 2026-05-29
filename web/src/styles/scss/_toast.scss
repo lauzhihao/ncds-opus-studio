@@ -1,0 +1,102 @@
+/* 全局 toast 通知层（见 components/Toast.tsx）。
+   固定右下角竖向堆叠；左侧 3px 语义色条呼应节点卡的状态条语言。 */
+
+.toaster {
+  position: fixed;
+  right: var(--s-5);
+  bottom: var(--s-5);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-width: min(380px, calc(100vw - var(--s-6)));
+  pointer-events: none; /* 容器不挡点击，单条 toast 自己开启 */
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-4);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--ink-1);
+  /* 左 3px 语义色条 */
+  box-shadow:
+    inset 3px 0 0 var(--toast-color, var(--status-failed)),
+    var(--shadow-4);
+  animation: toast-in var(--dur-base) var(--ease-out);
+}
+
+.toast-error   { --toast-color: var(--status-failed); }
+.toast-info    { --toast-color: var(--status-queued); }
+.toast-success { --toast-color: var(--status-done); }
+
+.toast-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--toast-color, var(--status-failed));
+}
+
+.toast-msg {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.toast-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.toast-close:hover { color: var(--ink-1); background: var(--bg-overlay); }
+.toast-close:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 首页/页面级加载失败横幅（TemplatesPage）：与 toast 同属错误反馈语言，左 3px 失败色条。 */
+.load-error-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin: var(--s-5) 0 0;
+  padding: var(--s-3) var(--s-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  box-shadow: inset 3px 0 0 var(--status-failed);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink-1);
+}
+.load-error-banner svg { flex: none; color: var(--status-failed); }
+.load-error-text { flex: 1; min-width: 0; }
+
+/* 窄屏：贴底满宽 */
+@media (max-width: 640px) {
+  .toaster {
+    left: var(--s-3);
+    right: var(--s-3);
+    bottom: var(--s-3);
+    max-width: none;
+  }
+}

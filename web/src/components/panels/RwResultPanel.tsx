@@ -23,6 +23,7 @@ import {
 import { api } from '../../api/client';
 import type { NodeState, PipelineNodeDef, RwDraft } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useToast } from '../Toast';
 
 // 进程状态行（RW 4 模型 / ASR 4 阶段共用）。直角信息框 + 状态配色 + 状态标签。
 export type ProcStatus = 'pending' | 'running' | 'done' | 'failed' | 'unavailable';
@@ -84,6 +85,7 @@ const MODEL_LABELS: Record<string, string> = {
 const modelLabel = (id: string, fallback: string): string => MODEL_LABELS[id] ?? fallback;
 
 export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+  const { showToast } = useToast();
   const drafts = (nodeState.outputs?.drafts as RwDraft[] | undefined) ?? [];
   // 下方 tabs 只渲染成功的稿件；失败/不可用模型只在上面的状态行展示。
   const successDrafts = drafts.filter((d) => d.status !== 'failed');
@@ -186,7 +188,8 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
     try {
       await api.runNode(jobId, nodeDef.name, { profile });
     } catch (e) {
-      alert(`启动失败: ${(e as Error).message}`);
+      showToast('启动失败，请稍后再试');
+      console.error('[RwResultPanel] 启动失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -197,7 +200,8 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
     try {
       await api.cancelNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`停止失败: ${(e as Error).message}`);
+      showToast('停止失败，请稍后再试');
+      console.error('[RwResultPanel] 停止失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -215,7 +219,8 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
         return next;
       });
     } catch (e) {
-      alert(`重写失败: ${(e as Error).message}`);
+      showToast('重写失败，请稍后再试');
+      console.error('[RwResultPanel] 重写失败', e);
     } finally {
       setRewriteBusy(false);
     }
@@ -230,7 +235,8 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      alert(`进入下一步失败: ${(e as Error).message}`);
+      showToast('进入下一步失败，请稍后再试');
+      console.error('[RwResultPanel] 进入下一步失败', e);
     } finally {
       setActionBusy(false);
     }

@@ -5,7 +5,18 @@
   flex-direction: column;
   gap: var(--s-3);
   margin-top: var(--s-3);
+  /* 对齐 .image-grid / .tts-list：吃掉 rw-panel-root 剩余高度并内部滚动，
+     否则 drawer body 被 :has(.rw-panel-root){overflow:hidden} 关掉滚动后，
+     超高的子场景会被直接裁切、无法垂直滚动 */
+  flex: 1 1 0;
+  min-height: 0;
+  /* 只垂直滚动；滚动条隐藏但保留滚动能力（同 .rw-textarea 的做法） */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* 旧 Edge/IE */
 }
+.sb-list::-webkit-scrollbar { width: 0; height: 0; }
 .sb-group {
   display: flex;
   flex-direction: column;

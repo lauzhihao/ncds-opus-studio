@@ -23,6 +23,7 @@ import ReactMarkdown from 'react-markdown';
 import { api } from '../../api/client';
 import type { AsrItem, NodeState, PipelineNodeDef } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useToast } from '../Toast';
 import { ProcStatusRow, type ProcStatus } from './RwResultPanel';
 
 interface Props {
@@ -45,6 +46,7 @@ interface AsrItemProgress {
 }
 
 export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+  const { showToast } = useToast();
   const items = (nodeState.outputs?.items as AsrItem[] | undefined) ?? [];
   const status = nodeState.status;
   const [openIdx, setOpenIdx] = useState<number>(0);
@@ -62,7 +64,8 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     try {
       await api.runNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`启动失败: ${(e as Error).message}`);
+      showToast('启动失败，请稍后再试');
+      console.error('[AsrResultPanel] 启动失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -73,7 +76,8 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     try {
       await api.cancelNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`停止失败: ${(e as Error).message}`);
+      showToast('停止失败，请稍后再试');
+      console.error('[AsrResultPanel] 停止失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -87,7 +91,8 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
       await api.runNode(jobId, 'rw');
       onAdvanced?.();
     } catch (e) {
-      alert(`启动 RW 失败: ${(e as Error).message}`);
+      showToast('启动 RW 失败，请稍后再试');
+      console.error('[AsrResultPanel] 启动 RW 失败', e);
     } finally {
       setAdvanceBusy(false);
     }

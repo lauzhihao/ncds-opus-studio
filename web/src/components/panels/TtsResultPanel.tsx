@@ -13,6 +13,7 @@ import { Pause, Play, RefreshCw, Square, VolumeX } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Episode, NodeState, PipelineNodeDef, TtsItem } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useToast } from '../Toast';
 import { ProcStatusRow } from './RwResultPanel';
 
 interface Props {
@@ -25,6 +26,7 @@ interface Props {
 const NEXT_NODE = 'image';
 
 export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+  const { showToast } = useToast();
   const items = useMemo<TtsItem[]>(
     () => (nodeState.outputs?.items as TtsItem[] | undefined) ?? [],
     [nodeState.outputs],
@@ -106,7 +108,8 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     try {
       await api.runNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`启动失败: ${(e as Error).message}`);
+      showToast('启动失败，请稍后再试');
+      console.error('[TtsResultPanel] 启动失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -117,7 +120,8 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     try {
       await api.cancelNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`停止失败: ${(e as Error).message}`);
+      showToast('停止失败，请稍后再试');
+      console.error('[TtsResultPanel] 停止失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -130,7 +134,8 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
       await flushEpisode();
       await api.regenTtsScene(jobId, sceneId);
     } catch (e) {
-      alert(`重生失败: ${(e as Error).message}`);
+      showToast('重生失败，请稍后再试');
+      console.error('[TtsResultPanel] 重生失败', e);
     } finally {
       setRegenBusy((m) => ({ ...m, [sceneId]: false }));
     }
@@ -168,7 +173,8 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      alert(`启动 IMAGE 失败: ${(e as Error).message}`);
+      showToast('启动 IMAGE 失败，请稍后再试');
+      console.error('[TtsResultPanel] 启动 IMAGE 失败', e);
     } finally {
       setAdvanceBusy(false);
     }

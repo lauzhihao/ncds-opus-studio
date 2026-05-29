@@ -14,6 +14,7 @@ import { Play, Plus, RefreshCw, Square, Trash2 } from 'lucide-react';
 import { api } from '../../api/client';
 import type { NodeState, PipelineNodeDef } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useToast } from '../Toast';
 import { ProcStatusRow } from './RwResultPanel';
 
 interface Props {
@@ -34,6 +35,7 @@ interface Beat {
 }
 
 export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+  const { showToast } = useToast();
   const status = nodeState.status;
   const beatsCount = (nodeState.outputs?.beats_count as number | undefined) ?? 0;
 
@@ -147,7 +149,8 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
     try {
       await api.runNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`启动失败: ${(e as Error).message}`);
+      showToast('启动失败，请稍后再试');
+      console.error('[LinesPanel] 启动失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -158,7 +161,8 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
     try {
       await api.cancelNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`停止失败: ${(e as Error).message}`);
+      showToast('停止失败，请稍后再试');
+      console.error('[LinesPanel] 停止失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -171,7 +175,8 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      alert(`启动 TTS 失败: ${(e as Error).message}`);
+      showToast('启动 TTS 失败，请稍后再试');
+      console.error('[LinesPanel] 启动 TTS 失败', e);
     } finally {
       setAdvanceBusy(false);
     }

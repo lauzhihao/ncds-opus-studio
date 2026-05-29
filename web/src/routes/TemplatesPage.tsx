@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  AlertCircle,
   Clock,
   Image as ImageIcon,
   Loader2,
   PenBox,
   Plus,
+  RotateCw,
   Search,
   Trash2,
   X,
@@ -15,12 +17,17 @@ import { api } from '../api/client';
 import type { JobSummary, PipelineDef } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
+import { useToast } from '../components/Toast';
 
 export function TemplatesPage() {
   const nav = useNavigate();
+  const { showToast } = useToast();
   const [pipelines, setPipelines] = useState<PipelineDef[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // 重试计数：bump 后触发下方加载 effect 重跑
+  const [reloadKey, setReloadKey] = useState(0);
   const [creating, setCreating] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<JobSummary | null>(null);
   // 作品列表前端关键字检索：匹配 title / job_id / pipeline_id，全部小写包含
@@ -43,6 +50,8 @@ export function TemplatesPage() {
   }, []);
 
   useEffect(() => {
+    setLoading(true);
+    setLoadError(null);
     const ready = mockMode
       ? api.ensureMock().catch((e: unknown) => { console.error('ensure mock failed', e); })
       : Promise.resolve();
@@ -52,9 +61,13 @@ export function TemplatesPage() {
         setPipelines(pl.pipelines);
         setJobs(jl.jobs);
       })
-      .catch((e: unknown) => console.error('load templates page failed', e))
+      .catch((e: unknown) => {
+        // 加载失败要让用户看得见、有出口，而不是静默空白（无法与「无数据」区分）
+        console.error('load templates page failed', e);
+        setLoadError('加载失败，请检查网络或服务后重试。');
+      })
       .finally(() => setLoading(false));
-  }, [mockMode]);
+  }, [mockMode, reloadKey]);
 
   // 有作品在执行时轮询刷新作品列表，让"执行中"遮罩在节点跑完后自动消失。
   // 返回模板中心不会中断后端 RUNNING（它是独立的 server 任务），这里只是被动反映状态。
@@ -77,7 +90,8 @@ export function TemplatesPage() {
       });
       nav(`/jobs/${state.job_id}`);
     } catch (e: unknown) {
-      alert(`创建失败：${(e as Error).message}`);
+      showToast('创建作品失败，请稍后再试');
+      console.error('[TemplatesPage] createJob 失败', e);
     } finally {
       setCreating(null);
     }
@@ -86,9 +100,16 @@ export function TemplatesPage() {
   async function confirmDelete() {
     if (!pendingDelete) return;
     const id = pendingDelete.job_id;
-    await api.deleteJob(id);
-    setJobs((prev) => prev.filter((j) => j.job_id !== id));
-    setPendingDelete(null);
+    try {
+      await api.deleteJob(id);
+      setJobs((prev) => prev.filter((j) => j.job_id !== id));
+    } catch (e: unknown) {
+      // 失败也要收起弹窗并提示，避免 ConfirmDialog 卡在「处理中…」死锁
+      showToast('删除失败，请稍后再试');
+      console.error('[TemplatesPage] deleteJob 失败', e);
+    } finally {
+      setPendingDelete(null);
+    }
   }
 
   return (
@@ -117,6 +138,20 @@ export function TemplatesPage() {
         <div className="spacer" />
         <ThemeSwitcher />
       </div>
+
+      {loadError && (
+        <div className="load-error-banner" role="alert">
+          <AlertCircle size={15} strokeWidth={1.8} />
+          <span className="load-error-text">{loadError}</span>
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={() => setReloadKey((k) => k + 1)}
+          >
+            <RotateCw size={13} strokeWidth={1.8} /> 重试
+          </button>
+        </div>
+      )}
 
       <div className="section-title" style={{ marginTop: 'var(--s-6)' }}>
         <span className="label">模板</span>

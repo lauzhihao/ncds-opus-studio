@@ -1,0 +1,20 @@
+/* 无障碍：尊重系统「减少动态效果」偏好（WCAG 2.1 SC 2.3.3）。
+   放在 global.scss 最末 @use，确保这里的降级规则层叠覆盖各分区的动画。
+   策略：把所有 animation / transition 压到近 0（保留 0.01ms 以触发 transitionend 回调），
+   把无限循环动画的迭代次数砍到 1，关闭平滑滚动。spinner 等 loading 反馈仍保留极短动画以示「在动」。 */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* 纯装饰性的环境脉冲：直接关停，避免残留一次闪烁 */
+  .status-pill .dot,
+  .pulse-soft,
+  .react-flow__edge-path { animation: none !important; }
+}

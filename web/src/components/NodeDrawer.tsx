@@ -1,7 +1,7 @@
 // 节点详情抽屉。按 node.name 路由到不同的 panel。
 // rw / lines / asr 等有专属 panel，其余走 GenericNodePanel。
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   BadgeCheck,
   Captions,
@@ -64,12 +64,47 @@ function getIcon(name: string): typeof Cog {
 export function NodeDrawer({ jobId, nodeDef, nodeState, siblingNodes, locked, onClose, onRun }: Props) {
   const Icon = getIcon(nodeDef.name);
 
+  const asideRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
   // Esc 关闭
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
+
+  // 打开时把焦点移进抽屉（关闭按钮），关闭时归还焦点给触发它的节点卡。
+  useEffect(() => {
+    const prevActive = document.activeElement as HTMLElement | null;
+    const t = window.setTimeout(() => closeRef.current?.focus(), 0);
+    return () => {
+      window.clearTimeout(t);
+      prevActive?.focus?.();
+    };
+  }, []);
+
+  // 焦点陷阱：Tab / Shift+Tab 在抽屉内循环，不穿透到背后画布。
+  function trapFocus(e: ReactKeyboardEvent) {
+    if (e.key !== 'Tab') return;
+    const root = asideRef.current;
+    if (!root) return;
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => el.offsetParent !== null);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 
   // 锁定：用 inert 让抽屉 body 整棵子树不可交互（按钮/输入框全部失效，且键盘不可聚焦）。
   // fieldset[disabled] 负责把原生控件灰显（:disabled 样式），inert 兜底拦截一切交互。
@@ -87,13 +122,20 @@ export function NodeDrawer({ jobId, nodeDef, nodeState, siblingNodes, locked, on
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
-      <aside className={`drawer${isFullscreen ? ' fullscreen' : ''}`} role="dialog" aria-modal>
+      <aside
+        ref={asideRef}
+        className={`drawer${isFullscreen ? ' fullscreen' : ''}`}
+        role="dialog"
+        aria-modal
+        aria-labelledby="drawer-title"
+        onKeyDown={trapFocus}
+      >
         <div className={`head${nodeState.status === 'running' || nodeState.status === 'queued' ? ' loading' : ''}`}>
           <div className="icon-frame">
             <Icon size={18} strokeWidth={1.6} />
           </div>
           <div className="titles">
-            <h3 className="title">{nodeDef.label}</h3>
+            <h3 className="title" id="drawer-title">{nodeDef.label}</h3>
             <div className="subtitle">
               {nodeDef.name} · {nodeDef.name === 'input' ? 'share links' : nodeDef.kind}
             </div>
@@ -129,7 +171,7 @@ export function NodeDrawer({ jobId, nodeDef, nodeState, siblingNodes, locked, on
               )}
             </button>
           )}
-          <button className="btn sm icon-only ghost" onClick={onClose} title="关闭 (Esc)">
+          <button ref={closeRef} className="btn sm icon-only ghost" onClick={onClose} title="关闭 (Esc)" aria-label="关闭 (Esc)">
             <X size={14} strokeWidth={1.6} />
           </button>
         </div>

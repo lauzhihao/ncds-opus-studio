@@ -13,6 +13,7 @@ import { ChevronLeft, ChevronRight, ImageOff, Play, RefreshCw, Square, X } from 
 import { api } from '../../api/client';
 import type { Episode, ImageItem, NodeState, PipelineNodeDef } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useToast } from '../Toast';
 import { ProcStatusRow } from './RwResultPanel';
 
 interface Props {
@@ -25,6 +26,7 @@ interface Props {
 const NEXT_NODE = 'preview';
 
 export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+  const { showToast } = useToast();
   const items = useMemo<ImageItem[]>(
     () => (nodeState.outputs?.items as ImageItem[] | undefined) ?? [],
     [nodeState.outputs],
@@ -96,7 +98,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
     try {
       await api.runNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`启动失败: ${(e as Error).message}`);
+      showToast('启动失败，请稍后再试');
+      console.error('[ImageResultPanel] 启动失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -107,7 +110,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
     try {
       await api.cancelNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`停止失败: ${(e as Error).message}`);
+      showToast('停止失败，请稍后再试');
+      console.error('[ImageResultPanel] 停止失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -120,7 +124,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
       await flushEpisode();
       await api.regenImageScene(jobId, sceneId);
     } catch (e) {
-      alert(`重生失败: ${(e as Error).message}`);
+      showToast('重生失败，请稍后再试');
+      console.error('[ImageResultPanel] 重生失败', e);
     } finally {
       setRegenBusy((m) => ({ ...m, [sceneId]: false }));
     }
@@ -133,7 +138,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      alert(`启动 PREVIEW 失败: ${(e as Error).message}`);
+      showToast('启动 PREVIEW 失败，请稍后再试');
+      console.error('[ImageResultPanel] 启动 PREVIEW 失败', e);
     } finally {
       setAdvanceBusy(false);
     }
@@ -310,6 +316,7 @@ function ImageCard({
   onRegen: () => void;
   onOpen: () => void;
 }) {
+  const { showToast } = useToast();
   const hasImage = !!item.image_relpath;
   const sketches = item.sketches ?? [];
   const [skBusy, setSkBusy] = useState<Record<number, boolean>>({});
@@ -319,7 +326,8 @@ function ImageCard({
     try {
       await api.regenImageSketch(jobId, item.scene_id, n);
     } catch (e) {
-      alert(`简笔画重生失败: ${(e as Error).message}`);
+      showToast('简笔画重生失败，请稍后再试');
+      console.error('[ImageCard] 简笔画重生失败', e);
     } finally {
       setSkBusy((m) => ({ ...m, [n]: false }));
     }

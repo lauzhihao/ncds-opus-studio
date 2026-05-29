@@ -19,9 +19,10 @@ import ReactFlow, {
   type NodeMouseHandler,
   type ReactFlowInstance,
 } from 'reactflow';
-import { ArrowLeft, Hash } from 'lucide-react';
+import { ArrowLeft, Hash, Loader2 } from 'lucide-react';
 
 import { api } from '../api/client';
+import { useToast } from '../components/Toast';
 import type { NodeState, PipelineDef, PipelineNodeDef } from '../api/types';
 import { useJobStream } from '../hooks/useJobStream';
 import { NodeCard, type NodeCardData } from '../components/NodeCard';
@@ -35,8 +36,10 @@ const EDGE_TYPES = { pulse: PulseEdge };
 // —— 节点拓扑序 → zigzag 两列错开布局（奇偶左右）
 // 节点放大到 1.5×（min 330px / max 390px）后，错位距离和行间距也按比例放大避免重叠。
 function computeVerticalLayout(pipeline: PipelineDef): Record<string, { x: number; y: number }> {
-  const ROW = 280;          // 1.5x 220-ish；bezier 曲线弯曲空间也够
-  const COL_OFFSET = 280;   // 1.5x 200 (节点更宽，偏移要拉开)
+  // 收紧行距与列偏移：原 280/280 让 10 节点纵向铺到 2520px、左右各空 1/3，
+  // fitView 后文字被压到不可读。降到 200/160 后总高约 1800px，整图入屏后仍可辨认。
+  const ROW = 200;
+  const COL_OFFSET = 160;
   const result: Record<string, { x: number; y: number }> = {};
   pipeline.nodes.forEach((nd, i) => {
     const left = i % 2 === 0;
@@ -51,6 +54,7 @@ function computeVerticalLayout(pipeline: PipelineDef): Record<string, { x: numbe
 export function JobCanvasPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const nav = useNavigate();
+  const { showToast } = useToast();
   const [pipeline, setPipeline] = useState<PipelineDef | null>(null);
   const [openNode, setOpenNode] = useState<string | null>(null);
   const { job, connected } = useJobStream(jobId);
@@ -72,10 +76,11 @@ export function JobCanvasPage() {
       try {
         await api.runNode(jobId, nodeName);
       } catch (e: unknown) {
-        alert(`触发 ${nodeName} 失败：${(e as Error).message}`);
+        showToast(`触发「${nodeName}」失败，请稍后再试`);
+        console.error('[JobCanvasPage] runNode 失败', nodeName, e);
       }
     },
-    [jobId],
+    [jobId, showToast],
   );
 
   // —— 首次（或 pipeline 变化）：构建节点 + 边 + 初始布局
@@ -125,12 +130,12 @@ export function JobCanvasPage() {
     requestAnimationFrame(() => setEdges(newEdges));
   }, [pipeline, job, handleRun, setNodes, setEdges]);
 
-  // —— nodes 填入后定位到画布顶部（仅前 2-3 个节点附近），不要把全部节点缩进 viewport
+  // —— nodes 填入后用 fitView 把整条 pipeline 收进视口：给用户一个「全流程概览」，
+  // 不再硬编码 setCenter(0, 280)（会把视口卡在第 2 个节点、START 落在屏外、且与 ROW 耦合）。
   useEffect(() => {
     if (nodes.length === 0 || !rfRef.current) return;
     const t = setTimeout(() => {
-      // 画布坐标 (0, 280) 大致是 asr 节点位置（节点放大后行距=280）
-      rfRef.current?.setCenter(0, 280, { zoom: 0.85, duration: 240 });
+      rfRef.current?.fitView({ padding: 0.18, maxZoom: 0.85, duration: 240 });
     }, 60);
     return () => clearTimeout(t);
   }, [pipeline?.id, nodes.length === 0]);
@@ -180,7 +185,16 @@ export function JobCanvasPage() {
     return ss === 'queued' || ss === 'running' || ss === 'done';
   }, [openNode, job, pipeline]);
 
-  if (!jobId) return <div style={{ padding: 20 }}>missing jobId</div>;
+  if (!jobId) {
+    return (
+      <div className="page" style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', gap: 'var(--s-3)' }}>
+        <span className="dim-mono">缺少作品 ID</span>
+        <button className="btn ghost sm" onClick={() => nav('/')}>
+          <ArrowLeft size={14} strokeWidth={1.6} /> 返回模板中心
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="canvas-page">
@@ -209,6 +223,12 @@ export function JobCanvasPage() {
       </div>
 
       <div className="canvas-frame">
+        {(!job || !pipeline || nodes.length === 0) && (
+          <div className="canvas-loading" role="status" aria-live="polite">
+            <Loader2 size={20} strokeWidth={2} className="spin" />
+            <span className="dim-mono">{!job ? '连接中…' : '加载节点图…'}</span>
+          </div>
+        )}
         {/* SVG defs：连线用 Google 蓝/红/黄 三色纵向渐变 */}
         <svg
           aria-hidden
@@ -276,6 +296,7 @@ function computeStats(job: { nodes: Record<string, NodeState> } | null) {
 }
 
 function EditableMark({ jobId, value }: { jobId: string; value: string }) {
+  const { showToast } = useToast();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -294,7 +315,8 @@ function EditableMark({ jobId, value }: { jobId: string; value: string }) {
     try {
       await api.updateJobTitle(jobId, next);
     } catch (e) {
-      alert(`改名失败：${(e as Error).message}`);
+      showToast('改名失败，请稍后再试');
+      console.error('[JobCanvasPage] updateJobTitle 失败', e);
     }
   }
 

@@ -11,6 +11,19 @@
   position: relative;
   background: var(--bg-canvas);
 }
+/* 画布加载态：pipeline / job 尚未就绪时居中显示，区别于「空图」与「出错」 */
+.canvas-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  pointer-events: none;
+  color: var(--ink-3);
+}
 .canvas-frame::before {
   /* 网格点底纹 */
   content: '';
@@ -105,6 +118,12 @@
   --depth-shadow: var(--shadow-3);
 }
 .node.selected { border-color: var(--accent); }
+/* 键盘可达：节点卡可 Tab 聚焦，聚焦环复用 --border-focus（仅键盘触发，鼠标点击不显示） */
+.node:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: 15px;
+}
 .node.status-queued  { --status-color: var(--status-queued); }
 .node.status-running { --status-color: var(--status-running); }
 .node.status-done    { --status-color: var(--status-done); }

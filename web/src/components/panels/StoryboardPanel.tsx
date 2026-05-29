@@ -13,6 +13,7 @@ import { Clapperboard, Play, RefreshCw, Square } from 'lucide-react';
 import { api } from '../../api/client';
 import type { Episode, NodeState, PipelineNodeDef, Scene, Sketch } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useToast } from '../Toast';
 import { ProcStatusRow } from './RwResultPanel';
 
 interface Props {
@@ -42,6 +43,7 @@ function groupScenes(scenes: Record<string, Scene>): SceneGroup[] {
 }
 
 export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+  const { showToast } = useToast();
   const status = nodeState.status;
   const scenesCount = (nodeState.outputs?.scenes_count as number | undefined) ?? 0;
   const sketchesCount = (nodeState.outputs?.sketches_count as number | undefined) ?? 0;
@@ -109,7 +111,8 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
     try {
       await api.runNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`启动失败: ${(e as Error).message}`);
+      showToast('启动失败，请稍后再试');
+      console.error('[StoryboardPanel] 启动失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -120,7 +123,8 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
     try {
       await api.cancelNode(jobId, nodeDef.name);
     } catch (e) {
-      alert(`停止失败: ${(e as Error).message}`);
+      showToast('停止失败，请稍后再试');
+      console.error('[StoryboardPanel] 停止失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -133,7 +137,8 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      alert(`启动 TTS 失败: ${(e as Error).message}`);
+      showToast('启动 TTS 失败，请稍后再试');
+      console.error('[StoryboardPanel] 启动 TTS 失败', e);
     } finally {
       setAdvanceBusy(false);
     }
@@ -242,7 +247,7 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
                       className="field sb-container-prompt"
                       value={scene.prompt}
                       placeholder="容器图 prompt（暖纸底 + 稀疏背景）"
-                      rows={2}
+                      rows={5}
                       spellCheck={false}
                       onChange={(e) => patchScene(id, (sc) => { sc.prompt = e.target.value; })}
                     />
@@ -311,7 +316,7 @@ function SketchRow({
           className="field sb-sketch-prompt"
           value={sketch.prompt}
           placeholder="简笔画单格内容（english，圣经自动前置）"
-          rows={2}
+          rows={5}
           spellCheck={false}
           onChange={(e) => onPatch((sk) => { sk.prompt = e.target.value; })}
         />

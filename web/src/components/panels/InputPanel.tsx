@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 
 import { api } from '../../api/client';
+import { useToast } from '../Toast';
 import type { NodeState, ParsedShare, PipelineNodeDef } from '../../api/types';
 
 interface Props {
@@ -101,6 +102,7 @@ export function parseShares(raw: string): ParsedShare[] {
 
 export function InputPanel({ jobId, nodeState, asrStatus, onStarted }: Props) {
   const nav = useNavigate();
+  const { showToast } = useToast();
   // 锁定条件：asr 不是 idle 也不是 failed —— 即 queued/running/done。
   // failed 时仍允许编辑，方便用户改 URL 重试。
   const locked = asrStatus === 'queued' || asrStatus === 'running' || asrStatus === 'done';
@@ -116,7 +118,8 @@ export function InputPanel({ jobId, nodeState, asrStatus, onStarted }: Props) {
       });
       nav(`/jobs/${state.job_id}`);
     } catch (e: unknown) {
-      alert(`新建失败：${(e as Error).message}`);
+      showToast('新建作品失败，请稍后再试');
+      console.error('[InputPanel] createJob 失败', e);
     } finally {
       setForking(false);
     }
@@ -204,7 +207,8 @@ export function InputPanel({ jobId, nodeState, asrStatus, onStarted }: Props) {
       await api.runNode(jobId, 'asr');
       onStarted();
     } catch (e: unknown) {
-      alert(`启动失败：${(e as Error).message}`);
+      showToast('启动失败，请稍后再试');
+      console.error('[InputPanel] 启动 asr 失败', e);
     } finally {
       setStarting(false);
     }
