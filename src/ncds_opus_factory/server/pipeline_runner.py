@@ -193,11 +193,33 @@ class PipelineRunner:
                     if (n or {}).get("status") in ("running", "queued"):
                         running_node = name
                         break
+                # 标题自动同步（一次性）：标题仍是创建时默认名、且不在运行中、且画布配置
+                # 02_rw/episode.json 有 meta.title → 用内容标题覆盖并落盘一次。
+                # 之后标题已非默认 → 不再同步，用户手动改名也被尊重。跳过运行中作品避免写竞争。
+                title = data.get("title", "")
+                if running_node is None and self._is_default_title(title):
+                    ep_path = d / "02_rw" / "episode.json"
+                    if ep_path.is_file():
+                        try:
+                            meta = (json.loads(ep_path.read_text(encoding="utf-8")).get("meta") or {})
+                            ep_title = str(meta.get("title") or "").strip()
+                        except (OSError, json.JSONDecodeError):
+                            ep_title = ""
+                        if ep_title and ep_title != title:
+                            data["title"] = ep_title
+                            title = ep_title
+                            try:
+                                sf.write_text(
+                                    json.dumps(data, ensure_ascii=False, indent=2),
+                                    encoding="utf-8",
+                                )
+                            except OSError as exc:
+                                logger.warning("[pipeline] title sync write failed %s: %s", sf, exc)
                 # 摘要：不带 nodes 详情，但带一个运行状态标记给作品列表用
                 out.append({
                     "job_id": data["job_id"],
                     "pipeline_id": data["pipeline_id"],
-                    "title": data.get("title", ""),
+                    "title": title,
                     "created_at": data["created_at"],
                     "updated_at": data["updated_at"],
                     "running": running_node is not None,
@@ -211,6 +233,13 @@ class PipelineRunner:
     def _default_title(job_id: str, ts: float) -> str:
         # OPUS + 14 位本地时间戳 + 4 位 job_id hash，全大写；命名唯一且便于按时间排序
         return "OPUS" + time.strftime("%Y%m%d%H%M%S", time.localtime(ts)) + job_id[:4].upper()
+
+    @staticmethod
+    def _is_default_title(title: str) -> bool:
+        """标题是否仍是创建时的默认名：前端「作品 …」或后端 OPUS 时间戳，或空。
+        只有默认名才会被 episode.meta.title 自动覆盖（一次性），手动改过的名字不动。"""
+        t = (title or "").strip()
+        return t == "" or t.startswith("作品 ") or t.startswith("OPUS")
 
     def create_job(self, pipeline_id: str, title: str, inputs: dict[str, Any]) -> JobState:
         pipeline = get_pipeline(pipeline_id)

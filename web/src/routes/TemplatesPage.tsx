@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Clock,
-  Layers,
+  Image as ImageIcon,
   Loader2,
   PenBox,
   Plus,
@@ -36,15 +36,25 @@ export function TemplatesPage() {
   }, [jobs, query]);
   const hasQuery = query.trim().length > 0;
 
+  // mock 开关：URL 带 ?mock=1 时先种一个 015 素材的 mock 作品，再拉列表（mock 作品会出现在「最近作品」里）
+  const mockMode = useMemo(() => {
+    try { return new URLSearchParams(window.location.search).get('mock') === '1'; }
+    catch { return false; }
+  }, []);
+
   useEffect(() => {
-    Promise.all([api.listPipelines(), api.listJobs()])
+    const ready = mockMode
+      ? api.ensureMock().catch((e: unknown) => { console.error('ensure mock failed', e); })
+      : Promise.resolve();
+    ready
+      .then(() => Promise.all([api.listPipelines(), api.listJobs()]))
       .then(([pl, jl]) => {
         setPipelines(pl.pipelines);
         setJobs(jl.jobs);
       })
       .catch((e: unknown) => console.error('load templates page failed', e))
       .finally(() => setLoading(false));
-  }, []);
+  }, [mockMode]);
 
   // 有作品在执行时轮询刷新作品列表，让"执行中"遮罩在节点跑完后自动消失。
   // 返回模板中心不会中断后端 RUNNING（它是独立的 server 任务），这里只是被动反映状态。
@@ -87,6 +97,23 @@ export function TemplatesPage() {
         <div className="brand">
           <span className="mark">Opus Studio</span>
         </div>
+        {mockMode && (
+          <span
+            title="mock=1：已载入 015 素材 mock 作品"
+            style={{
+              marginLeft: 'var(--s-3)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--text-2xs)',
+              letterSpacing: '0.08em',
+              color: 'var(--accent)',
+              border: '1px solid var(--accent)',
+              borderRadius: 'var(--r-1)',
+              padding: '2px 7px',
+            }}
+          >
+            MOCK
+          </span>
+        )}
         <div className="spacer" />
         <ThemeSwitcher />
       </div>
@@ -194,7 +221,10 @@ function CoverImage({ src, marker }: { src: string; marker: string }) {
       onError={() => setOk(false)}
     />
   ) : (
-    <span className="marker">{marker}</span>
+    <div className="cover-fallback" aria-label="暂无封面">
+      <ImageIcon size={26} strokeWidth={1.4} />
+      <span className="cover-fallback-mark">{marker}</span>
+    </div>
   );
 }
 
@@ -217,7 +247,6 @@ function JobCard({
     <article className={`tpl-card${job.running ? ' is-running' : ''}`} onClick={onOpen} title="点击进入画布">
       <div className="cover">
         <CoverImage src={`/jobs/${job.job_id}/cover`} marker={marker} />
-        <span className="badge">{job.pipeline_id}</span>
         {job.running && (
           <>
             <span className="run-pill"><span className="run-dot" />执行中</span>
@@ -234,10 +263,7 @@ function JobCard({
           上次更新 {updated}
         </div>
         <div className="footer">
-          <span className="meta">
-            <Layers size={11} strokeWidth={1.6} style={{ verticalAlign: '-2px', marginRight: 4 }} />
-            {job.job_id.slice(0, 8)}
-          </span>
+          <span className="badge">{job.pipeline_id}</span>
           <div style={{ flex: 1 }} />
           <button
             className="btn sm icon-only accent"
@@ -288,16 +314,12 @@ function TemplateCard({
     <article className="tpl-card" onClick={onCreate}>
       <div className="cover">
         <CoverImage src={`/pipelines/${pipeline.id}/cover`} marker={marker} />
-        <span className="badge">Pipeline · {pipeline.nodes.length}</span>
       </div>
       <div className="body">
         <div className="name">{pipeline.name}</div>
         <div className="desc">{pipeline.description}</div>
         <div className="footer">
-          <span className="meta">
-            <Layers size={11} strokeWidth={1.6} style={{ verticalAlign: '-2px', marginRight: 4 }} />
-            {pipeline.id}
-          </span>
+          <span className="badge">{pipeline.id}</span>
           <div style={{ flex: 1 }} />
           <button
             className="btn primary sm"

@@ -7,7 +7,8 @@
 // prompt 编辑走 EpisodeEditorPanel 同款模式：本地 patch + 防抖 putEpisode。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ImageOff, Play, RefreshCw, Square } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ChevronLeft, ChevronRight, ImageOff, Play, RefreshCw, Square, X } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type { Episode, ImageItem, NodeState, PipelineNodeDef } from '../../api/types';
@@ -36,6 +37,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
   const [advanceBusy, setAdvanceBusy] = useState(false);
   const [regenBusy, setRegenBusy] = useState<Record<string, boolean>>({});
   const [pendingRerun, setPendingRerun] = useState(false);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
 
   // 加载 episode（拿 scenes 的 prompt 作为可编辑文本的 source of truth）；
   // 节点 finished_at 变化时重拉（重跑 image 后 prompt 可能没改但 episode mtime 变了）
@@ -227,7 +229,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
       {items.length === 0 ? null : (
         <>
           <div className="image-grid">
-            {items.map((it) => {
+            {items.map((it, i) => {
               const prompt = episode?.scenes?.[it.scene_id]?.prompt ?? it.prompt;
               return (
                 <ImageCard
@@ -239,6 +241,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
                   disabled={actionBusy || advanceBusy || status !== 'done'}
                   onPromptChange={(v) => patchPrompt(it.scene_id, v)}
                   onRegen={() => doRegen(it.scene_id)}
+                  onOpen={() => setGalleryIndex(i)}
                 />
               );
             })}
@@ -269,6 +272,21 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
         }}
         onCancel={() => setPendingRerun(false)}
       />
+
+      {galleryIndex != null && items[galleryIndex] && (
+        <ImageGallery
+          items={items}
+          jobId={jobId}
+          startIndex={galleryIndex}
+          promptFor={(it) => episode?.scenes?.[it.scene_id]?.prompt ?? it.prompt}
+          regenBusy={regenBusy}
+          disabled={actionBusy || advanceBusy || status !== 'done'}
+          bust={nodeState.finished_at}
+          onPromptChange={patchPrompt}
+          onRegen={doRegen}
+          onClose={() => setGalleryIndex(null)}
+        />
+      )}
     </div>
   );
 }
@@ -281,6 +299,7 @@ function ImageCard({
   disabled,
   onPromptChange,
   onRegen,
+  onOpen,
 }: {
   jobId: string;
   item: ImageItem;
@@ -289,6 +308,7 @@ function ImageCard({
   disabled: boolean;
   onPromptChange: (v: string) => void;
   onRegen: () => void;
+  onOpen: () => void;
 }) {
   const hasImage = !!item.image_relpath;
   const sketches = item.sketches ?? [];
@@ -315,7 +335,14 @@ function ImageCard({
           </span>
         )}
       </header>
-      <div className="image-card-preview">
+      <div
+        className="image-card-preview clickable"
+        role="button"
+        tabIndex={0}
+        title="点击查看大图 / 编辑重做"
+        onClick={onOpen}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+      >
         {hasImage ? (
           <img
             src={`/jobs/${jobId}/files/${item.image_relpath}`}
@@ -383,5 +410,145 @@ function ImageCard({
         </button>
       </div>
     </article>
+  );
+}
+
+// 相册式大图查看器：当前图最大 + 底部缩略图条左右切换；当前图下方带 prompt 输入框，
+// 可编辑 + 重做；重做时大图进入 placeholder + loading（regenBusy 驱动）。
+function ImageGallery({
+  items,
+  jobId,
+  startIndex,
+  promptFor,
+  regenBusy,
+  disabled,
+  bust,
+  onPromptChange,
+  onRegen,
+  onClose,
+}: {
+  items: ImageItem[];
+  jobId: string;
+  startIndex: number;
+  promptFor: (item: ImageItem) => string;
+  regenBusy: Record<string, boolean>;
+  disabled: boolean;
+  bust: number | null;
+  onPromptChange: (sceneId: string, v: string) => void;
+  onRegen: (sceneId: string) => void;
+  onClose: () => void;
+}) {
+  const clamp = useCallback(
+    (i: number) => Math.max(0, Math.min(items.length - 1, i)),
+    [items.length],
+  );
+  const [cur, setCur] = useState(() => clamp(startIndex));
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') setCur((c) => clamp(c - 1));
+      else if (e.key === 'ArrowRight') setCur((c) => clamp(c + 1));
+      else if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [clamp, onClose]);
+
+  const item = items[cur];
+  if (!item) return null;
+  const busy = !!regenBusy[item.scene_id];
+  const bustQs = bust ? `?v=${bust}` : '';
+  const fileUrl = (rel: string) => `/jobs/${jobId}/files/${rel}${bustQs}`;
+
+  // 门户挂到 body：脱离抽屉(可能带 transform 动画)的包含块，保证 fixed 遮罩铺满视口
+  return createPortal(
+    <div className="ig-backdrop" onClick={onClose}>
+      <div className="ig" onClick={(e) => e.stopPropagation()}>
+        <button className="btn sm icon-only ghost ig-close" onClick={onClose} title="关闭 (Esc)">
+          <X size={16} strokeWidth={1.7} />
+        </button>
+
+        <div className="ig-stage">
+          <button
+            type="button"
+            className="ig-nav"
+            disabled={cur <= 0}
+            onClick={() => setCur((c) => clamp(c - 1))}
+            title="上一张 (←)"
+          >
+            <ChevronLeft size={24} strokeWidth={1.8} />
+          </button>
+
+          <div className="ig-main">
+            {busy ? (
+              <div className="ig-loading">
+                <ImageOff size={30} strokeWidth={1.4} />
+                <span>重做中…</span>
+                <span className="ig-spinner" />
+              </div>
+            ) : item.image_relpath ? (
+              <img src={fileUrl(item.image_relpath)} alt={item.scene_id} draggable={false} />
+            ) : (
+              <div className="ig-loading">
+                <ImageOff size={30} strokeWidth={1.4} />
+                <span>未生成</span>
+              </div>
+            )}
+            <span className="ig-scene-id mono">{item.scene_id}</span>
+          </div>
+
+          <button
+            type="button"
+            className="ig-nav"
+            disabled={cur >= items.length - 1}
+            onClick={() => setCur((c) => clamp(c + 1))}
+            title="下一张 (→)"
+          >
+            <ChevronRight size={24} strokeWidth={1.8} />
+          </button>
+        </div>
+
+        {/* 仅当前图显示：prompt 编辑 + 重做 */}
+        <div className="ig-editor">
+          <textarea
+            className="field ig-prompt"
+            value={promptFor(item)}
+            placeholder="容器图提示词…"
+            rows={3}
+            spellCheck={false}
+            disabled={disabled || busy}
+            onChange={(e) => onPromptChange(item.scene_id, e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn primary sm ig-redo"
+            disabled={disabled || busy}
+            onClick={() => onRegen(item.scene_id)}
+          >
+            <RefreshCw size={12} strokeWidth={1.9} /> {busy ? '重做中…' : '重做'}
+          </button>
+        </div>
+
+        {/* 缩略图条：点击切换；当前高亮 */}
+        <div className="ig-filmstrip">
+          {items.map((it, i) => (
+            <button
+              key={it.scene_id}
+              type="button"
+              className={`ig-thumb${i === cur ? ' active' : ''}`}
+              onClick={() => setCur(i)}
+              title={it.scene_id}
+            >
+              {it.image_relpath ? (
+                <img src={fileUrl(it.image_relpath)} alt="" loading="lazy" draggable={false} />
+              ) : (
+                <span className="ig-thumb-ph"><ImageOff size={13} strokeWidth={1.5} /></span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

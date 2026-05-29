@@ -1,0 +1,14 @@
+/* Opus Studio 全局样式入口。
+   原 global.css(3000+ 行)按关注点拆成 scss/_*.scss，这里按原顺序 @use 进来
+   （顺序 = 原文件顺序，层叠/特异性完全不变）。新增分区：在 scss/ 下加 _x.scss 并在此 @use。 */
+
+@use 'scss/tokens';
+@use 'scss/base';
+@use 'scss/buttons';
+@use 'scss/forms';
+@use 'scss/shell';
+@use 'scss/canvas';
+@use 'scss/drawer';
+@use 'scss/panels';
+@use 'scss/node-panels';
+@use 'scss/features';

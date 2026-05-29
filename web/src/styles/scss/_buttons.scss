@@ -1,0 +1,93 @@
+/* 按钮 .btn 各变体  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
+/* ============================================================
+   Buttons
+   ============================================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: 30px;
+  padding: 0 var(--s-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink-1);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg-overlay); border-color: var(--border-strong); }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+.btn:disabled {
+  color: var(--ink-disabled);
+  background: var(--bg-surface);
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.primary:disabled {
+  background: var(--ink-disabled);
+  border-color: var(--ink-disabled);
+  color: var(--bg-surface);
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn.ghost:hover { background: var(--bg-overlay); }
+
+.btn.danger {
+  color: var(--status-failed);
+  border-color: var(--border);
+}
+.btn.danger:hover {
+  background: rgba(184, 54, 42, 0.08);
+  border-color: rgba(184, 54, 42, 0.32);
+}
+
+.btn.accent {
+  color: var(--accent);
+  border-color: var(--border);
+}
+.btn.accent:hover {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+
+.btn.danger-solid {
+  color: #fff;
+  background: var(--status-failed);
+  border-color: var(--status-failed);
+}
+.btn.danger-solid:hover {
+  background: rgba(184, 54, 42, 0.85);
+  border-color: rgba(184, 54, 42, 0.85);
+}
+.btn.danger-solid:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn.sm { height: 26px; padding: 0 var(--s-2); font-size: var(--text-xs); border-radius: var(--r-2); }
+.btn.lg { height: 36px; padding: 0 var(--s-4); font-size: var(--text-base); }
+
+.btn.icon-only { padding: 0; width: 30px; }
+.btn.sm.icon-only { width: 26px; }
+.btn.lg.icon-only { width: 36px; }
+

@@ -18,6 +18,7 @@ GET    /jobs/{job_id}/events                     SSE 事件流（节点状态变
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 from collections.abc import AsyncGenerator
@@ -410,5 +411,4 @@ def _serialize_job(state: Any) -> dict[str, Any]:
 
 
 def _json_dumps(obj: Any) -> str:
-    import json
     return json.dumps(obj, ensure_ascii=False)

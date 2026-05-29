@@ -1,0 +1,720 @@
+/* 节点抽屉面板：ASR / RW / IMAGE / TTS  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
+/* ============================================================
+   ASR 节点抽屉：手风琴 + 三 tab + 代码块
+   ============================================================ */
+.asr-acc { display: grid; gap: var(--s-2); margin-top: var(--s-3); }
+.asr-item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--bg-input);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.asr-item:hover { border-color: var(--border-strong); }
+.asr-item.open { border-color: var(--accent); }
+.asr-item.failed { border-color: var(--status-failed, #c84a4a); }
+
+.asr-item-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-3);
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+.asr-item-num {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+.asr-item-title {
+  font-size: var(--text-sm);
+  color: var(--ink-1);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.asr-item-author {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.asr-item-url {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-decoration: none;
+  flex-shrink: 0;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.asr-item-url .link-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.asr-item-url:hover { color: var(--accent); }
+.asr-item-url.primary {
+  /* title 缺失时 URL 升级为主信息 */
+  flex: 1 1 auto;
+  max-width: none;
+  font-size: var(--text-sm);
+  color: var(--ink-1);
+}
+
+/* 2 行 header：第一行 title + author，第二行 URL（更宽松，不裁切） */
+.asr-item-head-2lines { align-items: flex-start; }
+.asr-item-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.asr-item-meta-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.asr-item-head-2lines .asr-item-url {
+  max-width: none;
+  font-size: var(--text-2xs);
+}
+
+.asr-item-body {
+  border-top: 1px solid var(--border);
+  padding: var(--s-3);
+  display: grid;
+  gap: var(--s-2);
+}
+.asr-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.asr-tab {
+  background: transparent;
+  border: none;
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.asr-tab:hover { color: var(--ink-1); }
+.asr-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.code-pane {
+  background: var(--bg-surface-2, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--ink-1);
+  max-height: 480px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+textarea.code-pane.editable {
+  resize: vertical;
+  outline: none;
+  width: 100%;
+  min-height: 240px;
+}
+
+/* 进程状态行（RW 4 模型 / ASR 4 阶段共用）：直角信息框 + 状态配色 + 状态标签 */
+.proc-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.proc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 0;                 /* 直角 */
+  background: var(--bg-surface-2, rgba(127, 127, 127, 0.05));
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.proc-row-icon { display: inline-flex; width: 16px; justify-content: center; flex-shrink: 0; }
+.proc-row-label { flex: 1; color: var(--ink-1); min-width: 0; white-space: normal; word-break: break-word; line-height: 1.3; }
+.proc-row-badge {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  padding: 1px 7px;
+  border-radius: 0;
+  border: 1px solid currentColor;
+}
+/* 各状态：左色条 + badge 配色 */
+.proc-row.proc-pending { border-left-color: var(--ink-3); }
+.proc-row.proc-pending .proc-row-badge { color: var(--ink-3); opacity: 0.7; }
+.proc-row.proc-running { border-left-color: var(--accent, #4285F4); }
+.proc-row.proc-running .proc-row-badge { color: var(--accent, #4285F4); }
+.proc-row.proc-done { border-left-color: var(--status-done, #2ea043); }
+.proc-row.proc-done .proc-row-badge { color: var(--status-done, #2ea043); }
+.proc-row.proc-failed { border-left-color: var(--status-failed, #d1242f); }
+.proc-row.proc-failed .proc-row-badge { color: var(--status-failed, #d1242f); }
+.proc-row.proc-unavailable { border-left-color: var(--status-warn, #d4a017); }
+.proc-row.proc-unavailable .proc-row-badge { color: var(--status-warn, #d4a017); }
+/* 状态图标配色 */
+.rw-ms-pending { color: var(--ink-3); opacity: 0.5; }
+.rw-ms-done { color: var(--status-done, #2ea043); }
+.rw-ms-failed { color: var(--status-failed, #d1242f); }
+.rw-ms-warn { color: var(--status-warn, #d4a017); }
+.rw-ms-spin { color: var(--accent, #4285F4); animation: rw-spin 0.9s linear infinite; }
+@keyframes rw-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+/* 流动渐变关键帧 —— 供 .section-h.loading::after / .drawer .head.loading::after 复用，
+   配色对齐画布连线 opus-gradient（蓝/红/黄），一段亮带沿线扫过（呼应 PulseEdge）。 */
+@keyframes rw-bar-flow {
+  from { background-position: 150% 0; }
+  to { background-position: -150% 0; }
+}
+/* running 状态图标：闪动圆点（替代转圈 spinner） */
+.rw-ms-blink-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--status-done, #2ea043);
+  animation: rw-dot-blink 1s ease-in-out infinite;
+}
+@keyframes rw-dot-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+/* RW 体裁选项栏（-p profile 选择） */
+.rw-profile-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.rw-profile-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-3);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.rw-profile-chip {
+  padding: 3px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.rw-profile-chip:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink-1); }
+.rw-profile-chip.active {
+  border-color: var(--accent, #4285F4);
+  background: var(--accent-tint, rgba(66, 133, 244, 0.1));
+  color: var(--accent, #4285F4);
+  font-weight: 500;
+}
+.rw-profile-chip:disabled { cursor: default; opacity: 0.75; }
+.rw-profile-chip.active:disabled { opacity: 1; }
+
+/* 统一提示 banner（面板标题上方，带左色条） */
+.panel-hint {
+  padding: var(--s-2) var(--s-3);
+  margin-bottom: var(--s-3);
+  border-left: 3px solid var(--accent, #4285F4);
+  border-radius: 0;
+  background: var(--accent-tint, rgba(66, 133, 244, 0.08));
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.panel-hint-error {
+  border-left-color: var(--status-failed, #d1242f);
+  background: rgba(209, 36, 47, 0.08);
+  color: var(--status-failed, #d1242f);
+}
+
+/* RW 抽屉：失败/不可用模型的 tab + 占位面板 */
+.asr-tab.failed {
+  opacity: 0.55;
+  font-style: italic;
+}
+.asr-tab.failed.active {
+  opacity: 0.85;
+}
+.rw-tab-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  color: var(--status-failed, #d1242f);
+  border: 1px solid var(--status-failed, #d1242f);
+  border-radius: 3px;
+  line-height: 1.4;
+}
+.rw-failed-pane {
+  background: var(--bg-surface-2, rgba(127, 127, 127, 0.06));
+  border: 1px dashed var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-5);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 240px;
+}
+.rw-failed-title {
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--ink-1);
+}
+.rw-failed-reason {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+
+/* TTS 抽屉：按 scene 分组（每组共享一段整段音频） */
+.tts-scene {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--s-3);
+}
+.tts-scene-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+/* LINES 抽屉：beats 列表编辑 */
+.lines-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.lines-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lines-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.lines-scene-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--accent);
+  background: var(--accent-tint);
+  border-radius: var(--r-pill);
+}
+.lines-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 4px 0;
+}
+.lines-row-num {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-3);
+  width: 28px;
+  text-align: right;
+}
+.lines-row-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.lines-zh,
+.lines-en {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-2);
+  background: var(--bg-surface-2, rgba(127, 127, 127, 0.06));
+  color: var(--ink-1);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.lines-zh:focus,
+.lines-en:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-1, transparent);
+}
+.lines-en {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+/* LINES 抽屉撑满 drawer body —— 跟 RW/ASR 同一套 flex 1 规则 */
+.drawer .body:has(.rw-panel-root .lines-list) {
+  overflow: hidden;
+}
+
+/* INPUT 抽屉锁定提示横幅 —— asr 已 done/running 时出现 */
+.input-locked-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-4);
+  background: var(--accent-tint, rgba(66, 133, 244, 0.08));
+  border: 1px solid var(--accent, #4285F4);
+  border-radius: var(--r-2);
+  color: var(--ink-1);
+  font-size: var(--text-sm);
+}
+.input-locked-banner .banner-text {
+  flex: 1;
+}
+
+/* ASR 抽屉 running 时的步骤累积列表 */
+.asr-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: var(--s-3);
+  padding: var(--s-3);
+  background: var(--bg-surface-2, rgba(127, 127, 127, 0.06));
+  border-radius: var(--r-2);
+}
+.asr-step {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  font-family: var(--font-mono);
+}
+.asr-step.done { color: var(--ink-2); }
+.asr-step.current { color: var(--ink-1); font-weight: 500; }
+.asr-step-icon-done {
+  color: var(--status-done, #2ea043);
+  font-weight: 700;
+  width: 14px;
+  text-align: center;
+}
+.asr-step-icon-running {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  color: var(--accent, #4285F4);
+  animation: asr-step-spin 1.2s linear infinite;
+}
+@keyframes asr-step-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* article tab：opus 出的 markdown 文章排版 */
+.article-pane {
+  background: var(--bg-surface-2, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-4) var(--s-5);
+  color: var(--ink-1);
+  font-size: var(--text-sm);
+  line-height: 1.75;
+  max-height: 480px;
+  overflow: auto;
+}
+.article-pane h1,
+.article-pane h2,
+.article-pane h3 {
+  margin: 1em 0 0.5em;
+  font-weight: 600;
+  color: var(--ink-1);
+  line-height: 1.4;
+}
+.article-pane h1 { font-size: 1.4em; }
+.article-pane h2 { font-size: 1.2em; }
+.article-pane h3 { font-size: 1.05em; }
+.article-pane h2:first-child,
+.article-pane h3:first-child,
+.article-pane h1:first-child { margin-top: 0; }
+.article-pane p { margin: 0.6em 0; }
+.article-pane ul,
+.article-pane ol { margin: 0.5em 0; padding-left: 1.5em; }
+.article-pane li { margin: 0.25em 0; }
+.article-pane strong { color: var(--ink-1); font-weight: 600; }
+.article-pane em { color: var(--ink-2); }
+.article-pane code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: rgba(127, 127, 127, 0.12);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.article-pane blockquote {
+  margin: 0.6em 0;
+  padding-left: var(--s-3);
+  border-left: 3px solid var(--border);
+  color: var(--ink-2);
+}
+/* ASR 抽屉：让打开的折叠项里的 code-pane 跟着抽屉高度自适应（flex 1 撑满剩余空间），
+   而不是用 calc(100vh - 固定值)——避免上方 chrome 数量变化时计算偏差 */
+.drawer .body:has(.asr-panel-root) {
+  overflow: hidden;
+}
+.asr-panel-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.asr-panel-root .asr-panel-header { flex-shrink: 0; }
+.asr-panel-root .asr-acc {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 0;
+  overflow-y: auto;
+}
+.asr-panel-root .asr-item { flex-shrink: 0; }
+.asr-panel-root .asr-item.open {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.asr-panel-root .asr-item.open .asr-item-head { flex-shrink: 0; }
+.asr-panel-root .asr-item.open .asr-item-body {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: auto 1fr;
+}
+.asr-panel-root .asr-item-body .code-pane,
+.asr-panel-root .asr-item-body .article-pane {
+  max-height: none;
+  min-height: 0;
+  height: auto;
+}
+.asr-panel-root textarea.code-pane.editable {
+  resize: none;
+}
+textarea.code-pane.editable:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+/* ============================================================
+   RW 抽屉：撑满 drawer body 高度；textarea 占剩余空间内部滚动
+   ============================================================ */
+/* 当 drawer body 里出现 rw-panel-root，禁掉 body 自身滚动让子元素真正撑满 */
+.drawer .body:has(.rw-panel-root) {
+  overflow: hidden;
+}
+.rw-panel-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-height: 0;
+}
+.rw-panel-header {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-shrink: 0;
+}
+.rw-textarea {
+  flex: 1 1 0;
+  min-height: 200px;
+  /* 覆盖 .code-pane 全局 480px 上限，让 flex 真正撑满剩余高度 */
+  max-height: none;
+  resize: none;
+  /* 隐藏内部滚动条，但保留滚动能力 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.rw-textarea::-webkit-scrollbar { width: 0; height: 0; }
+/* RW 通读视图 / 失败占位：跟 rw-textarea 一样撑满 drawer 剩余高度内部滚动，
+   行为与 ASR 抽屉的 article-pane 一致（不受全局 .article-pane 480px 上限约束）。 */
+.rw-panel-root .article-pane {
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+}
+.asr-error {
+  color: var(--status-failed, #c84a4a);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+/* ============================================================
+   IMAGE 抽屉：场景卡栅格
+   ============================================================ */
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--s-3);
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding-right: 4px;  /* 给 scrollbar 留点空间 */
+}
+.image-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-overlay);
+}
+.image-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.image-card-id {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+.image-card-preview {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+.image-card-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.image-card-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.image-card-busy {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+}
+.image-card-prompt {
+  resize: vertical;
+  min-height: 60px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.image-card-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+.image-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   TTS 抽屉：字幕行
+   ============================================================ */
+.tts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.tts-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: background 0.1s ease;
+}
+.tts-row:hover {
+  background: var(--bg-overlay);
+}
+.tts-row-num {
+  flex: 0 0 auto;
+  width: 28px;
+  text-align: right;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+}
+.tts-row-input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+

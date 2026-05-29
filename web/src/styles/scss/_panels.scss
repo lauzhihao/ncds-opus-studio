@@ -1,0 +1,655 @@
+/* input/beats/slides/scene/overlay 等编辑侧面板 + theme/footer/misc  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
+/* ============================================================
+   Parsed inputs 卡片列表（input 节点抽屉）
+   ============================================================ */
+.parsed-list {
+  display: grid;
+  gap: var(--s-2);
+}
+.parsed-card {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.parsed-card:hover { border-color: var(--border-strong); }
+@keyframes parsed-card-flash {
+  0%   { background: var(--accent-tint); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+  60%  { background: var(--accent-tint); border-color: var(--accent); box-shadow: 0 0 0 0 transparent; }
+  100% { background: var(--bg-input); border-color: var(--border); box-shadow: 0 0 0 0 transparent; }
+}
+.parsed-card.flash { animation: parsed-card-flash 1.2s ease-out; }
+.parsed-card .parsed-card-num {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  letter-spacing: 0.08em;
+  padding-top: 1px;
+  line-height: 1.5;
+}
+.parsed-card .parsed-card-body { min-width: 0; display: grid; gap: 4px; }
+.parsed-card .parsed-card-title {
+  font-weight: 600;
+  font-size: var(--text-base);
+  color: var(--ink-1);
+  line-height: 1.4;
+}
+.parsed-card .parsed-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  text-decoration: none;
+  max-width: 100%;
+}
+.parsed-card .parsed-card-link .link-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.parsed-card .parsed-card-link:hover { color: var(--accent); }
+.parsed-card .parsed-card-meta {
+  display: flex;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+.parsed-card .parsed-card-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ============================================================
+   Preview stage (iframe 容器，1920×1080 等比 scale 到抽屉宽度)
+   ============================================================ */
+.preview-stage {
+  position: relative;
+  margin: 0 0 var(--s-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  overflow: hidden;
+  background: #000;
+  box-shadow: var(--shadow-2);
+}
+.preview-stage iframe {
+  display: block;
+  width: 100%;
+  /* aspect 16:9，最大限度展示 */
+  aspect-ratio: 16 / 9;
+  border: 0;
+  background: #000;
+}
+.preview-stage .preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px var(--s-3);
+  background: var(--bg-overlay);
+  border-top: 1px solid var(--border);
+}
+
+/* ============================================================
+   Tabs
+   ============================================================ */
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-surface-2);
+  border-radius: var(--r-2);
+  width: fit-content;
+}
+.tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 26px;
+  padding: 0 var(--s-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--ink-2);
+  border-radius: var(--r-2);
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.tabs button:hover { color: var(--ink-1); }
+.tabs button.active {
+  background: var(--bg-surface);
+  color: var(--ink-1);
+  box-shadow: var(--shadow-1);
+}
+.tabs button .count {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-3);
+}
+/* icon-only 变体：用 title 做 hover tooltip，按钮收窄成方形 */
+.tabs.tabs-iconly button {
+  gap: 4px;
+  padding: 0 8px;
+  min-width: 30px;
+  justify-content: center;
+}
+/* 撑满父容器，按钮等分宽度 */
+.tabs.tabs-stretch {
+  width: 100%;
+}
+.tabs.tabs-stretch button {
+  flex: 1 1 0;
+}
+
+/* ============================================================
+   Beats table
+   ============================================================ */
+.beats-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--text-sm);
+}
+.beats-table thead th {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  text-align: left;
+  padding: var(--s-2) var(--s-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-overlay);
+}
+.beats-table tbody td {
+  padding: var(--s-2);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.beats-table tbody tr:hover { background: var(--bg-overlay); }
+.beats-table .num {
+  font-family: var(--font-mono);
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  width: 32px;
+  text-align: right;
+}
+
+/* ============================================================
+   Beats card list（窄侧栏用，比 .beats-table 紧凑）
+   ============================================================ */
+.beats-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.beat-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-2) var(--s-3) var(--s-3);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.beat-card-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--border);
+}
+.beat-card-num {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+.beat-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.beat-card-row > textarea.field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.beat-card-row-meta {
+  align-items: center;
+}
+.beat-card-row-meta > select.field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.beat-card-tag {
+  flex: 0 0 auto;
+  width: 36px;
+  padding-top: 4px;
+  font-size: var(--text-2xs);
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+.beat-card-row-meta .beat-card-tag {
+  padding-top: 0;
+  width: auto;
+}
+
+/* ============================================================
+   Slides 列表（preview 抽屉，N 张幻灯片 = N 张卡）
+   ============================================================ */
+.slides-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.slide-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-2) var(--s-3) var(--s-3);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.12s ease;
+}
+.slide-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.slide-card-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--border);
+}
+.slide-card-num {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.slide-card-num:hover {
+  background: var(--bg-overlay);
+  color: var(--ink-1);
+}
+.slide-card.active .slide-card-num {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.slide-overlays {
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-overlay);
+  padding: 4px 6px;
+}
+.slide-overlays-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.slide-overlays-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--ink-2);
+  padding: 2px 4px;
+  font: inherit;
+}
+.slide-overlays-toggle:hover { color: var(--ink-1); }
+.slide-overlay-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.slide-overlay-row > input.field { flex: 1 1 0; min-width: 0; }
+.slide-overlays-empty,
+.slide-overlays-hint {
+  padding: 4px 8px;
+  font-size: var(--text-2xs);
+}
+.slide-overlays-hint {
+  margin-top: 4px;
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+/* ============================================================
+   Global settings 折叠条（顶部"作品 + 字幕样式"）
+   ============================================================ */
+.global-settings {
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-overlay);
+  margin-bottom: var(--s-3);
+  flex-shrink: 0;
+}
+.global-settings.open {
+  background: var(--bg-surface);
+}
+.global-settings-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--s-3);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink-2);
+  font: inherit;
+}
+.global-settings-head:hover { color: var(--ink-1); }
+.global-settings-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.global-settings.open .global-settings-label { color: var(--ink-1); }
+.global-settings-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-left: auto;
+  min-width: 0;
+}
+.global-settings-chips .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  font-size: var(--text-2xs);
+  color: var(--ink-2);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.global-settings-chips .chip.mono { font-family: var(--font-mono); }
+.global-settings-chips .chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.12);
+  flex-shrink: 0;
+}
+.global-settings-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-4);
+  padding: var(--s-2) var(--s-3) var(--s-3);
+  border-top: 1px solid var(--border);
+}
+.global-settings-col { min-width: 0; }
+.global-settings-col .section-h { margin-top: 0; }
+.global-settings-col .section-h + .form-row { margin-top: 0; }
+
+/* ============================================================
+   Scene cover：场景卡顶部"封面"区（图 prompt + 进场 + 时长）
+   语义：这是这一组字幕共享的图，所以视觉上要像一个 banner / 容器头。
+   ============================================================ */
+.scene-cover {
+  margin-top: 4px;
+  padding: 6px 8px 8px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.scene-cover-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-3);
+}
+.scene-cover-head .dim-mono { letter-spacing: 0.06em; text-transform: uppercase; }
+.scene-cover-prompt {
+  min-height: 44px;
+  resize: vertical;
+  font-size: var(--text-xs);
+}
+.scene-cover-motion {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.scene-cover-motion > label { font-size: var(--text-2xs); }
+.scene-cover-motion > select.field { flex: 1 1 0; min-width: 80px; }
+.scene-cover-dur {
+  width: 64px;
+  flex: 0 0 auto;
+}
+
+/* ============================================================
+   Scene beats：卡片主体的字幕列表（图下方的"这张图说的话"）
+   ============================================================ */
+.scene-beats {
+  margin-top: 8px;
+  padding: 0 2px;
+  display: flex;
+  flex-direction: column;
+}
+.scene-beat-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 0;
+  position: relative;
+}
+.scene-beat-row + .scene-beat-row {
+  border-top: 1px dashed var(--border);
+}
+.scene-beat-idx {
+  flex: 0 0 auto;
+  width: 18px;
+  padding-top: 6px;
+  text-align: center;
+  font-size: var(--text-2xs);
+  color: var(--ink-3);
+  font-weight: 600;
+}
+.scene-beat-fields {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.scene-beat-del {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.scene-beats-add {
+  margin-top: 6px;
+  align-self: flex-start;
+  color: var(--ink-3);
+}
+.scene-beats-add:hover { color: var(--ink-1); }
+
+/* ============================================================
+   Scene card stack
+   ============================================================ */
+.scene-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--bg-input);
+  overflow: hidden;
+  transition: border-color var(--dur-fast);
+}
+.scene-card + .scene-card { margin-top: var(--s-3); }
+.scene-card:hover { border-color: var(--border-strong); }
+.scene-card .scene-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.scene-card .scene-head .id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--ink-1);
+}
+.scene-card .scene-head .badge {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-3);
+  background: var(--bg-overlay);
+  padding: 2px 6px;
+  border-radius: var(--r-1);
+  letter-spacing: 0.04em;
+}
+.scene-card .scene-body {
+  padding: var(--s-3) var(--s-4) var(--s-4);
+}
+
+/* ============================================================
+   Overlay slot card
+   ============================================================ */
+.slot-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--bg-input);
+  padding: var(--s-3) var(--s-4) var(--s-4);
+}
+.slot-card + .slot-card { margin-top: var(--s-3); }
+.slot-card .slot-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.slot-card .slot-head .tag {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+  background: var(--bg-overlay);
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+}
+
+/* ============================================================
+   Theme switcher
+   ============================================================ */
+.theme-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-surface-2);
+  border-radius: var(--r-pill);
+}
+.theme-switcher button {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  transition: transform var(--dur-fast), box-shadow var(--dur-fast);
+  position: relative;
+}
+.theme-switcher button:hover { transform: scale(1.06); }
+.theme-switcher button.active {
+  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 3px var(--accent);
+}
+.theme-switcher button .swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.10);
+}
+
+/* ============================================================
+   Pipeline footer status bar
+   ============================================================ */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+.status-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+.status-pill.live .dot {
+  background: var(--status-done);
+  box-shadow: 0 0 0 4px rgba(74, 124, 89, 0.18);
+  animation: pulse-soft 2.4s ease-in-out infinite;
+}
+@keyframes pulse-soft {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(74, 124, 89, 0.18); }
+  50%      { box-shadow: 0 0 0 6px rgba(74, 124, 89, 0.06); }
+}
+
+/* ============================================================
+   Misc utilities
+   ============================================================ */
+.kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--r-1);
+  padding: 1px 5px;
+}
+
+.code-block {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-3);
+  overflow: auto;
+  max-height: 320px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+
+/* Subtle text utility for inline meta */
+.dim { color: var(--ink-3); }
+.dim-mono { color: var(--ink-3); font-family: var(--font-mono); font-size: var(--text-xs); }
+
+/* Scrollbar (subtle) */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-track { background: transparent; }
+

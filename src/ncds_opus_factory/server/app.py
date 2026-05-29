@@ -36,6 +36,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ncds_opus_factory.server.routes import jobs as jobs_routes
+from ncds_opus_factory.server.routes import mock as mock_routes
 from ncds_opus_factory.server.routes import pipelines as pipelines_routes
 from ncds_opus_factory.server.routes import preview as preview_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
@@ -69,6 +70,7 @@ app.include_router(templates_routes.router)
 app.include_router(jobs_routes.router)
 app.include_router(pipelines_routes.router)
 app.include_router(preview_routes.router)
+app.include_router(mock_routes.router)
 
 
 # ---------------------------------------------------------------------------

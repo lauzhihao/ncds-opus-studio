@@ -1,0 +1,63 @@
+/* 设计系统 :root 变量 / 主题令牌  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
+/* ============================================================
+   NCDS Opus Studio · 设计系统
+   Editorial Minimalism — 精致克制 · 现代化 · 一致性
+
+   字体    Fraunces (display, italic/wonk) + Geist Sans (UI) + Geist Mono
+   色板    Paper / Onyx / Sage / Ink，见 themes.css
+   韵律    4px 间距 · 3/6/10/14 圆角 · 1px 边线优先于阴影
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500;1,9..144,600&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
+/* themes.css（主题色板 :root 令牌）改由 main.tsx 直接 import —— 拆分后本文件位于
+   scss/ 子目录，原 @import './themes.css' 相对路径会失效，故移到入口统一加载。 */
+
+:root {
+  /* —— Spacing scale —— */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-7: 32px;
+  --s-8: 48px;
+
+  /* —— Radius scale —— */
+  --r-1: 3px;
+  --r-2: 6px;
+  --r-3: 10px;
+  --r-4: 14px;
+  --r-pill: 999px;
+
+  /* —— Type scale —— */
+  --text-2xs: 10.5px;
+  --text-xs: 11.5px;
+  --text-sm: 12.5px;
+  --text-base: 13.5px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 38px;
+  --text-4xl: 56px;
+
+  /* —— Shadows (克制) —— */
+  --shadow-1: 0 1px 0 rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-3: 0 4px 12px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-4: 0 12px 32px rgba(0, 0, 0, 0.10), 0 4px 12px rgba(0, 0, 0, 0.06);
+
+  /* —— Fonts —— */
+  --font-display: 'Fraunces', 'Songti SC', 'Source Han Serif SC', Georgia, serif;
+  --font-sans: 'Geist', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+
+  /* —— Motion —— */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 360ms;
+}
+

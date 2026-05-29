@@ -43,6 +43,8 @@ export const api = {
   listPipelines: () => get<{ pipelines: PipelineDef[] }>('/pipelines'),
   getPipeline: (id: string) => get<PipelineDef>(`/pipelines/${id}`),
   listJobs: () => get<{ jobs: JobSummary[] }>('/jobs'),
+  // mock 开关：URL 带 ?mock=1 时种一个 015 素材的 mock 作品（开发预览用）
+  ensureMock: () => post<{ job_id: string; pipeline_id: string }>('/mock/ensure'),
   getJob: (id: string) => get<JobState>(`/jobs/${id}`),
   createJob: (body: { pipeline_id: string; title?: string; inputs: Record<string, unknown> }) =>
     post<JobState>('/jobs', body),

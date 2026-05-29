@@ -1,0 +1,201 @@
+/* 画布页 + 节点卡 NodeCard  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
+/* ============================================================
+   Canvas page
+   ============================================================ */
+.canvas-page {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: 56px 1fr;
+}
+.canvas-frame {
+  position: relative;
+  background: var(--bg-canvas);
+}
+.canvas-frame::before {
+  /* 网格点底纹 */
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
+  background-size: 18px 18px;
+  background-position: -1px -1px;
+  z-index: 0;
+}
+
+/* React Flow tweaks */
+.react-flow__node { cursor: grab; }
+.react-flow__node.dragging { cursor: grabbing; }
+
+/* Connection handles：跟 edge 三色渐变呼应；target=蓝（渐变起点）、source=黄（终点） */
+.react-flow__handle {
+  width: 16px;       /* 1.5x 11 */
+  height: 16px;
+  border-radius: 50%;
+  border: 3px solid var(--bg-surface);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.10);
+  z-index: 10;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.react-flow__handle:hover { transform: scale(1.3); }
+.react-flow__handle-top    { background: #4285F4; }   /* Google blue */
+.react-flow__handle-bottom { background: #FBBC04; }   /* Google yellow */
+.react-flow__handle-left   { background: #4285F4; }
+.react-flow__handle-right  { background: #FBBC04; }
+/* PulseEdge：顶层亮带 dashoffset 动画 = 一段光从 source 滑向 target。
+   dasharray 是 36（亮段）+ 600（空段），整段 edge 远短于 636，视野里只有一段光。
+   !important 是为了压住 reactflow 自带的 `.react-flow__edge.animated path { animation: dashdraw }`。 */
+.opus-edge-base {
+  /* 让底层 path 不被 reactflow 默认 dashdraw 动画劫持 */
+  animation: none !important;
+}
+.opus-edge-flow {
+  animation: opus-edge-flow 1.4s linear infinite !important;
+}
+@keyframes opus-edge-flow {
+  from { stroke-dashoffset: 636; }   /* 起始：亮带在 source 之前（不可见） */
+  to   { stroke-dashoffset: 0; }     /* 终止：亮带滑到 target 之外 */
+}
+.react-flow__controls {
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  overflow: hidden;
+  box-shadow: var(--shadow-2);
+  background: var(--bg-surface);
+}
+.react-flow__controls-button {
+  background: var(--bg-surface);
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--border);
+  border-right: 0;
+}
+.react-flow__controls-button:hover { background: var(--bg-overlay); }
+.react-flow__minimap {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+
+/* ============================================================
+   Node card (REDESIGN)
+   ============================================================ */
+.node {
+  position: relative;
+  min-width: 330px;
+  max-width: 390px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 15px;  /* 1.5x r-3 */
+  font-family: var(--font-sans);
+  /* 左 3px 状态条改用 inset box-shadow 实现，避免 overflow:hidden 裁掉 Handle */
+  --status-color: var(--status-idle);
+  --depth-shadow: var(--shadow-2);
+  box-shadow: inset 3px 0 0 var(--status-color), var(--depth-shadow);
+  overflow: visible;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+.node:active { cursor: grabbing; }
+.node:hover {
+  border-color: var(--border-strong);
+  --depth-shadow: var(--shadow-3);
+}
+.node.selected { border-color: var(--accent); }
+.node.status-queued  { --status-color: var(--status-queued); }
+.node.status-running { --status-color: var(--status-running); }
+.node.status-done    { --status-color: var(--status-done); }
+.node.status-failed  { --status-color: var(--status-failed); }
+/* 节点内的交互控件保留正常 cursor */
+.node button,
+.node a,
+.node input,
+.node select,
+.node textarea { cursor: pointer; user-select: auto; }
+.node input,
+.node textarea { cursor: text; }
+
+/* head/body/footer 自身边角圆滑（接 .node 的 border-radius） */
+.node .head { border-top-left-radius: var(--r-3); border-top-right-radius: var(--r-3); }
+
+.node.kind-input,
+.node.kind-output {
+  background:
+    linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
+    var(--bg-surface);
+}
+
+.node .head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;                    /* 1.5x 8 */
+  padding: 18px 18px 12px 24px; /* 1.5x 12 12 8 16 */
+}
+.node .head .seq {
+  font-family: var(--font-mono);
+  font-size: 16px;              /* 1.5x 10.5 */
+  color: var(--ink-3);
+  letter-spacing: 0.08em;
+}
+.node .head .label {
+  font-weight: 600;
+  font-size: 20px;              /* 1.5x 13.5 */
+  color: var(--ink-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态徽章：彩色 pill，比单纯文字更直观 */
+.node .head .status-badge {
+  font-family: var(--font-mono);
+  font-size: 14px;              /* 1.5x 9.5 */
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 3px 11px;            /* 1.5x 2 7 */
+  border-radius: var(--r-pill);
+  background: var(--bg-overlay);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.node.status-queued  .head .status-badge { background: rgba(107, 138, 163, 0.14); color: var(--status-queued); }
+.node.status-running .head .status-badge { background: rgba(200, 133, 46, 0.16); color: var(--status-running); }
+.node.status-done    .head .status-badge { background: rgba(74, 124, 89, 0.16);  color: var(--status-done); }
+.node.status-failed  .head .status-badge { background: rgba(184, 54, 42, 0.16);  color: var(--status-failed); }
+
+.node .body {
+  padding: 0 24px 18px 24px;    /* 1.5x 0 16 12 16 */
+  font-size: 19px;              /* 1.5x 12.5 */
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.node .body .brief {
+  font-size: 17px;              /* 1.5x 11.5 */
+  color: var(--ink-3);
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.node .progress-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;                    /* 1.5x 8 */
+  color: var(--status-running);
+  font-size: 17px;              /* 1.5x 11.5 */
+}
+.node .progress-line .spinner {
+  width: 15px;                  /* 1.5x 10 */
+  height: 15px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
