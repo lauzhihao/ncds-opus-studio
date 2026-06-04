@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>吴道子 · 小人成片 PoC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Noto+Serif+SC:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/styles.css">
+<style>
+  html, body { margin: 0; padding: 0; background: #efe9dd; width: 1920px; height: 1080px; overflow: hidden; }
+  #stage { width: 1920px; height: 1080px; position: relative; }
+  #stage > * { width: 100%; height: 100%; }
+  body.ending #stage { opacity: 0; transition: opacity .4s; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<!-- svg-rig 数据层 → 引擎(复制自 018-svg-rig) -->
+<script src="assets/rig-spec.js"></script>
+<script src="assets/characters.js"></script>
+<script src="assets/motions.js"></script>
+<script src="assets/sequences.js"></script>
+<script src="assets/rig.js"></script>
+<!-- 本集数据 + 精简播放器 -->
+<script src="beats.js"></script>
+<script src="player_stick.js"></script>
+</body>
+</html>
