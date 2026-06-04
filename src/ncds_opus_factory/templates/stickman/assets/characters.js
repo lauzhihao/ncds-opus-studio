@@ -52,7 +52,7 @@
         <g class="bone leg-r"><path class="limb leg" d="M165 212 L174 348"/></g>
         <g class="bone torso"><rect class="solid" x="122" y="96" width="56" height="122" rx="27"/></g>
         <g class="bone arm-l"><path class="limb" d="M124 124 L102 210"/></g>
-        <g class="bone arm-r"><path class="limb" d="M176 124 L150 104"/></g>
+        <g class="bone arm-r"><path class="limb" d="M176 124 L190 166 L172 92"/></g>
         <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/><circle class="eye" cx="139" cy="58" r="4.6"/><circle class="eye" cx="161" cy="58" r="4.6"/></g>
         <g class="bone bubble">
           <circle class="bub" cx="196" cy="58" r="6"/>
