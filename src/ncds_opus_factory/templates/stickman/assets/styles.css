@@ -209,6 +209,7 @@ html, body {
 }
 .rig .limb.leg { stroke-width: 30; }
 .rig .bub { fill: var(--rig-ink); }
+.rig .eye { fill: var(--rig-eye, #efe9dd); }   /* 白色挖空眼:剪影也有神;色=舞台背景,主题自适应 */
 .rig .bub-line { stroke: var(--paper); stroke-width: 5; stroke-linecap: round; fill: none; }
 .rig .bub-dot { fill: var(--paper); }
 .rig .fist { fill: var(--rig-ink); }
@@ -219,9 +220,9 @@ html, body {
   container-type: size;
   position: relative; width: 100%; aspect-ratio: 16 / 9;
   background: var(--paper); color: var(--ink); overflow: hidden;
-  --rig-ink: #16120e;
+  --rig-ink: #16120e; --rig-eye: var(--paper);
 }
-.rig-scene.theme-dark { background: #1c1813; color: #f3e8d5; --rig-ink: #f1e7d6; }
+.rig-scene.theme-dark { background: #1c1813; color: #f3e8d5; --rig-ink: #f1e7d6; --rig-eye: #1c1813; }
 
 .rig-scene-title {
   position: absolute; left: 6cqw; top: 6cqh; width: 60cqw;   /* 留出右上角给 tag，杜绝重叠 */

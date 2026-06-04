@@ -25,7 +25,7 @@
         <g class="bone torso"><rect class="solid" x="122" y="96" width="56" height="122" rx="27"/></g>
         <g class="bone arm-l"><path class="limb" d="M124 124 L94 212"/></g>
         <g class="bone arm-r"><path class="limb" d="M176 124 L206 212"/></g>
-        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/></g>`,
+        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/><circle class="eye" cx="139" cy="58" r="4.6"/><circle class="eye" cx="161" cy="58" r="4.6"/></g>`,
     },
 
     cheer: {
@@ -39,7 +39,7 @@
         <g class="bone torso"><rect class="solid" x="122" y="96" width="56" height="122" rx="27"/></g>
         <g class="bone arm-l"><path class="limb" d="M124 124 L82 56"/></g>
         <g class="bone arm-r"><path class="limb" d="M176 124 L218 56"/></g>
-        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/></g>`,
+        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/><circle class="eye" cx="139" cy="58" r="4.6"/><circle class="eye" cx="161" cy="58" r="4.6"/></g>`,
     },
 
     thinking: {
@@ -53,7 +53,7 @@
         <g class="bone torso"><rect class="solid" x="122" y="96" width="56" height="122" rx="27"/></g>
         <g class="bone arm-l"><path class="limb" d="M124 124 L102 210"/></g>
         <g class="bone arm-r"><path class="limb" d="M176 124 L150 104"/></g>
-        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/></g>
+        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/><circle class="eye" cx="139" cy="58" r="4.6"/><circle class="eye" cx="161" cy="58" r="4.6"/></g>
         <g class="bone bubble">
           <circle class="bub" cx="196" cy="58" r="6"/>
           <circle class="bub" cx="214" cy="42" r="9"/>
@@ -77,7 +77,7 @@
           <path class="bub-line" d="M244 139 L244 153"/>
           <circle class="bub-dot" cx="244" cy="160" r="2.6"/>
         </g>
-        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/></g>`,
+        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/><circle class="eye" cx="139" cy="58" r="4.6"/><circle class="eye" cx="161" cy="58" r="4.6"/></g>`,
     },
     open: {
       id: 'open',
@@ -90,7 +90,7 @@
         <g class="bone torso"><rect class="solid" x="122" y="96" width="56" height="122" rx="27"/></g>
         <g class="bone arm-l"><path class="limb" d="M124 124 L84 176"/></g>
         <g class="bone arm-r"><path class="limb" d="M176 124 L216 176"/></g>
-        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/></g>`,
+        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/><circle class="eye" cx="139" cy="58" r="4.6"/><circle class="eye" cx="161" cy="58" r="4.6"/></g>`,
     },
     wushu: {
       id: 'wushu',
@@ -133,6 +133,8 @@
         <g class="bone head">
           <circle class="solid" cx="150" cy="62" r="35"/>
           <rect class="band" x="113" y="44" width="74" height="11" rx="5"/>
+          <circle class="eye" cx="139" cy="61" r="4.6"/>
+          <circle class="eye" cx="161" cy="61" r="4.6"/>
         </g>`,
     },
   };
