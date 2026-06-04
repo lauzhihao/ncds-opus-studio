@@ -36,6 +36,22 @@
     });
   }
 
+  // 校验角色声明的 bones[] 与 SVG 实际骨头、spec 合法集是否一致(让 rig-spec 的 SSOT 真正落地)。
+  // 不一致只 warn 不阻断 —— 早暴露三处漂移,又不破现有运行。
+  function validateCharacter(charId, actualBones) {
+    const char = CHARS[charId];
+    const declared = new Set(char.bones || []);
+    const actual = new Set(actualBones);
+    const probs = [];
+    const illegal = [...actual].filter((b) => !SPEC.BONES[b]);
+    const undeclared = [...actual].filter((b) => !declared.has(b));
+    const missingInSvg = [...declared].filter((b) => !actual.has(b));
+    if (illegal.length) probs.push('SVG 用了 spec 未登记的骨头 [' + illegal.join(', ') + ']');
+    if (undeclared.length) probs.push('SVG 有但 bones[] 未声明 [' + undeclared.join(', ') + ']');
+    if (missingInSvg.length) probs.push('bones[] 声明但 SVG 缺失 [' + missingInSvg.join(', ') + ']');
+    if (probs.length) console.warn('RigSystem[' + charId + '] SSOT 不一致: ' + probs.join('; '));
+  }
+
   // 构建一个角色 SVG：root 包裹层 + 角色 markup，并给每根骨头设好绝对旋转中心。
   function build(charId) {
     const char = CHARS[charId];
@@ -49,14 +65,19 @@
     if (err) throw new Error('RigSystem: SVG parse error in "' + charId + '": ' + err.textContent);
     const svg = document.importNode(parsed.documentElement, true);
 
-    // 给每根骨头设旋转中心（绝对用户单位）。transform-box 由 styles.css 统一设 view-box。
+    // 给每根骨头设旋转中心(绝对用户单位)+ 直接 inline transform-box,
+    // 不再依赖外部 styles.css 的 `transform-box: view-box`(消除"样式漏了 → 所有 pivot 全错"的隐患)。
+    const named = [];
     svg.querySelectorAll('.bone').forEach((g) => {
       const name = SPEC.BONE_NAMES.find((b) => g.classList.contains(b));
       if (!name) return;
       const origin = SPEC.originFor(name);
       if (origin) g.style.transformOrigin = origin;
+      g.style.transformBox = 'view-box';
       g.dataset.bone = name;
+      named.push(name);
     });
+    validateCharacter(charId, named);
     return svg;
   }
 
@@ -85,6 +106,7 @@
     handle.__anims = [];
     const missing = new Set();
     const unknown = new Set();
+    const boneHits = {}; // bone -> [motionId]（只统计会互相覆盖的非 'add' 轨道）
 
     ids.filter(Boolean).forEach((mid) => {
       const motion = MOTIONS[mid];
@@ -94,6 +116,9 @@
         if (!el) { missing.add(track.bone); return; } // 角色没有这根骨头 → 静默跳过
         const options = Object.assign({}, track.options);
         if (opts.loop === false) options.iterations = 1;
+        if ((options.composite || 'replace') !== 'add') {
+          (boneHits[track.bone] = boneHits[track.bone] || []).push(mid);
+        }
         const anim = el.animate(scaleKeyframes(track.keyframes, intensity), options);
         anim.playbackRate = speed;
         handle.__anims.push(anim);
@@ -103,11 +128,20 @@
       console.info('RigSystem: 角色「' + handle.charId + '」缺少骨头 [' +
         [...missing].join(', ') + ']，相关动作轨道已跳过。');
     }
+    // 同一骨头被多个非 add 轨道命中 → 后挂覆盖前挂、语义丢失。报给 agent,别靠碰运气组合。
+    const conflicts = Object.keys(boneHits)
+      .filter((b) => boneHits[b].length > 1)
+      .map((b) => ({ bone: b, motions: boneHits[b] }));
+    if (conflicts.length) {
+      console.warn('RigSystem: 骨头冲突(后挂覆盖前挂) ' +
+        conflicts.map((c) => c.bone + ' <- ' + c.motions.join(' / ')).join('; '));
+    }
 
     const ctrl = {
       get animations() { return handle.__anims; },         // getter：cancel 后也反映当前实况
       unknownMotions: [...unknown],                          // 让 Agent 能检测拼错的 motion id
       missingBones: [...missing],                            // 角色缺失、被跳过的骨头
+      boneConflicts: conflicts,                              // 多动作打同骨头、互相覆盖的清单(供 agent 检测)
       pause() { handle.__anims.forEach((a) => a.pause()); return ctrl; },
       play() { handle.__anims.forEach((a) => a.play()); return ctrl; },
       cancel() { handle.__anims.forEach((a) => a.cancel()); handle.__anims = []; return ctrl; },
@@ -160,6 +194,7 @@
     const seq = (window.RIG_SEQUENCES || {})[seqId];
     if (!seq) throw new Error('RigSystem: unknown sequence "' + seqId + '"');
     const speed = opts.speed == null ? 1 : opts.speed;
+    const intensity = opts.intensity == null ? 1 : opts.intensity;  // 与 play() 对齐:幅度是引擎统一能力
     const loop = opts.loop !== false;
     const moves = seq.moves;
     const returnDur = seq.returnDuration == null ? 800 : seq.returnDuration;
@@ -184,7 +219,7 @@
       moves.forEach((m, i) => {
         if (m.pose && m.pose[bone] != null) cur = m.pose[bone];      // 未写到的骨头：保持上一招姿态
         const nextEasing = (moves[i + 1] && moves[i + 1].easing) || m.easing || 'ease-in-out';
-        frames.push({ offset: ends[i], transform: cur, easing: nextEasing });
+        frames.push({ offset: ends[i], transform: scaleTransform(cur, intensity), easing: nextEasing });
       });
       frames.push({ offset: 1, transform: 'rotate(0deg)' });          // 收势归预备
       const anim = el.animate(frames, { duration: total, iterations: loop ? Infinity : 1, fill: 'both' });
