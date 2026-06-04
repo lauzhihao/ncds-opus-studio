@@ -32,9 +32,15 @@ function runFfmpeg(args) {
 async function makeSilence(sec, out) {
   await runFfmpeg(['-y', '-f', 'lavfi', '-i', 'anullsrc=r=24000:cl=mono', '-t', String(sec), '-acodec', 'libmp3lame', '-q:a', '9', out]);
 }
-async function buildAudioTrack() {
-  const files = (await fs.readdir(AUDIO_DIR)).filter((f) => /^\d+\.mp3$/.test(f)).sort();
+async function buildAudioTrack(expectedCount) {
+  // 数值序而非字典序(否则 1.mp3 2.mp3 10.mp3 会乱序);零填充命名也一并稳住。
+  const files = (await fs.readdir(AUDIO_DIR)).filter((f) => /^\d+\.mp3$/.test(f))
+    .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
   if (!files.length) throw new Error('no audio mp3 in ' + AUDIO_DIR);
+  // 画面按 beats 出、音轨按目录里的 mp3 拼;数量不一致 = 声画错位的废片,提前报错而不是默默产出。
+  if (expectedCount != null && files.length !== expectedCount) {
+    throw new Error('audio/beats 数量不一致: ' + files.length + ' 个 mp3 vs ' + expectedCount + ' 个 beats(声画会错位)');
+  }
   const si = '/tmp/stick-si.mp3', sg = '/tmp/stick-sg.mp3', st = '/tmp/stick-st.mp3';
   await makeSilence(INTRO_MS / 1000, si); await makeSilence(GAP_MS / 1000, sg); await makeSilence(ENDING_MS / 1000, st);
   const list = '/tmp/stick-concat.txt';
@@ -57,10 +63,17 @@ async function main() {
     args: ['--no-sandbox', '--mute-audio', '--autoplay-policy=no-user-gesture-required', '--window-size=1920,1080'],
     defaultViewport: { width: 1920, height: 1080 },
   });
+  let beatsCount = null;
   try {
     const page = await browser.newPage();
+    // 捕获页面 JS 错误 / console error —— 否则页面脚本炸了也会「静默录出空片」。
+    page.on('pageerror', (e) => log('PAGE ERROR:', e.message));
+    page.on('console', (m) => { if (m.type() === 'error') log('PAGE CONSOLE ERROR:', m.text()); });
     log('load page'); await page.goto(URL, { waitUntil: 'networkidle0', timeout: 30000 });
     await page.waitForFunction(() => window.__player && typeof window.__player.startRecordingPlayback === 'function', { timeout: 15000 });
+    await page.evaluate(() => document.fonts && document.fonts.ready); // 等字体就绪,别录到 fallback 字形
+    beatsCount = await page.evaluate(() => (window.BEATS || []).length);
+    log('beats =', beatsCount);
     await sleep(1200);
     log('start recorder');
     const rec = new PuppeteerScreenRecorder(page, { fps: FPS, videoFrame: { width: 1920, height: 1080 }, videoCrf: 23, videoCodec: 'libx264', videoPreset: 'fast', videoBitrate: 4000, aspectRatio: '16:9' });
@@ -72,7 +85,7 @@ async function main() {
     await sleep(200);
     log('stop recorder'); await rec.stop();
   } finally { await browser.close(); server.kill(); }
-  log('build audio'); await buildAudioTrack();
+  log('build audio'); await buildAudioTrack(beatsCount);
   log('mux → ' + OUTPUT_MP4);
   await runFfmpeg(['-y', '-i', TMP_VIDEO, '-i', TMP_AUDIO, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', OUTPUT_MP4]);
   const s = await fs.stat(OUTPUT_MP4);

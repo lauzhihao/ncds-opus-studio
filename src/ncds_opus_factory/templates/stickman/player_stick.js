@@ -42,16 +42,32 @@
     return Math.max(1200, (zh || '').replace(/\s/g, '').length * 220 + 700);
   }
 
+  // 切句先彻底停掉上一条音频(pause + 归零 + 摘 onended),杜绝估时偏短导致的叠音。
+  function stopAudio(a) {
+    if (!a) return;
+    try { a.pause(); a.currentTime = 0; } catch (e) {}
+    a.onended = null;
+  }
+
   function playFrom(i) {
+    if (i > 0) stopAudio(audios[i - 1]);
     if (i >= beats.length) { end(); return; }
     renderBeat(i);
     const a = audios[i];
     let advanced = false;
-    const go = () => { if (advanced) return; advanced = true; setTimeout(() => playFrom(i + 1), 80); };
+    let fallback = null;
+    const go = () => { if (advanced) return; advanced = true; clearTimeout(fallback); setTimeout(() => playFrom(i + 1), 80); };
+    const armFallback = (ms) => { clearTimeout(fallback); fallback = setTimeout(go, ms); };
     a.onended = go;
-    a.play().catch(() => setTimeout(go, estimateMs(beats[i].zh)));
-    // 音频元数据坏/缺失时的兜底估时,保证片子能播完
-    if (!isFinite(a.duration) || a.duration === 0) setTimeout(go, estimateMs(beats[i].zh) + 600);
+    // 兜底优先用「真实音频时长」(loadedmetadata 后)而非一上来拿 NaN 的 a.duration 猜;真拿不到才按字数估时。
+    // onended 是主路径,fallback 只在它不触发时兜底(取真实时长 + 400ms buffer,避免提前切句)。
+    const byMeta = () => {
+      if (isFinite(a.duration) && a.duration > 0) armFallback(a.duration * 1000 + 400);
+      else armFallback(estimateMs(beats[i].zh) + 600);
+    };
+    if (a.readyState >= 1) byMeta();
+    else { a.addEventListener('loadedmetadata', byMeta, { once: true }); armFallback(estimateMs(beats[i].zh) + 1500); }
+    a.play().catch(() => armFallback(estimateMs(beats[i].zh)));
   }
 
   function end() {
