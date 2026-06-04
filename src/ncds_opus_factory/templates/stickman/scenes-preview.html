@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>svg-rig 成片场景预览</title>
+<link rel="stylesheet" href="assets/styles.css" />
+<style>
+  body { margin: 0; background: #e7ddc9; color: #1a1a1a; padding: 24px 28px 56px;
+    font-family: ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #777; font-size: 13px; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; max-width: 1600px; }
+  .item .cap { font-size: 12.5px; color: #6b6256; margin: 8px 2px 0; }
+  .frame { border: 1px solid #cbbfa6; border-radius: 14px; overflow: hidden;
+    box-shadow: 0 16px 40px -28px #00000066; }
+  .frame .rig-scene { width: 100%; display: block; }
+</style>
+</head>
+<body>
+<h1>svg-rig 成片场景预览</h1>
+<div class="sub">renderScene 直出的 16:9 成片卡片 · 6 角色 × 动作 × 标题/字幕(动画已定格在展开姿态)</div>
+<div class="grid" id="g"></div>
+
+<script src="assets/rig-spec.js"></script>
+<script src="assets/characters.js"></script>
+<script src="assets/motions.js"></script>
+<script src="assets/sequences.js"></script>
+<script src="assets/rig.js"></script>
+<script>
+  const SCENES = [
+    { character: 'present', motion: ['point-right', 'idle-breathe'], title: '同事阴阳你，别急着怼', tag: '职场 · 认知', subtitleZh: '职场里总被同事阴阳的人，先听我一句' },
+    { character: 'thinking', motion: ['think-tilt', 'bubble-float'], subtitleZh: '你最大的弱点，是太急着证明自己没生气' },
+    { character: 'open', motion: ['lean-in', 'idle-breathe'], title: '其实方法很简单', subtitleZh: '你只问一句：你是在建议，还是评价？' },
+    { character: 'cheer', motion: ['raise-arms'], title: '真正拿到结果的人', tag: '成长', subtitleZh: '都做对了这一件小事' },
+    { character: 'standing', motion: ['nod', 'idle-breathe'], subtitleZh: '对，就是这么回事，不复杂' },
+    { character: 'wushu', motion: ['idle-breathe'], title: '稳住，别慌', subtitleZh: '越乱的时候，越要先扎好下盘', theme: 'dark' },
+  ];
+  const g = document.getElementById('g');
+  SCENES.forEach((s) => {
+    const item = document.createElement('div');
+    item.className = 'item';
+    const frame = document.createElement('div');
+    frame.className = 'frame';
+    item.appendChild(frame);
+    const r = RigSystem.renderScene(s, frame);
+    // 把循环动画推进到展开姿态再定格,截图才看得出动作而非预备式
+    if (r && r.controller && r.controller.animations) {
+      r.controller.animations.forEach((a) => { try { a.currentTime = 650; a.pause(); } catch (e) {} });
+    }
+    item.insertAdjacentHTML('beforeend',
+      '<div class="cap">' + s.character + ' · [' + (s.motion || []).join(', ') + ']' +
+      (s.theme === 'dark' ? ' · dark' : '') + '</div>');
+    g.appendChild(item);
+  });
+</script>
+</body>
+</html>
