@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>svg-rig 角色库预览</title>
+<link rel="stylesheet" href="assets/styles.css" />
+<style>
+  body { margin: 0; background: #efe9dd; color: #1a1a1a;
+    font-family: ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  h1 { padding: 24px 28px 4px; font-size: 20px; margin: 0; }
+  .sub { padding: 0 28px; color: #777; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; padding: 24px 28px 60px; }
+  .cell { background: #fff; border: 1px solid rgba(0,0,0,.08); border-radius: 14px; padding: 14px; text-align: center; }
+  .cell .box { height: 300px; }
+  .cell svg.rig { width: 100%; height: 300px; display: block; }
+  .nm { font-weight: 700; margin-top: 8px; }
+  .id { font: 12px ui-monospace, monospace; color: #999; }
+  .mo { font-size: 11px; color: #a66016; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>svg-rig 角色库</h1>
+<div class="sub">5 角色 · 预备静态姿态 · 同一套骨骼锚点(任意角色 × 任意动作可组合)</div>
+<div class="grid" id="g"></div>
+
+<script src="assets/rig-spec.js"></script>
+<script src="assets/characters.js"></script>
+<script src="assets/motions.js"></script>
+<script src="assets/sequences.js"></script>
+<script src="assets/rig.js"></script>
+<script>
+  const g = document.getElementById('g');
+  RigSystem.listCharacters().forEach((c) => {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    const box = document.createElement('div');
+    box.className = 'box';
+    RigSystem.mount(box, c.id);   // 角色 svg(class=rig) 挂进 box
+    cell.appendChild(box);
+    cell.insertAdjacentHTML('beforeend',
+      '<div class="nm">' + c.name + '</div>' +
+      '<div class="id">' + c.id + '</div>' +
+      '<div class="mo">' + c.bones.length + ' bones</div>');
+    g.appendChild(cell);
+  });
+</script>
+</body>
+</html>

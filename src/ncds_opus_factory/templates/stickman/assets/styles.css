@@ -210,6 +210,7 @@ html, body {
 .rig .limb.leg { stroke-width: 30; }
 .rig .bub { fill: var(--rig-ink); }
 .rig .bub-line { stroke: var(--paper); stroke-width: 5; stroke-linecap: round; fill: none; }
+.rig .bub-dot { fill: var(--paper); }
 .rig .fist { fill: var(--rig-ink); }
 .rig .sash, .rig .band { fill: var(--rig-accent, #c4492a); }   /* 武者红腰带 + 头带 */
 

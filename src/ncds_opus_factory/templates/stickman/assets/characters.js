@@ -74,8 +74,22 @@
         <g class="bone arm-r"><path class="limb" d="M176 124 L226 150"/></g>
         <g class="bone prop">
           <circle class="solid" cx="244" cy="150" r="20"/>
-          <path class="bub-line" d="M244 138 L244 162 M232 150 L256 150"/>
+          <path class="bub-line" d="M244 139 L244 153"/>
+          <circle class="bub-dot" cx="244" cy="160" r="2.6"/>
         </g>
+        <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/></g>`,
+    },
+    open: {
+      id: 'open',
+      name: '摊手',
+      desc: '双臂向斜下张开、手心向外。适合「坦诚 / 敞开说 / 就这么简单 / 对比两面」。',
+      bones: ['root', 'head', 'torso', 'arm-l', 'arm-r', 'leg-l', 'leg-r'],
+      svg: `
+        <g class="bone leg-l"><path class="limb leg" d="M135 212 L126 348"/></g>
+        <g class="bone leg-r"><path class="limb leg" d="M165 212 L174 348"/></g>
+        <g class="bone torso"><rect class="solid" x="122" y="96" width="56" height="122" rx="27"/></g>
+        <g class="bone arm-l"><path class="limb" d="M124 124 L84 176"/></g>
+        <g class="bone arm-r"><path class="limb" d="M176 124 L216 176"/></g>
         <g class="bone head"><circle class="solid" cx="150" cy="62" r="35"/></g>`,
     },
     wushu: {
