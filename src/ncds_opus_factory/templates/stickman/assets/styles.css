@@ -22,12 +22,12 @@ html, body {
   margin: 0;
   background: var(--ui-bg);
   color: var(--ink);
-  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-.display { font-family: "ZQK Shuaihei", "Noto Sans SC", system-ui, sans-serif; }
-.kaiti   { font-family: "XY Kaiti", "Noto Serif SC", serif; }
+.display { font-family: "ZQK Shuaihei", "Noto Sans SC", "Noto Sans CJK SC", system-ui, sans-serif; }
+.kaiti   { font-family: "XY Kaiti", "Noto Serif SC", "Noto Serif CJK SC", serif; }
 
 /* ---------- 顶栏 ---------- */
 .app-header {
@@ -246,7 +246,7 @@ html, body {
   text-align: center; padding: 0 6cqw;
 }
 .rig-scene-subtitle .zh {
-  font-family: "XY Kaiti", "Noto Serif SC", serif; font-weight: 700; font-size: 4.6cqw; line-height: 1.1;
+  font-family: "XY Kaiti", "Noto Serif SC", "Noto Serif CJK SC", serif; font-weight: 700; font-size: 4.6cqw; line-height: 1.1;
 }
 .rig-scene-subtitle .en { font-size: 2.4cqw; opacity: .72; line-height: 1.15; }
 
