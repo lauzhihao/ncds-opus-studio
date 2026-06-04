@@ -16,3 +16,9 @@ web/vite.config.js
 *.log
 .DS_Store
 .gstack/
+
+# dbskill 等第三方 skill：项目级安装，本地可用，不并入本仓库（真源在 .agents/，skills/ 与 .claude/skills/ 为软链）
+/.agents/
+/.claude/skills/
+/skills-lock.json
+/skills/dbs*

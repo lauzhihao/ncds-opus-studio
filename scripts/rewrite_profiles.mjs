@@ -1,3 +1,5 @@
+import { buildKernelGuide } from './douyin_cog_kernel.mjs';
+
 export const DEFAULT_REWRITE_PROFILE_ID = 'toutiao';
 export const DEFAULT_ARTICLE_REWRITE_PROFILE_ID = 'douyin';
 
@@ -146,6 +148,31 @@ function buildDouyinDraftPrompt({ outline, analysisRecord = null }) {
     userRequirements ? '' : '',
     userRequirements ? '【用户附加要求（最高优先级，必须遵守）】：' : '',
     userRequirements,
+  ]);
+}
+
+function buildDouyinCogDraftPrompt({ outline }) {
+  // 柳永(douyin_cog)：不洗稿，按内核从"选题"直接创作认知爆款口播。
+  // 与旧 douyin profile 的根本区别：旧的禁止"重新命名/自造概念"(为洗稿守事实)，
+  // 这里反过来——强制下反常识钩子、做机制命名、给逐字台词(认知爆款的命根)。
+  const topic = typeof outline?.sourceText === 'string' ? outline.sourceText.trim() : '';
+  const userRequirements = typeof outline?.userRequirements === 'string' ? outline.userRequirements.trim() : '';
+  return joinNonEmptyLines([
+    buildKernelGuide(),
+    '',
+    '== 本次任务 ==',
+    '围绕下面这个【选题】，严格按上面的母规律和认知骨架，从零创作一条全新的抖音认知口播稿。',
+    '这不是改写、更不是洗稿——你要主动下反常识硬钩、做机制命名、把每个观点落成可照搬的逐字台词。',
+    '',
+    '输出要求：',
+    '- 只输出口播正文（开头可带一行标题），不要解释、不要 markdown 代码块、不要 emoji、不要出现字符“*”',
+    '- 简体中文，正文 1500 字以上，长口播节奏',
+    '- 严格四段推进：① 冒犯硬钩 → ② 机制命名 → ③ 3-4 招逐字台词 → ④ 金句 + 利他 CTA',
+    '- 每一招必须是“遇到 X 就这样说/这样做”的可照搬台词，绝不允许只给“你要……”的空道理',
+    '- 不得编造未经证实的人物、数据、案例',
+    '',
+    `【选题】：${topic}`,
+    userRequirements ? `【附加要求（最高优先级，可覆盖默认约束）】：${userRequirements}` : '',
   ]);
 }
 
@@ -373,6 +400,40 @@ const REWRITE_PROFILES = {
         return '你是一个中文内容策划编辑，只能输出合法 JSON。';
       }
       return '你是一个擅长抖音口播稿写作的中文内容编辑。';
+    },
+  },
+  douyin_cog: {
+    // 柳永：认知爆款编剧。复用 douyin 的 requiresAnalysis/Outline=false 契约，
+    // 只把 draft prompt 换成"按内核创作"。模型层、编排层全部复用，零重造。
+    id: 'douyin_cog',
+    requiresAnalysis: false,
+    requiresOutline: false,
+    draftFilePrefix: 'douyin_cog',
+    draftFileExt: '.md',
+    defaultAnalysisRecord: {
+      formatName: 'douyin-认知口播',
+      formatFeatures: ['认知爆款骨架', '冒犯硬钩', '逐字台词', '金句赋能'],
+      writingLogic: ['冒犯硬钩', '机制命名', '3-4招可照搬台词', '金句+利他CTA'],
+      expressionStyle: ['口语化', '有锋芒', '可照搬', '不说教'],
+      articleType: '抖音认知口播稿',
+      summary: '不洗稿，按柳永内核从选题直接创作认知爆款脚本。',
+      audience: '职场/认知/成长向的成年观众',
+      platformTone: '抖音认知口播',
+      risks: ['台词要可落地，不空喊口号；不得编造未经证实的事实。'],
+      generatedBy: null,
+    },
+    buildAnalysisPrompt() {
+      throw new Error('douyin_cog profile does not require analysis');
+    },
+    buildOutlinePrompt() {
+      throw new Error('douyin_cog profile does not require outline');
+    },
+    buildDraftPrompt: buildDouyinCogDraftPrompt,
+    buildStageSystemPrompt(stage) {
+      if (stage === 'outline' || stage === 'analysis') {
+        return '你是一个中文内容策划编辑，只能输出合法 JSON。';
+      }
+      return '你是「柳永」，一个研究如何用文字让人看完并行动的抖音爆款编剧，只输出口播正文。';
     },
   },
   paper_card_talk: {
