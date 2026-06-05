@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ncds_opus_factory.common import ai_taste
+from ncds_opus_factory.common import ai_taste, quality_rubric
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNNER = ROOT / "scripts" / "content_rewrite_runner.mjs"
@@ -156,8 +156,21 @@ def run(
             report = ai_taste.scan(new_text)
             on_progress(f"  第 {rounds} 轮后: {report['verdict']} - {report['summary']}")
         d["qc"] = report
+        # 第 2 层:rubric 正向质量分(opus 他评,仅标注不打回,校准期)
+        rub = quality_rubric.score(d["text"], timeout_seconds=timeout_seconds)
+        d["qc_rubric"] = rub
+        if rub.get("available"):
+            on_progress(f"质检2[rubric/opus]: {rub['total']}/50 {rub['grade']}")
+        else:
+            on_progress(f"质检2[rubric]: 跳过({rub.get('skipped')})")
         if d.get("path"):
             Path(d["path"]).write_text(d["text"], encoding="utf-8")
+            # qc sidecar:质检结果旁挂,不污染正文 .md
+            qc_path = Path(d["path"]).with_suffix(".qc.json")
+            qc_path.write_text(
+                json.dumps({"qc": report, "qc_rubric": rub}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     on_progress(f"柳永完成: {len(drafts_out)} 稿成功")
     return {
