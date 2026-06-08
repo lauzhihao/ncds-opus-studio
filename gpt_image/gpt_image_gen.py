@@ -27,9 +27,23 @@ DEFAULT_USER_AGENT = (
 )
 
 
-# 502 时按顺序换模型重试：裸名先行，再 2k，再 4k，全失败才报错。
-RETRY_MODELS = ["gpt-image-2", "gpt-image-2-2k", "gpt-image-2-4k"]
+# 502 时按顺序换模型重试：1k 先行，再 2k，再 4k，全失败才报错。
+RETRY_MODELS = ["gpt-image-2", "gpt-image-2k", "gpt-image-2-4k"]
 RETRY_HTTP_STATUS = 502
+
+# model 与分辨率档位强绑定（文档要求随 model 一起发 image_resolutic）。
+MODEL_RESOLUTION = {
+    "gpt-image-2": "1k",
+    "gpt-image-2k": "2k",
+    "gpt-image-2-4k": "4k",
+}
+DEFAULT_RESOLUTION = "1k"
+DEFAULT_SIZE = "1:1"
+
+
+def resolution_for_model(model: str) -> str:
+    # 未知 model 回退到 1k，避免漏发字段导致请求被拒。
+    return MODEL_RESOLUTION.get(model, DEFAULT_RESOLUTION)
 
 
 class ApiHttpError(Exception):
@@ -165,8 +179,7 @@ def request_image_generation(
     prompt: str,
     model: str,
     timeout_seconds: int,
-    size: str = "auto",
-    quality: str = "auto",
+    size: str = DEFAULT_SIZE,
     n: int = 1,
 ) -> Dict[str, Any]:
     request_url = f"{base_url}/images/generations"
@@ -175,7 +188,8 @@ def request_image_generation(
         "prompt": prompt,
         "n": n,
         "size": size,
-        "quality": quality,
+        # 分辨率档位随 model 绑定下发，换模型重试时一起切换。
+        "image_resolutic": resolution_for_model(model),
     }
     request_body = json.dumps(payload).encode("utf-8")
 
@@ -189,7 +203,7 @@ def request_image_generation(
         method="POST",
         headers={
             "Content-Type": "application/json; charset=utf-8",
-            "x-api-key": api_key,
+            "Authorization": f"Bearer {api_key}",
             "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "application/json",
             "Origin": origin,
@@ -220,7 +234,7 @@ def print_debug_curl(
         f"  {shlex.quote(request_url)} \\",
         "  -X POST \\",
         "  -H 'Content-Type: application/json; charset=utf-8' \\",
-        "  -H 'x-api-key: REDACTED' \\",
+        "  -H 'Authorization: Bearer REDACTED' \\",
         f"  -H {shlex.quote(f'User-Agent: {DEFAULT_USER_AGENT}')} \\",
         f"  --data-raw {shlex.quote(json.dumps(payload, ensure_ascii=False))}",
     ]
@@ -291,9 +305,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-file", help="Read prompt text from a file.")
     parser.add_argument("--out-dir", help="Output directory.")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Model name. Default: {DEFAULT_MODEL}")
-    parser.add_argument("--size", default="auto", help="Output size. Default: auto")
-    parser.add_argument("--quality", default="auto", help="Output quality. Default: auto")
-    parser.add_argument("--n", type=int, default=1, help="Number of images. Default: 1")
+    parser.add_argument(
+        "--size",
+        default=DEFAULT_SIZE,
+        help=f"Aspect ratio (1:1/3:2/2:3/16:9/21:9/9:16/4:3/3:4). Default: {DEFAULT_SIZE}",
+    )
+    parser.add_argument("--n", type=int, default=1, help="Number of images (1-4). Default: 1")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -313,6 +330,8 @@ def main() -> None:
 
     base_url = ensure_env("GPT_IMAGE2_BASE_URL").rstrip("/")
     api_key = ensure_env("GPT_IMAGE2_API_KEY")
+    # 文档限制 n ∈ [1, 4]，越界直接钳制避免被服务端拒绝。
+    n = max(1, min(4, args.n))
     output_dir = resolve_output_dir(args.out_dir)
 
     response: Dict[str, Any] = {}
@@ -327,8 +346,7 @@ def main() -> None:
                 model=model,
                 timeout_seconds=args.timeout,
                 size=args.size,
-                quality=args.quality,
-                n=args.n,
+                n=n,
             )
             break
         except ApiHttpError as exc:
