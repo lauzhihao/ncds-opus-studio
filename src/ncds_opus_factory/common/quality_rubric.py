@@ -68,6 +68,7 @@ def build_rubric_prompt(text: str) -> str:
         "== 输出格式(只输出一个 JSON 对象,不要 markdown 代码块、不要别的话) ==",
         '{"dims":{"节奏":N,"真实性":N,"精炼度":N,"直接性":N,"信任度":N},"issues":["问题1","问题2"]}',
         "issues 是具体可改的问题(2-5 条),指明在第几段/哪一句。",
+        "issues 里引用原文/台词一律用单引号 '' 包裹,禁止英文双引号;整个 JSON 只用半角 ASCII 标点。",
         "",
         "== 待评稿 ==",
         text,
@@ -91,24 +92,53 @@ def _extract_first_json_object(s: str) -> str | None:
     return None
 
 
+# dims 是固定的 "维度":数字,格式无引号地雷;JSON 整体崩坏时可绕开 issues 直接抠分。
+_DIM_RE: dict[str, "re.Pattern[str]"] = {
+    d: re.compile(rf'"{d}"\s*:\s*(\d+(?:\.\d+)?)') for d in DIMENSIONS
+}
+
+
+def _dims_via_regex(s: str) -> dict[str, str] | None:
+    """正则直抠 5 维分数,绕开 issues 字符串里的未转义引号。5 维全中才算成功。"""
+    out: dict[str, str] = {}
+    for d, rx in _DIM_RE.items():
+        m = rx.search(s)
+        if not m:
+            return None
+        out[d] = m.group(1)
+    return out
+
+
 def parse_rubric_output(raw: str) -> dict[str, Any]:
     """从 opus 的 result 文本里抽评分 JSON。
 
-    容错:裹 ```json``` 代码块、前后带解释文字。total 一律以 dims 之和为准
-    (不信任模型自己的加法)。抽不出或维度不全 -> raise ValueError(由 score 兜底降级)。
+    三档容错:① 严格 json.loads(```json``` 包裹/前后解释由 _extract_first_json_object 兜);
+    ② JSON 崩(opus 偶发在 issues 里用未转义双引号引台词,整块失效)-> regex 直抠 5 维保证出分、
+    issues 降级为空;③ 连分数都抠不到 -> raise ValueError(由 score 兜底降级)。
+    total 一律以 dims 之和为准(不信任模型自己的加法)。
     """
     if not raw or not raw.strip():
         raise ValueError("rubric 输出为空")
     blob = _extract_first_json_object(raw)
-    if blob is None:
-        raise ValueError(f"未找到 JSON 对象: {raw[:120]}")
-    obj = json.loads(blob)
-    dims_raw = obj.get("dims") or {}
-    if not isinstance(dims_raw, dict) or not all(d in dims_raw for d in DIMENSIONS):
-        raise ValueError(f"dims 维度不全: {dims_raw}")
+    src = blob if blob is not None else raw
+    dims_raw: dict[str, Any] | None = None
+    issues: Any = []
+    if blob is not None:
+        try:
+            obj = json.loads(blob)
+            if isinstance(obj.get("dims"), dict):
+                dims_raw = obj["dims"]
+            if isinstance(obj.get("issues"), list):
+                issues = obj["issues"]
+        except json.JSONDecodeError:
+            pass  # 落到 regex 兜底
+    if dims_raw is None or not all(d in dims_raw for d in DIMENSIONS):
+        rescued = _dims_via_regex(src)
+        if rescued is None:
+            raise ValueError(f"dims 维度抽取失败: {src[:120]}")
+        dims_raw = rescued
     dims = {d: int(round(float(dims_raw[d]))) for d in DIMENSIONS}
     total = sum(dims.values())  # 以 dims 之和为准,防 opus 算错
-    issues = obj.get("issues") or []
     if not isinstance(issues, list):
         issues = [str(issues)]
     return {"dims": dims, "total": total, "issues": [str(x) for x in issues][:8]}

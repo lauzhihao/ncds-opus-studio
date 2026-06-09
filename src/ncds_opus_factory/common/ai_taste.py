@@ -41,8 +41,46 @@ HARD_RULES: list[tuple[str, str, str]] = [
 ]
 
 
+# 招数计数一致性(校准期只标注不打回):标题承诺的招数应 = 正文实际给的招数。
+_CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _to_int(s: str | None) -> int | None:
+    if not s:
+        return None
+    return int(s) if s.isdigit() else _CN_NUM.get(s)
+
+
+def _count_consistency(text: str) -> dict[str, Any]:
+    """抽'标题承诺招数'与'正文实际招数'比对。校准期只标注,不参与 verdict。
+
+    柳永踩过的坑:标题写'3句'正文却给4招、结尾速记又收回3句。
+    标题数字 vs 正文'第N句/招'最大序号 不等即标记;信息不全(标题无数字/正文无序号)则跳过。
+    """
+    first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+    mt = re.search(r"([0-9]+|[一二三四五六七八九十])\s*(?:句|招|个|点|步|式|条|种)", first_line)
+    title_n = _to_int(mt.group(1)) if mt else None
+    body_nums: set[int] = set()
+    for m in re.finditer(r"第\s*([0-9]+|[一二三四五六七八九十])\s*(?:句|招)", text):
+        n = _to_int(m.group(1))
+        if n:
+            body_nums.add(n)
+    body_n = max(body_nums) if body_nums else None
+    consistent = title_n is not None and body_n is not None and title_n == body_n
+    if title_n is None or body_n is None:
+        note = f"招数计数:标题={title_n}/正文={body_n}(信息不全,跳过)"
+    elif consistent:
+        note = f"招数一致({title_n}招)"
+    else:
+        note = f"招数不一致:标题承诺{title_n}招/正文实际{body_n}招"
+    return {"title_n": title_n, "body_n": body_n, "consistent": consistent, "note": note}
+
+
 def scan(text: str) -> dict[str, Any]:
-    """扫描文本,返回 {verdict, density, hard, summary}。verdict='fail' 表示该打回重写。"""
+    """扫描文本,返回 {verdict, density, hard, structure, summary}。verdict='fail' 表示该打回重写。
+
+    structure 是招数计数一致性的标注,校准期只记录、不影响 verdict、不触发打回。
+    """
     hits_density: list[dict[str, Any]] = []
     for name, pat, thr in DENSITY_RULES:
         ms = re.findall(pat, text)
