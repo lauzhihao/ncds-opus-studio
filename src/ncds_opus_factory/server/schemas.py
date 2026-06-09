@@ -71,3 +71,6 @@ class TaskDetailResponse(BaseModel):
     finished_at: str | None = None
     error: str | None = None
     result: dict[str, Any] | None = None
+    # 完成态时按命令从 result 提取的可审看产物清单（[{label, kind, url, path}]）；
+    # 移动端据此读稿/听音/看片，见 server.artifacts.extract_artifacts。
+    artifacts: list[dict[str, Any]] | None = None

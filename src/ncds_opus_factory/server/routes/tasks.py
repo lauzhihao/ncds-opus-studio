@@ -17,6 +17,8 @@ from collections.abc import AsyncGenerator
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
+from ncds_opus_factory.server.artifacts import extract_artifacts
+from ncds_opus_factory.server.command_schemas import get_schema
 from ncds_opus_factory.server.schemas import (
     TaskCreateRequest,
     TaskCreateResponse,
@@ -33,6 +35,21 @@ router = APIRouter()
 async def list_commands() -> dict[str, list[str]]:
     """列出当前注册的所有 commands。"""
     return {"commands": RUNNER.list_commands()}
+
+
+@router.get("/tasks/{cmd}/schema")
+async def get_command_schema(cmd: str) -> dict:
+    """返回某命令的参数 schema（给移动端渲染输入表单）。"""
+    if cmd not in RUNNER.registry:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown command: {cmd}. available: {RUNNER.list_commands()}",
+        )
+    schema = get_schema(cmd)
+    if schema is None:
+        # 命令已注册但还没登记 schema：返回空字段，前端可回退到原始 JSON 输入
+        return {"cmd": cmd, "label": cmd, "group": "primitive", "summary": "", "fields": []}
+    return {"cmd": cmd, **schema}
 
 
 @router.post("/tasks/{cmd}", response_model=TaskCreateResponse)
@@ -55,6 +72,7 @@ async def get_task(task_id: str) -> TaskDetailResponse:
     if not meta:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
     result = STORE.get_result(task_id) if meta.status == "completed" else None
+    artifacts = extract_artifacts(meta.cmd, result) if result else None
     return TaskDetailResponse(
         task_id=meta.task_id,
         cmd=meta.cmd,
@@ -65,6 +83,7 @@ async def get_task(task_id: str) -> TaskDetailResponse:
         finished_at=meta.finished_at,
         error=meta.error,
         result=result,
+        artifacts=artifacts,
     )
 
 
