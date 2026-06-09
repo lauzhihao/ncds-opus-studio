@@ -36,6 +36,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ncds_opus_factory.server.routes import artifacts as artifacts_routes
+from ncds_opus_factory.server.routes import commands as commands_routes
 from ncds_opus_factory.server.routes import jobs as jobs_routes
 from ncds_opus_factory.server.routes import mock as mock_routes
 from ncds_opus_factory.server.routes import pipelines as pipelines_routes
@@ -66,6 +67,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(commands_routes.router)
 app.include_router(tasks_routes.router)
 app.include_router(templates_routes.router)
 app.include_router(jobs_routes.router)

@@ -17,14 +17,15 @@ TaskStatus = Literal["pending", "running", "completed", "failed"]
 
 
 class TaskCreateRequest(BaseModel):
-    """POST /tasks/{cmd} 请求体。
+    """POST /tasks 请求体。
 
-    params 直接 spread 给 command.run(**params)，每个命令字段不同：
-        wst: {"prompt": "...", "timeout_seconds": 600}
-        vid: {"prompt": "...", "ref_image_urls": [...], "duration": 5}
-        ...
+    cmd   = 要执行的命令名（见 GET /commands）。
+    params = 直接 spread 给 command.run(**params)，每个命令字段不同（见 GET /commands/{cmd}/schema）：
+        {"cmd": "wst", "params": {"prompt": "...", "timeout_seconds": 600}}
+        {"cmd": "vid", "params": {"prompt": "...", "ref_image_urls": [...], "duration": 5}}
     """
 
+    cmd: str
     params: dict[str, Any] = Field(default_factory=dict)
 
 

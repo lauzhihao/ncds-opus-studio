@@ -43,7 +43,9 @@ export default defineConfig(({ mode }) => {
         // 后端 REST 端点全部代理；按前缀枚举，避免误代理掉 vite 自身的 /__vite
         '/pipelines': BACKEND,
         '/jobs': BACKEND,
+        '/commands': BACKEND,
         '/tasks': BACKEND,
+        '/artifacts': BACKEND,
         '/templates': BACKEND,
         '/health': BACKEND,
         // preview 节点 iframe 走这个：HTML 模板 + episode.json + audio/picture 资产

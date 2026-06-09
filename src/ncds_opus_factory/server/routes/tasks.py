@@ -1,9 +1,9 @@
-"""任务 HTTP 端点。
+"""任务（task）= 命令的一次执行实例。命令定义(catalog)在 routes/commands.py。
 
-- POST /tasks/{cmd}        提交任务，返回 task_id
-- GET  /tasks/{task_id}    查任务详情（meta + 终态 result）
+- GET  /tasks                   列出任务实例（meta，倒序）
+- POST /tasks                   提交任务（body: {cmd, params}）→ 201 + Location: /tasks/{id}
+- GET  /tasks/{task_id}         查任务详情（meta + 终态 result + artifacts）
 - GET  /tasks/{task_id}/events  SSE 拉进度（先回放 events.jsonl，再 tail 新增）
-- GET  /tasks                列出已注册 commands
 
 终止判断：meta.status in (completed, failed) 且 events.jsonl 已读完 → 发 [DONE]。
 """
@@ -14,15 +14,15 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from sse_starlette.sse import EventSourceResponse
 
 from ncds_opus_factory.server.artifacts import extract_artifacts
-from ncds_opus_factory.server.command_schemas import get_schema
 from ncds_opus_factory.server.schemas import (
     TaskCreateRequest,
     TaskCreateResponse,
     TaskDetailResponse,
+    TaskMeta,
 )
 from ncds_opus_factory.server.state import RUNNER, STORE
 
@@ -31,37 +31,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/tasks")
-async def list_commands() -> dict[str, list[str]]:
-    """列出当前注册的所有 commands。"""
-    return {"commands": RUNNER.list_commands()}
+@router.get("/tasks", response_model=list[TaskMeta])
+async def list_tasks() -> list[TaskMeta]:
+    """列出所有任务实例（meta，最新在前）。命令清单见 GET /commands。"""
+    return STORE.list_tasks()
 
 
-@router.get("/tasks/{cmd}/schema")
-async def get_command_schema(cmd: str) -> dict:
-    """返回某命令的参数 schema（给移动端渲染输入表单）。"""
-    if cmd not in RUNNER.registry:
+@router.post("/tasks", response_model=TaskCreateResponse, status_code=201)
+async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreateResponse:
+    """提交一个任务，立即返回 task_id（任务后台异步执行）。
+
+    REST：201 Created + Location 头指向新建任务资源。
+    """
+    if body.cmd not in RUNNER.registry:
         raise HTTPException(
             status_code=404,
-            detail=f"unknown command: {cmd}. available: {RUNNER.list_commands()}",
+            detail=f"unknown command: {body.cmd}. available: {RUNNER.list_commands()}",
         )
-    schema = get_schema(cmd)
-    if schema is None:
-        # 命令已注册但还没登记 schema：返回空字段，前端可回退到原始 JSON 输入
-        return {"cmd": cmd, "label": cmd, "group": "primitive", "summary": "", "fields": []}
-    return {"cmd": cmd, **schema}
-
-
-@router.post("/tasks/{cmd}", response_model=TaskCreateResponse)
-async def create_task(cmd: str, body: TaskCreateRequest) -> TaskCreateResponse:
-    """提交一个任务，立即返回 task_id；任务后台异步执行。"""
-    if cmd not in RUNNER.registry:
-        raise HTTPException(
-            status_code=404,
-            detail=f"unknown command: {cmd}. available: {RUNNER.list_commands()}",
-        )
-    task_id = await RUNNER.submit(cmd, body.params)
-    logger.info("[server] task submitted: cmd=%s task_id=%s", cmd, task_id)
+    task_id = await RUNNER.submit(body.cmd, body.params)
+    response.headers["Location"] = f"/tasks/{task_id}"
+    logger.info("[server] task submitted: cmd=%s task_id=%s", body.cmd, task_id)
     return TaskCreateResponse(task_id=task_id, status="pending")
 
 

@@ -87,6 +87,21 @@ class TaskStore:
             return None
         return TaskMeta(**json.loads(path.read_text(encoding="utf-8")))
 
+    def list_tasks(self) -> list[TaskMeta]:
+        """列出所有任务实例的 meta，按 created_at 倒序（最新在前）。"""
+        metas: list[TaskMeta] = []
+        if not self.base_dir.exists():
+            return metas
+        for d in self.base_dir.iterdir():
+            if not d.is_dir() or not (d / "meta.json").exists():
+                continue
+            meta = self.get_meta(d.name)
+            if meta is not None:
+                metas.append(meta)
+        # created_at 是 ISO 时间串，字典序即时间序，倒排得最新在前
+        metas.sort(key=lambda m: m.created_at, reverse=True)
+        return metas
+
     def update_status(
         self,
         task_id: str,

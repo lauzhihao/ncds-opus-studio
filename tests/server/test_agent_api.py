@@ -1,9 +1,11 @@
-"""tests：6 个 agent 接进 HTTP API 后的注册 / schema / 产物详情。
+"""tests：6 个 agent 接进 HTTP API + REST 拆分（/commands 与 /tasks 分离）。
 
 覆盖：
     - COMMAND_REGISTRY 含 6 个 agent
-    - GET /tasks 列出它们
-    - GET /tasks/{cmd}/schema：liuyong 有 topic 必填字段；未知命令 404
+    - GET /commands 列出命令 catalog（含 6 agent + label/group）
+    - GET /commands/{cmd}/schema：liuyong 有 topic 必填字段；未知命令 404
+    - POST /tasks（body {cmd, params}）-> 201 + Location 头
+    - GET /tasks 列出任务实例（不是命令）
     - GET /tasks/{task_id}：完成态带 artifacts（用预置任务，不真跑 scodex/opus）
 """
 
@@ -23,10 +25,21 @@ def test_registry_has_agents():
     assert AGENTS <= set(COMMAND_REGISTRY)
 
 
-def test_schema_endpoint_liuyong():
+def test_commands_catalog_lists_agents():
     from ncds_opus_factory.server.app import app
     client = TestClient(app)
-    resp = client.get("/tasks/liuyong/schema")
+    resp = client.get("/commands")
+    assert resp.status_code == 200
+    items = {c["name"]: c for c in resp.json()["commands"]}
+    assert AGENTS <= set(items)
+    assert items["liuyong"]["group"] == "agent"
+    assert items["wst"]["group"] == "primitive"
+
+
+def test_command_schema_liuyong():
+    from ncds_opus_factory.server.app import app
+    client = TestClient(app)
+    resp = client.get("/commands/liuyong/schema")
     assert resp.status_code == 200
     data = resp.json()
     assert data["group"] == "agent"
@@ -34,17 +47,10 @@ def test_schema_endpoint_liuyong():
     assert topic["required"] is True
 
 
-def test_schema_endpoint_unknown_404():
+def test_command_schema_unknown_404():
     from ncds_opus_factory.server.app import app
     client = TestClient(app)
-    assert client.get("/tasks/nope_cmd/schema").status_code == 404
-
-
-def test_tasks_list_includes_agents():
-    from ncds_opus_factory.server.app import app
-    client = TestClient(app)
-    cmds = set(client.get("/tasks").json()["commands"])
-    assert AGENTS <= cmds
+    assert client.get("/commands/nope_cmd/schema").status_code == 404
 
 
 @pytest.fixture()
@@ -57,6 +63,8 @@ def seeded_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(art_mod)
     from ncds_opus_factory.server import state as state_mod
     importlib.reload(state_mod)
+    from ncds_opus_factory.server.routes import commands as commands_mod
+    importlib.reload(commands_mod)
     from ncds_opus_factory.server.routes import tasks as tasks_mod
     importlib.reload(tasks_mod)
     from ncds_opus_factory.server.routes import artifacts as art_routes
@@ -65,6 +73,33 @@ def seeded_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     importlib.reload(app_mod)
 
     return TestClient(app_mod.app), state_mod.STORE, tmp_path
+
+
+def test_create_task_returns_201_and_location(seeded_client, monkeypatch):
+    """POST /tasks 创建任务 -> 201 + Location；未知命令 404。"""
+    client, store, _ = seeded_client
+    # 注入一个秒回的 stub 命令，避免真跑下游(scodex/网络)；submit 阶段即返回 201
+    from ncds_opus_factory.server import state as state_mod
+    monkeypatch.setitem(state_mod.RUNNER.registry, "__stub__", lambda on_progress, **kw: {"ok": True})
+
+    resp = client.post("/tasks", json={"cmd": "__stub__", "params": {}})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert resp.headers["location"] == f"/tasks/{body['task_id']}"
+
+    assert client.post("/tasks", json={"cmd": "nope_cmd", "params": {}}).status_code == 404
+
+
+def test_list_tasks_returns_instances_not_commands(seeded_client):
+    """GET /tasks 列任务实例（带 task_id/cmd/status），不再是命令清单。"""
+    client, store, _ = seeded_client
+    m1 = store.create("guiguzi", {"benchmark_path": "x"})
+    m2 = store.create("liuyong", {"topic": "y"})
+    rows = client.get("/tasks").json()
+    ids = {r["task_id"] for r in rows}
+    assert {m1.task_id, m2.task_id} <= ids
+    assert all("status" in r and "cmd" in r for r in rows)
 
 
 def test_completed_task_exposes_artifacts(seeded_client):
