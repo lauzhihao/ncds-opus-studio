@@ -1,0 +1,88 @@
+{
+  "figures": [
+    {
+      "file": "figures/person_phone.png",
+      "keywords": [
+        "手机",
+        "分心",
+        "低头",
+        "沉迷",
+        "刷手机"
+      ],
+      "scene": [
+        "认知",
+        "职场"
+      ],
+      "concept": "低头看手机",
+      "w": 800,
+      "h": 800
+    },
+    {
+      "file": "figures/person_present.png",
+      "keywords": [
+        "讲解",
+        "表达",
+        "观点",
+        "说",
+        "告诉"
+      ],
+      "scene": [
+        "认知",
+        "职场"
+      ],
+      "concept": "站立讲解",
+      "w": 800,
+      "h": 800
+    },
+    {
+      "file": "figures/person_run.png",
+      "keywords": [
+        "行动",
+        "执行",
+        "开始",
+        "改变",
+        "出发"
+      ],
+      "scene": [
+        "成长",
+        "职场"
+      ],
+      "concept": "迈步向前",
+      "w": 800,
+      "h": 800
+    },
+    {
+      "file": "figures/person_think.png",
+      "keywords": [
+        "思考",
+        "纠结",
+        "疑问",
+        "权衡",
+        "犹豫"
+      ],
+      "scene": [
+        "认知"
+      ],
+      "concept": "托腮思考",
+      "w": 800,
+      "h": 800
+    },
+    {
+      "file": "figures/person_tired.png",
+      "keywords": [
+        "累",
+        "内耗",
+        "疲惫",
+        "压力",
+        "emo"
+      ],
+      "scene": [
+        "认知",
+        "职场"
+      ],
+      "concept": "低头疲惫",
+      "w": 800,
+      "h": 800
+    }
+  ]
+}

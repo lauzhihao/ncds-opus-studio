@@ -1,0 +1,79 @@
+/* figure_talk styles — 剪影成片版式
+ * 对仗 stickman 的 .rig-scene 版式(title/tag/stage/subtitle 的 cqw 布局),
+ * 但角色层从 svg-rig 骨骼换成实心剪影 <img> + Ken Burns(由 player.js 的 WAAPI 驱动)。
+ * 字体只用渲染环境已装的 Noto CJK,不依赖 CDN / 自定义字体(录屏不会录到 fallback 字形)。 */
+
+:root {
+  --ink: #15110d;
+  --paper: #f1e7d6;
+  --accent: #c4492a;
+  --muted: #8c7a60;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  width: 1920px; height: 1080px; overflow: hidden;
+  background: #efe9dd;
+  color: var(--ink);
+  font-family: "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-synthesis: none;
+}
+
+#stage { width: 1920px; height: 1080px; position: relative; }
+#stage > * { width: 100%; height: 100%; }
+body.ending #stage { opacity: 0; transition: opacity .4s; }
+
+/* 16:9 场景容器:用 container query 单位(cqw/cqh)做分辨率无关排版 */
+.fig-scene {
+  container-type: size;
+  position: relative; width: 100%; height: 100%;
+  background:
+    radial-gradient(120% 90% at 50% 0%, #fbf5ea, var(--paper)),
+    var(--paper);
+  overflow: hidden;
+}
+
+.fig-title {
+  position: absolute; left: 6cqw; top: 6cqh; width: 60cqw;  /* 留右上角给 tag */
+  font-size: 6.6cqw; font-weight: 900; line-height: 1.1; letter-spacing: .2cqw;
+}
+.fig-tag {
+  position: absolute; right: 6cqw; top: 6.5cqh;
+  font-size: 2.6cqw; font-weight: 700; color: var(--accent); white-space: nowrap;
+  border: 0.4cqw solid var(--accent); border-radius: 999px; padding: 0.6cqh 1.6cqw;
+}
+
+/* 主体剪影舞台:剪影底部对齐区域底边(站在字幕线之上),留出顶部标题区与底部字幕区 */
+.fig-stage {
+  position: absolute; left: 0; right: 0; top: 22cqh; bottom: 28cqh;
+  display: grid; place-items: end center;   /* 底对齐:剪影不下探进字幕 */
+}
+.fig-main {
+  height: 82%; width: auto; max-width: 56cqw; object-fit: contain;
+  transform-origin: center bottom;          /* Ken Burns 以底为基准缩放,只往上长不下溢 */
+  will-change: transform;
+}
+
+/* 图标飞入层:右上区竖排漂浮(对标号画面的「另一半」) */
+.fig-icons {
+  position: absolute; right: 6cqw; top: 27cqh;
+  display: flex; flex-direction: column; gap: 3cqh; align-items: center;
+  pointer-events: none;
+}
+.fig-icon { width: 9cqw; height: 9cqw; color: var(--ink); }
+.fig-icon svg { width: 100%; height: 100%; display: block; }
+
+/* 字幕:复刻 stickman —— 楷体/宋体 zh + 上分隔线 */
+.fig-subtitle {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 24cqh;
+  border-top: 0.4cqw solid currentColor;
+  display: flex; align-items: center; justify-content: center;
+  text-align: center; padding: 0 6cqw;
+}
+.fig-subtitle .zh {
+  font-family: "Noto Serif SC", "Noto Serif CJK SC", serif;
+  font-weight: 700; font-size: 4.6cqw; line-height: 1.15;
+}
