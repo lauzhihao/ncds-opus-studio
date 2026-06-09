@@ -11,7 +11,7 @@ import sys
 def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     if not args or args[0] in ("-h", "--help"):
-        print("usage: nof {wst|tst|vid|asr|rw|liuyong|guiguzi} [...args]")
+        print("usage: nof {wst|tst|vid|asr|rw|shenkuo|guiguzi|liuyong|wudaozi|boya} [...args]")
         return 0
     cmd, rest = args[0], args[1:]
     if cmd == "wst":
@@ -35,6 +35,15 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "guiguzi":
         from ncds_opus_factory.commands import guiguzi
         return guiguzi._cli(rest)
+    if cmd == "shenkuo":
+        from ncds_opus_factory.commands import shenkuo
+        return shenkuo._cli(rest)
+    if cmd == "wudaozi":
+        from ncds_opus_factory.commands import wudaozi
+        return wudaozi._cli(rest)
+    if cmd == "boya":
+        from ncds_opus_factory.commands import boya
+        return boya._cli(rest)
     print(f"unknown command: {cmd}", file=sys.stderr)
     return 2
 

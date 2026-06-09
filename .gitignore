@@ -22,3 +22,13 @@ web/vite.config.js
 /.claude/skills/
 /skills-lock.json
 /skills/dbs*
+
+# 本地音源库（伯牙素材）：音频文件由库主维护、版权自负，不入库；只留结构 + README + library.json
+/assets/audio_lib/bgm/*
+/assets/audio_lib/sfx/*
+!/assets/audio_lib/bgm/.gitkeep
+!/assets/audio_lib/sfx/.gitkeep
+
+# 本地剪影库（吴道子素材）：图片由库主维护、版权自负，不入库；只留结构 + README + library.json
+/assets/figure_lib/figures/*
+!/assets/figure_lib/figures/.gitkeep
