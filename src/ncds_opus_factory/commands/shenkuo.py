@@ -24,11 +24,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ncds_opus_factory.common import tikhub_client
+from ncds_opus_factory.common import benchmark_store, tikhub_client
 
 ROOT = Path(__file__).resolve().parents[3]
 BENCH = ROOT / "state" / "benchmark"
 COLLECTED = ROOT / "state" / "figure_collected"
+BENCH_DB = ROOT / "state" / "shenkuo" / "benchmark.db"  # 指标层 SQLite(时间序列)
 TINGWU_DIR = ROOT / "skills" / "tingwu-asr" / "scripts"
 MAIN_ENV = Path("/root/projects/ncds-opus-studio/.env")  # worktree 无 .env,DASHSCOPE key 在主仓库
 
@@ -79,26 +80,72 @@ def _transcribe(video_path: Path, on_progress: ProgressFn) -> tuple[dict | None,
 
 
 # --------------------------------------------------------------------------- #
-# 截帧(ffmpeg 场景切变,失败回退均匀抽)
+# 截帧:静止帧检测 —— 只采「动画演完的稳定构图」
 # --------------------------------------------------------------------------- #
-def _extract_frames(video_path: Path, out_dir: Path, max_frames: int = 8) -> list[Path]:
+def _extract_frames(
+    video_path: Path, out_dir: Path, max_frames: int = 8,
+    sample_s: float = 0.3, still_th: float = 2.0, min_still: int = 2,
+) -> list[Path]:
+    """采画面停留段的「最终静止帧」,不取 scene 切变的过渡帧。
+
+    沈括只采静态素材(动效由下游 figure_talk 渲染时后期加);scene 切变帧是元素正飞入/移动的
+    过渡瞬间,抠图会带灰边残影。这里按帧差分找「画面停住」的连续段(diff<still_th 且时长>=min_still),
+    取每段末帧(动画完全演完的干净构图),段间再按相似度去重,超量则均匀取。
+    """
+    import cv2
+    import numpy as np
+
     out_dir.mkdir(parents=True, exist_ok=True)
-    pat = str(out_dir / "frame_%03d.jpg")
-    # 先按场景切变取「内容变化点」,更可能抓到不同素材
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path),
-         "-vf", "select='gt(scene,0.3)',scale=720:-1", "-vsync", "vfr",
-         "-frames:v", str(max_frames), pat],
-        check=False,
-    )
-    frames = sorted(out_dir.glob("frame_*.jpg"))
-    if not frames:  # 回退:每 3 秒一帧
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path),
-             "-vf", "fps=1/3,scale=720:-1", "-frames:v", str(max_frames), pat],
-            check=False,
-        )
-        frames = sorted(out_dir.glob("frame_*.jpg"))
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    step = max(1, int(fps * sample_s))
+    samples: list = []  # [(bgr 原帧, 灰度小图)]
+    i = 0
+    while True:
+        ret, fr = cap.read()
+        if not ret:
+            break
+        if i % step == 0:
+            g = cv2.resize(cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY), (160, 120)).astype(np.int16)
+            samples.append((fr, g))
+        i += 1
+    cap.release()
+    if not samples:
+        return []
+
+    diffs = [0.0] + [float(np.mean(np.abs(samples[k][1] - samples[k - 1][1]))) for k in range(1, len(samples))]
+    # 连续静止段(diff<still_th 且段长>=min_still),取段末帧=动画演完的最终静态构图
+    segs: list[list[int]] = []
+    cur: list[int] = []
+    for k in range(len(samples)):
+        if diffs[k] < still_th:
+            cur.append(k)
+        else:
+            if len(cur) >= min_still:
+                segs.append(cur)
+            cur = []
+    if len(cur) >= min_still:
+        segs.append(cur)
+
+    reps: list[int] = []
+    prev = None
+    for seg in segs:
+        r = seg[-1]
+        g = samples[r][1]
+        if prev is not None and float(np.mean(np.abs(g - prev))) < still_th:
+            continue  # 与上一张几乎相同 -> 去重
+        prev = g
+        reps.append(r)
+
+    if len(reps) > max_frames:  # 超量则均匀取
+        sel = np.linspace(0, len(reps) - 1, max_frames).astype(int)
+        reps = [reps[j] for j in sel]
+
+    frames: list[Path] = []
+    for n, r in enumerate(reps, 1):
+        fp = out_dir / f"frame_{n:03d}.jpg"
+        cv2.imwrite(str(fp), samples[r][0])
+        frames.append(fp)
     return frames
 
 
@@ -169,7 +216,8 @@ def _cutout(frames: list[Path], out_dir: Path, engine: str = "threshold", crop: 
 # --------------------------------------------------------------------------- #
 def collect_one(
     aweme_id: str, author_dir: Path, meta: dict | None = None,
-    max_frames: int = 8, engine: str = "threshold", on_progress: ProgressFn = _noop,
+    max_frames: int = 8, engine: str = "threshold", top_comments: int = 20,
+    on_progress: ProgressFn = _noop,
 ) -> dict[str, Any]:
     meta = meta or {}
     entry: dict[str, Any] = {
@@ -239,6 +287,26 @@ def collect_one(
             on_progress(f"[{aweme_id}] 抠图异常: {type(e).__name__}: {e}")
             entry["status"]["cutout"] = f"error:{type(e).__name__}"
     entry["cutouts"] = [_rel(c) for c in cutouts]
+
+    # 5. 采集 top 赞评论(热门序 + 早停,几次调用即可锁定;评论是受众反馈,喂对标拆解)
+    if top_comments > 0:
+        comments_path = author_dir / f"{aweme_id}.comments.json"
+        if comments_path.exists():
+            on_progress(f"[{aweme_id}] 评论已存在,跳过")
+            entry["status"]["comments"] = "cached"
+        else:
+            try:
+                rows = tikhub_client.fetch_top_comments(aweme_id, top_n=top_comments, on_progress=on_progress)
+                comments_path.write_text(json.dumps(
+                    {"aweme_id": aweme_id, "generated_at": int(time.time()), "top_n": top_comments, "items": rows},
+                    ensure_ascii=False, indent=2), encoding="utf-8")
+                on_progress(f"[{aweme_id}] top {len(rows)} 评论已落盘")
+                entry["status"]["comments"] = "ok"
+            except Exception as e:  # noqa: BLE001 — 单条评论失败不拖垮整批
+                on_progress(f"[{aweme_id}] 评论采集异常: {type(e).__name__}: {e}")
+                entry["status"]["comments"] = f"error:{type(e).__name__}"
+        if comments_path.exists():
+            entry["comments"] = _rel(comments_path)
     return entry
 
 
@@ -259,10 +327,13 @@ def run(
     max_frames: int = 8,
     engine: str = "threshold",
     max_posts: int | None = None,
+    top_comments: int = 20,
+    refresh_only: bool = False,
     on_progress: ProgressFn = _noop,
 ) -> dict[str, Any]:
     """采集一个对标号(--author sec_uid)的 top 高赞作品,或单条(--aweme)。
 
+    refresh_only=True 时只跑"拉列表 -> 写指标层(SQLite 时间序列)",跳过深采,给高频 cron 用。
     返回 {author_dir, all_posts?, collected:[entry...]}(同时落 all_posts.json + collected.json)。
     """
     if not author and not aweme:
@@ -273,21 +344,35 @@ def run(
         author_dir = BENCH / "adhoc"
         author_dir.mkdir(parents=True, exist_ok=True)
         on_progress(f"沈括: 单条采集 {aweme}")
-        entry = collect_one(aweme, author_dir, max_frames=max_frames, engine=engine, on_progress=on_progress)
+        entry = collect_one(aweme, author_dir, max_frames=max_frames, engine=engine,
+                            top_comments=top_comments, on_progress=on_progress)
         _write_collected(author_dir, [entry])
         on_progress(f"沈括完成: {author_dir}")
         return {"author_dir": str(author_dir), "collected": [entry]}
 
-    # 作者模式:拉作品列表 -> 选高赞 top -> 逐条采集
+    # 作者模式:拉作品列表 -> 写指标层 -> (refresh_only 止步) -> 选高赞 top -> 逐条采集
     author_dir = BENCH / f"author_{author}"
     author_dir.mkdir(parents=True, exist_ok=True)
     on_progress(f"沈括启动: 拉作者作品(sec_uid={author[:16]}...)")
-    posts = tikhub_client.fetch_user_posts(
-        author, max_items=max_posts or max(top * 2, 30), on_progress=on_progress
-    )
+    # refresh-only 要广覆盖(更新历史作品指标),默认拉更多;深采模式只需够挑 top
+    pull_n = max_posts or (200 if refresh_only else max(top * 2, 30))
+    posts = tikhub_client.fetch_user_posts(author, max_items=pull_n, on_progress=on_progress)
     (author_dir / "all_posts.json").write_text(
         json.dumps(posts, ensure_ascii=False, indent=2), encoding="utf-8")
     on_progress(f"拉到 {len(posts)} 条作品,落 all_posts.json")
+
+    # 指标层:写身份 + 追加变化的快照(时间序列)
+    ts = int(time.time())
+    conn = benchmark_store.connect(BENCH_DB)
+    try:
+        stat = benchmark_store.record_refresh(conn, author, posts, ts)
+    finally:
+        conn.close()
+    on_progress(f"指标层: 作品 {stat['posts']} 条,新增快照 {stat['snapshots']} 条 -> {_rel(BENCH_DB)}")
+
+    if refresh_only:
+        on_progress("refresh-only: 跳过深采")
+        return {"author_dir": str(author_dir), "all_posts": len(posts), "collected": [], "snapshots": stat["snapshots"]}
 
     posts.sort(key=lambda p: p.get("digg", 0), reverse=True)
     chosen = posts[:top]
@@ -295,7 +380,8 @@ def run(
     for i, p in enumerate(chosen, 1):
         on_progress(f"=== 采集 {i}/{len(chosen)}: {p['aweme_id']} ({p.get('digg')}赞) ===")
         try:
-            entry = collect_one(p["aweme_id"], author_dir, meta=p, max_frames=max_frames, engine=engine, on_progress=on_progress)
+            entry = collect_one(p["aweme_id"], author_dir, meta=p, max_frames=max_frames, engine=engine,
+                                top_comments=top_comments, on_progress=on_progress)
         except Exception as e:  # noqa: BLE001 — 单条失败不拖垮整批
             on_progress(f"  采集异常: {type(e).__name__}: {e}")
             entry = {"aweme_id": p["aweme_id"], "status": {"error": str(e)}}
@@ -315,6 +401,9 @@ def _cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--engine", default="threshold", choices=["threshold", "rembg"],
                         help="抠图引擎:threshold(默认,简笔画矢量级)/rembg(彩色照片类备选)")
     parser.add_argument("--max-posts", type=int, default=None, help="作者模式:拉作品列表上限")
+    parser.add_argument("--top-comments", type=int, default=20, help="每条采集高赞评论数(0=不采)")
+    parser.add_argument("--refresh-only", action="store_true",
+                        help="只拉列表+写指标层(SQLite 时间序列),跳过深采(高频 cron 用)")
     args = parser.parse_args(argv)
 
     def on_progress(text: str) -> None:
@@ -322,7 +411,9 @@ def _cli(argv: list[str] | None = None) -> int:
 
     result = run(
         author=args.author, aweme=args.aweme, top=args.top,
-        max_frames=args.frames, max_posts=args.max_posts, on_progress=on_progress,
+        max_frames=args.frames, max_posts=args.max_posts,
+        top_comments=args.top_comments, refresh_only=args.refresh_only,
+        on_progress=on_progress,
     )
     print(json.dumps({
         "author_dir": result["author_dir"],

@@ -131,6 +131,7 @@ def test_collect_one_fresh(tmp_path, monkeypatch):
 def test_run_author_picks_top_by_digg(tmp_path, monkeypatch):
     monkeypatch.setattr(shenkuo, "BENCH", tmp_path / "benchmark")
     monkeypatch.setattr(shenkuo, "COLLECTED", tmp_path / "collected")
+    monkeypatch.setattr(shenkuo, "BENCH_DB", tmp_path / "shenkuo" / "benchmark.db")
     posts = [
         {"aweme_id": "1", "desc": "a", "digg": 10},
         {"aweme_id": "2", "desc": "b", "digg": 99},
@@ -140,7 +141,8 @@ def test_run_author_picks_top_by_digg(tmp_path, monkeypatch):
                         lambda sec, max_items, on_progress=None: posts)
     seen: list[str] = []
 
-    def fake_collect(aid, ad, meta=None, max_frames=8, engine="threshold", on_progress=shenkuo._noop):
+    def fake_collect(aid, ad, meta=None, max_frames=8, engine="threshold",
+                     top_comments=20, on_progress=shenkuo._noop):
         seen.append(aid)
         return {"aweme_id": aid, "digg": (meta or {}).get("digg"), "status": {"download": "ok"}}
 

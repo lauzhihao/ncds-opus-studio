@@ -26,6 +26,9 @@ DOWNLOAD_RETRIES = 3
 API_BASE = "https://api.tikhub.io/api/v1/douyin/web"
 ONE_VIDEO_URL = f"{API_BASE}/fetch_one_video"
 USER_POSTS_URL = f"{API_BASE}/fetch_user_post_videos"
+# 评论接口走 app/v3(与上面的 web base 不同);实测每页硬上限 20 条,count 调大无效
+COMMENTS_URL = "https://api.tikhub.io/api/v1/douyin/app/v3/fetch_video_comments"
+COMMENTS_PAGE_SIZE = 20
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -148,3 +151,80 @@ def download_video(url: str, output_path: str | Path, max_retries: int = DOWNLOA
                 break
             time.sleep(min(attempt, 3))
     raise last_error  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# 评论:拉 TOP 赞评论(热门序 + 早停,避免在爆款上翻全量)
+# --------------------------------------------------------------------------- #
+def fetch_comments_page(
+    aweme_id: str, cursor: int = 0, count: int = COMMENTS_PAGE_SIZE, token: str | None = None
+) -> tuple[list[dict], int, bool, int]:
+    """拉一页评论。返回 (comments 原始, next_cursor, has_more, total)。"""
+    token = get_token(token)
+    params = {"aweme_id": aweme_id, "cursor": cursor, "count": count}
+    resp = requests.get(
+        COMMENTS_URL, headers=_headers(token), params=params, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    d = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+    d = d or {}
+    comments = d.get("comments") or []
+    next_cursor = int(d.get("cursor") or 0)
+    has_more = bool(d.get("has_more"))
+    total = int(d.get("total") or 0)
+    return comments, next_cursor, has_more, total
+
+
+def simplify_comment(c: dict) -> dict[str, Any]:
+    """TikHub 评论 -> 精简条目。"""
+    u = c.get("user") or {}
+    return {
+        "cid": str(c.get("cid") or ""),
+        "nickname": u.get("nickname") or "",
+        "text": c.get("text") or "",
+        "digg": c.get("digg_count", 0),
+        "reply": c.get("reply_comment_total", 0),
+        "ip": c.get("ip_label") or "",
+        "create": c.get("create_time", 0),
+    }
+
+
+def fetch_top_comments(
+    aweme_id: str,
+    top_n: int = 5,
+    max_pages: int = 5,
+    token: str | None = None,
+    on_progress: ProgressFn | None = None,
+) -> list[dict[str, Any]]:
+    """拉点赞 TOP N 评论。
+
+    抖音评论接口默认就是「热门序」(点赞+回复加权),高赞评论天然堆在最前面;
+    所以不必在爆款(可能几十万条)上翻全量 —— 翻几页 + 早停即可锁定 TOP N。
+
+    早停条件:已收集 >= top_n 条,且本页最高赞低于当前 TOP N 门槛 —— 后面的页
+    不可能再翻盘进榜。该策略是启发式(非严格全局排序),对「找高赞评论」足够。
+    """
+    token = get_token(token)
+    collected: list[dict[str, Any]] = []
+    cursor, page = 0, 0
+    while page < max_pages:
+        comments, cursor, has_more, total = fetch_comments_page(aweme_id, cursor, COMMENTS_PAGE_SIZE, token)
+        page += 1
+        if not comments:
+            break
+        page_max = max((c.get("digg_count", 0) for c in comments), default=0)
+        collected.extend(simplify_comment(c) for c in comments)
+        if on_progress:
+            on_progress(f"第 {page} 页,累计 {len(collected)} 条(评论区共约 {total} 条),本页最高赞 {page_max}")
+        if not has_more:
+            break
+        # 早停:已凑满 top_n 且本页最高赞低于当前 TOP N 门槛
+        threshold = sorted((c["digg"] for c in collected), reverse=True)[:top_n]
+        if len(threshold) == top_n and page_max < threshold[-1]:
+            if on_progress:
+                on_progress(f"早停:本页最高赞 {page_max} 低于 TOP{top_n} 门槛 {threshold[-1]}")
+            break
+        time.sleep(0.3)
+    collected.sort(key=lambda c: c["digg"], reverse=True)
+    return collected[:top_n]
