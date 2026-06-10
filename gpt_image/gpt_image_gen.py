@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 
 DEFAULT_MODEL = "gpt-image-2"
-DEFAULT_TIMEOUT_SECONDS = 600
+DEFAULT_TIMEOUT_SECONDS = 180
 DEFAULT_OUTPUT_ROOT = Path("/tmp/gpt-image")
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -27,9 +27,46 @@ DEFAULT_USER_AGENT = (
 )
 
 
+# 502 时按顺序换模型重试：1k 先行，再 2k，再 4k，全失败才报错。
+RETRY_MODELS = ["gpt-image-2", "gpt-image-2k", "gpt-image-2-4k"]
+RETRY_HTTP_STATUS = 502
+
+# model 与分辨率档位强绑定（文档要求随 model 一起发 image_resolutic）。
+MODEL_RESOLUTION = {
+    "gpt-image-2": "1k",
+    "gpt-image-2k": "2k",
+    "gpt-image-2-4k": "4k",
+}
+DEFAULT_RESOLUTION = "1k"
+DEFAULT_SIZE = "1:1"
+
+
+def resolution_for_model(model: str) -> str:
+    # 未知 model 回退到 1k，避免漏发字段导致请求被拒。
+    return MODEL_RESOLUTION.get(model, DEFAULT_RESOLUTION)
+
+
+class ApiHttpError(Exception):
+    """携带 HTTP 状态码的 API 错误，供上层判断是否换模型重试。"""
+
+    def __init__(self, code: int, body: str) -> None:
+        super().__init__(f"HTTP {code}: {body}")
+        self.code = code
+        self.body = body
+
+
 def fail(message: str, code: int = 1) -> None:
     print(message, file=sys.stderr)
     raise SystemExit(code)
+
+
+def build_model_attempt_order(requested: str) -> List[str]:
+    # 先尝试请求指定的模型，再按 RETRY_MODELS 顺序补齐其余候选。
+    order = [requested]
+    for model in RETRY_MODELS:
+        if model not in order:
+            order.append(model)
+    return order
 
 
 def ensure_env(name: str) -> str:
@@ -142,8 +179,7 @@ def request_image_generation(
     prompt: str,
     model: str,
     timeout_seconds: int,
-    size: str = "auto",
-    quality: str = "auto",
+    size: str = DEFAULT_SIZE,
     n: int = 1,
 ) -> Dict[str, Any]:
     request_url = f"{base_url}/images/generations"
@@ -152,7 +188,8 @@ def request_image_generation(
         "prompt": prompt,
         "n": n,
         "size": size,
-        "quality": quality,
+        # 分辨率档位随 model 绑定下发，换模型重试时一起切换。
+        "image_resolutic": resolution_for_model(model),
     }
     request_body = json.dumps(payload).encode("utf-8")
 
@@ -166,7 +203,7 @@ def request_image_generation(
         method="POST",
         headers={
             "Content-Type": "application/json; charset=utf-8",
-            "x-api-key": api_key,
+            "Authorization": f"Bearer {api_key}",
             "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "application/json",
             "Origin": origin,
@@ -180,7 +217,8 @@ def request_image_generation(
             return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         err_body = exc.read().decode("utf-8", errors="replace")
-        fail(f"Image generation API failed with HTTP {exc.code}: {err_body or exc.reason}")
+        # 抛出带状态码的异常，由 main 决定是否换模型重试。
+        raise ApiHttpError(exc.code, err_body or exc.reason)
     except urllib.error.URLError as exc:
         fail(f"Image generation API request failed: {exc.reason}")
     return {}
@@ -196,7 +234,7 @@ def print_debug_curl(
         f"  {shlex.quote(request_url)} \\",
         "  -X POST \\",
         "  -H 'Content-Type: application/json; charset=utf-8' \\",
-        "  -H 'x-api-key: REDACTED' \\",
+        "  -H 'Authorization: Bearer REDACTED' \\",
         f"  -H {shlex.quote(f'User-Agent: {DEFAULT_USER_AGENT}')} \\",
         f"  --data-raw {shlex.quote(json.dumps(payload, ensure_ascii=False))}",
     ]
@@ -267,9 +305,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-file", help="Read prompt text from a file.")
     parser.add_argument("--out-dir", help="Output directory.")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Model name. Default: {DEFAULT_MODEL}")
-    parser.add_argument("--size", default="auto", help="Output size. Default: auto")
-    parser.add_argument("--quality", default="auto", help="Output quality. Default: auto")
-    parser.add_argument("--n", type=int, default=1, help="Number of images. Default: 1")
+    parser.add_argument(
+        "--size",
+        default=DEFAULT_SIZE,
+        help=f"Aspect ratio (1:1/3:2/2:3/16:9/21:9/9:16/4:3/3:4). Default: {DEFAULT_SIZE}",
+    )
+    parser.add_argument("--n", type=int, default=1, help="Number of images (1-4). Default: 1")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -289,18 +330,34 @@ def main() -> None:
 
     base_url = ensure_env("GPT_IMAGE2_BASE_URL").rstrip("/")
     api_key = ensure_env("GPT_IMAGE2_API_KEY")
+    # 文档限制 n ∈ [1, 4]，越界直接钳制避免被服务端拒绝。
+    n = max(1, min(4, args.n))
     output_dir = resolve_output_dir(args.out_dir)
 
-    response = request_image_generation(
-        base_url=base_url,
-        api_key=api_key,
-        prompt=prompt,
-        model=args.model,
-        timeout_seconds=args.timeout,
-        size=args.size,
-        quality=args.quality,
-        n=args.n,
-    )
+    response: Dict[str, Any] = {}
+    attempts = build_model_attempt_order(args.model)
+    for index, model in enumerate(attempts):
+        is_last = index == len(attempts) - 1
+        try:
+            response = request_image_generation(
+                base_url=base_url,
+                api_key=api_key,
+                prompt=prompt,
+                model=model,
+                timeout_seconds=args.timeout,
+                size=args.size,
+                n=n,
+            )
+            break
+        except ApiHttpError as exc:
+            # 仅 502 触发换模型；其它状态码或已是最后候选则直接失败。
+            if exc.code == RETRY_HTTP_STATUS and not is_last:
+                print(
+                    f"Model {model} returned HTTP {exc.code}; retrying with {attempts[index + 1]}.",
+                    file=sys.stderr,
+                )
+                continue
+            fail(f"Image generation API failed with HTTP {exc.code}: {exc.body}")
 
     saved_images = save_images_from_response(response, output_dir, args.overwrite)
 

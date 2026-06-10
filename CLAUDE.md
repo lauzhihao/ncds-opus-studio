@@ -1,5 +1,5 @@
 # Role & Objective
-You are a **Senior Engineer**, responsible for maintaining and extending **ncds-opus-factory** —— 一个由 5 个独立命令组成的内容生产引擎（文生图 / 图生图 / 视频生成 / 多链路转写 / 双模型改写），加一套可复用的视频素材模板。
+You are a **Senior Engineer**, responsible for maintaining and extending **ncds-opus-factory** —— 一个内容生产引擎：5 个 CLI 命令（文生图 / 图生图 / 视频生成 / 多链路转写 / 双模型改写）+ server 侧 tts / render 命令，通过 FastAPI server（:8810）暴露为异步任务，带 `/studio` Web 前端和多套可复用视频模板。
 **CORE CONSTRAINT**: 按 Part 2 执行协议分级处理 —— 大改先对齐，小改直做，不自作主张扩大范围。
 
 # Part 0: Communication Protocol (CRITICAL)
@@ -28,14 +28,16 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 - **Secrets**: NEVER hardcode API keys. Use `.env` files for secrets management（见 `.env.example`）。
 
 ## 2. Repository Context & Boundaries
-本仓库 = **5 个独立命令 + 视频模板**。所有飞书 IO 都由调用方走 `lark-cli`，**本项目代码不直接调任何 `open.feishu.cn` 端点**（README "设计原则" 第 1 条）。
+本仓库 = **命令引擎 + HTTP server（含 `/studio` 前端）+ 视频模板**。所有飞书 IO 都由调用方走 `lark-cli`，**本项目代码不直接调任何 `open.feishu.cn` 端点**（README "设计原则" 第 1 条）。
 
 | 层级 | 位置 | 职责 |
 |---|---|---|
 | 统一 CLI 入口 | `src/ncds_opus_factory/cli.py`, `__main__.py` | `python -m ncds_opus_factory {wst\|tst\|vid\|asr\|rw}` 分发到子命令 |
-| 5 个命令 | `src/ncds_opus_factory/commands/{wst,tst,vid,asr,rw}.py` | 每个文件是一个 Python 薄包装：解析参数 + 调下游 |
+| 命令实现 | `src/ncds_opus_factory/commands/{wst,tst,vid,asr,rw,tts,render,render_015}.py` | 每个文件是一个 Python 薄包装：解析参数 + 调下游。前 5 个走 CLI 分发；`tts` / `render*` 仅通过 server 暴露 |
+| HTTP server | `src/ncds_opus_factory/server/` | FastAPI（:8810，`nof-server`）：commands 暴露为异步任务 + SSE；jobs / pipelines / preview / mock 路由；挂载 `/studio` SPA（见 Part 1 §9） |
+| Studio 前端 | `web/` | React + Vite SPA；dev 走 vite :5173 反代，prod 构建产物 `web/dist` 由 server 挂到 `/studio` |
 | 公共工具 | `src/ncds_opus_factory/common/` | `public_upload.py`（媒体上公网）/ `lark_cli.py`（lark-cli 子进程封装） |
-| 视频模板 | `src/ncds_opus_factory/templates/paper_card_talk/` | 009 风格 beats.js 驱动 + AI 管线 |
+| 视频模板 | `src/ncds_opus_factory/templates/` | `paper_card_talk`（009 风格 beats.js 驱动 + AI 管线）/ `paper_card_talk_015`（当前主用）/ `reading_confidence` |
 | Node runners | `scripts/*.mjs` | `/asr` `/rw` 由 Python 命令 spawn 出来的 Node runner（如 `asr_command_runner.mjs`, `rewrite_command_runner.mjs`, `video_job_worker.mjs`） |
 | gpt-image 网关 | `gpt_image/generate.py`, `generate_edit.py` | `/wst` `/tst` 的底层 OpenAI gpt-image-2 调用 |
 | Pipelines | `pipelines/douyin_processing/` | 抖音下载 + ASR pipeline（被 `/asr` 调用） |
@@ -114,6 +116,19 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
   ```
 - 日志位置：`state/map_watchdog.{out,err}.log`。PID / 锁文件：`state/map_project_watchdog.{pid,lock}`（gitignored，因 `state/` 已忽略）。
 - **如果你看到 `.project_map` 时间戳比 `src/` 下任何源文件都旧**：看门狗很可能没在跑，先 `./scripts/install_map_watchdog.sh status`，再决定是否手动 `python3 scripts/map_project.py` 一次。
+
+## 9. 本地运行环境（venv / nof-server / studio 前端）
+- **`.venv` 是 uv 管理的 Python 3.12，没有自带 pip**。装包必须用：
+  ```bash
+  uv pip install --python .venv/bin/python3 <pkg>
+  ```
+  **不要**用全局 pip，也不要假设 `.venv/bin/pip` 存在（历史上曾有 3.13 残留 pip 把包静默装进 `lib/python3.13/site-packages`，运行时 import 不到，2026-06 已清理；如再看到 `.venv/lib/python3.13/` 说明又被污染了，直接删）。
+- **后端**：`nof-server` 起 FastAPI，默认 `0.0.0.0:8810`（`NOF_SERVER_HOST` / `NOF_SERVER_PORT` 可覆盖）。
+- **`/studio` 前端**（`web/`，React + Vite，挂在 8810 同源路径下），两种模式：
+  - dev：`cd web && npm run dev`（vite :5173）+ `NOF_DEV=1 nof-server`，访问 `http://localhost:8810/studio`，HMR WebSocket 同走 8810 反代（依赖 `httpx` + `websockets`，已声明在 pyproject）。
+  - prod：`cd web && npm run build` 生成 `web/dist`，再起 `nof-server`。
+  - **`/studio` 是否挂载在 server import 时就定死**：没设 `NOF_DEV=1` 且 `web/dist` 不存在 → `/studio` 404；补构建后必须重启 server 才生效。
+- 前端 API 全部走同源相对路径（`/jobs` `/pipelines` `/tasks` `/preview`），不需要任何跨域 / baseUrl 配置。
 
 # Part 2: 执行协议
 

@@ -89,7 +89,7 @@ PIPELINE = PipelineDef(
             cmd="wst",
             deps=("tts",),
             out_dir="03_image",
-            description="GPT-IMAGE-2 文/图生图",
+            description="高保真图像生成",
             position=NodePosition(0, 840),
         ),
         PipelineNode(

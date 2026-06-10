@@ -1911,11 +1911,12 @@ def _polish_transcript_with_opus(
 #   - scodex  : `scodex launch -- ...` 透传到 codex CLI（GPT-5.5）
 #   - gemini  : `~/.gemini/g.sh` —— 本机未安装则直接标"模型不可用"
 #   - deepseek: HTTP POST 到 deepseek API —— 需 DEEPSEEK_API_KEY，未设则标"模型不可用"
+# label 仅作展示兜底（前端 MODEL_LABELS 优先）；runner/model 是真实调用，保持不动。
 MODEL_CANDIDATES: list[dict[str, str]] = [
-    {"id": "opus",         "label": "Claude Opus 4.7",   "runner": "opus",         "model": "claude-opus-4-7"},
-    {"id": "gpt5",         "label": "GPT-5.5",           "runner": "scodex",       "model": "gpt-5.5"},
-    {"id": "gemini_local", "label": "GEMINI-3.5 FLASH",  "runner": "gemini_local", "model": ""},
-    {"id": "deepseek",     "label": "DeepSeek V4 Pro",   "runner": "deepseek",     "model": "deepseek-v4-pro"},
+    {"id": "opus",         "label": "改写方案 A",  "runner": "opus",         "model": "claude-opus-4-7"},
+    {"id": "gpt5",         "label": "改写方案 B",  "runner": "scodex",       "model": "gpt-5.5"},
+    {"id": "gemini_local", "label": "改写方案 C",  "runner": "gemini_local", "model": ""},
+    {"id": "deepseek",     "label": "改写方案 D",  "runner": "deepseek",     "model": "deepseek-v4-pro"},
 ]
 
 

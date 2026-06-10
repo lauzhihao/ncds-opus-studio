@@ -21,6 +21,9 @@ dependencies = [
     "pydantic>=2",
     # .env 加载（仓库根 .env，server 启动时优先于其它 import 触发）
     "python-dotenv>=1.0",
+    # NOF_DEV=1 时 server/dev_proxy.py 反代 vite 需要（HTTP + HMR WebSocket）
+    "httpx>=0.27",
+    "websockets>=12",
 ]
 
 [project.scripts]

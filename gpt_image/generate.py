@@ -25,6 +25,7 @@ def fail(message: str, code: int = 1) -> None:
 
 def redact(text: str) -> str:
     text = re.sub(r"(x-api-key:\s*)[^\s'\"\\]+", r"\1REDACTED", text, flags=re.I)
+    text = re.sub(r"(Authorization:\s*Bearer\s+)[^\s'\"\\]+", r"\1REDACTED", text, flags=re.I)
     text = re.sub(r"(-u\s+)[^\s]+", r"\1REDACTED", text)
     text = re.sub(r"(token\s*[:=]\s*)[^\s]+", r"\1REDACTED", text, flags=re.I)
     return text
@@ -75,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", help="Prompt text.")
     parser.add_argument("--prompt-file", help="Read prompt text from a file.")
     parser.add_argument("--out-dir", help="Directory for generated files.")
-    parser.add_argument("--timeout", type=int, default=600, help="Image generation timeout in seconds.")
+    parser.add_argument("--timeout", type=int, default=180, help="Image generation timeout in seconds.")
     return parser.parse_args()
 
 

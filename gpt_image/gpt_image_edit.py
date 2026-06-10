@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 DEFAULT_MODEL = "gpt-image-2"
-DEFAULT_TIMEOUT_SECONDS = 600
+DEFAULT_TIMEOUT_SECONDS = 180
 DEFAULT_OUTPUT_ROOT = Path("/tmp/gpt-image-edit")
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -29,9 +29,32 @@ DEFAULT_USER_AGENT = (
 )
 
 
+# 502 时按顺序换模型重试：裸名先行，再 2k，再 4k，全失败才报错。
+RETRY_MODELS = ["gpt-image-2", "gpt-image-2-2k", "gpt-image-2-4k"]
+RETRY_HTTP_STATUS = 502
+
+
+class ApiHttpError(Exception):
+    """携带 HTTP 状态码的 API 错误，供上层判断是否换模型重试。"""
+
+    def __init__(self, code: int, body: str) -> None:
+        super().__init__(f"HTTP {code}: {body}")
+        self.code = code
+        self.body = body
+
+
 def fail(message: str, code: int = 1) -> None:
     print(message, file=sys.stderr)
     raise SystemExit(code)
+
+
+def build_model_attempt_order(requested: str) -> List[str]:
+    # 先尝试请求指定的模型，再按 RETRY_MODELS 顺序补齐其余候选。
+    order = [requested]
+    for model in RETRY_MODELS:
+        if model not in order:
+            order.append(model)
+    return order
 
 
 def ensure_env(name: str) -> str:
@@ -234,7 +257,8 @@ def request_image_edit(
             return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         err_body = exc.read().decode("utf-8", errors="replace")
-        fail(f"Image edit API failed with HTTP {exc.code}: {err_body or exc.reason}")
+        # 抛出带状态码的异常，由 main 决定是否换模型重试。
+        raise ApiHttpError(exc.code, err_body or exc.reason)
     except urllib.error.URLError as exc:
         fail(f"Image edit API request failed: {exc.reason}")
     return {}
@@ -375,18 +399,33 @@ def main() -> None:
         else:
             raw_images.append(Path(args.mask).expanduser().resolve())
 
-    response = request_image_edit(
-        base_url=base_url,
-        api_key=api_key,
-        prompt=prompt,
-        image_file=image_file,
-        model=args.model,
-        timeout_seconds=args.timeout,
-        mask_file=mask_file,
-        size=args.size,
-        quality=args.quality,
-        n=args.n,
-    )
+    response: Dict[str, Any] = {}
+    attempts = build_model_attempt_order(args.model)
+    for index, model in enumerate(attempts):
+        is_last = index == len(attempts) - 1
+        try:
+            response = request_image_edit(
+                base_url=base_url,
+                api_key=api_key,
+                prompt=prompt,
+                image_file=image_file,
+                model=model,
+                timeout_seconds=args.timeout,
+                mask_file=mask_file,
+                size=args.size,
+                quality=args.quality,
+                n=args.n,
+            )
+            break
+        except ApiHttpError as exc:
+            # 仅 502 触发换模型；其它状态码或已是最后候选则直接失败。
+            if exc.code == RETRY_HTTP_STATUS and not is_last:
+                print(
+                    f"Model {model} returned HTTP {exc.code}; retrying with {attempts[index + 1]}.",
+                    file=sys.stderr,
+                )
+                continue
+            fail(f"Image edit API failed with HTTP {exc.code}: {exc.body}")
 
     saved_images = save_images_from_response(response, output_dir, args.overwrite)
 

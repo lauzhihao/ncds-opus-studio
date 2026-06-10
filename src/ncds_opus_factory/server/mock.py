@@ -42,10 +42,11 @@ MOCK_NODE_DELAY_SEC = 3.0
 MOCK_CONFIG: dict[str, Any] = {
     "title": "MOCK · 015 素材",
     "rw_models": [
-        {"id": "opus", "label": "Claude Opus 4.7"},
-        {"id": "gpt5", "label": "GPT-5.5"},
-        {"id": "gemini_local", "label": "GEMINI-3.5 FLASH"},
-        {"id": "deepseek", "label": "DeepSeek V4 Pro"},
+        # label 仅作前端未知 id 的兜底展示；前端 MODEL_LABELS 已统一泛化为「改写方案 X」
+        {"id": "opus", "label": "改写方案 A"},
+        {"id": "gpt5", "label": "改写方案 B"},
+        {"id": "gemini_local", "label": "改写方案 C"},
+        {"id": "deepseek", "label": "改写方案 D"},
     ],
 }
 
