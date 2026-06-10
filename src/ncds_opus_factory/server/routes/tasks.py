@@ -13,12 +13,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncGenerator
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Response
 from sse_starlette.sse import EventSourceResponse
 
 from ncds_opus_factory.server.artifacts import extract_artifacts
 from ncds_opus_factory.server.schemas import (
+    Review,
+    ReviewRequest,
     TaskCreateRequest,
     TaskCreateResponse,
     TaskDetailResponse,
@@ -73,7 +76,27 @@ async def get_task(task_id: str) -> TaskDetailResponse:
         error=meta.error,
         result=result,
         artifacts=artifacts,
+        review=STORE.get_review(task_id),
     )
+
+
+@router.post("/tasks/{task_id}/review", response_model=Review)
+async def review_task(task_id: str, body: ReviewRequest) -> Review:
+    """记录一次人工决策（移动端点同意/拒绝 + 可选备注）。
+
+    幂等覆盖：再次提交即改判。决策落 state/tasks/{id}/review.json，不影响任务执行。
+    任务不存在 -> 404。
+    """
+    if not STORE.exists(task_id):
+        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    review = Review(
+        decision=body.decision,
+        note=body.note,
+        reviewed_at=datetime.now().isoformat(),
+    )
+    STORE.write_review(task_id, review)
+    logger.info("[server] task reviewed: task_id=%s decision=%s", task_id, body.decision)
+    return review
 
 
 # SSE polling 周期：500ms 既能近实时推进度，也不会把 CPU 烧穿

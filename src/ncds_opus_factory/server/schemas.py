@@ -15,6 +15,10 @@ from pydantic import BaseModel, Field
 
 TaskStatus = Literal["pending", "running", "completed", "failed"]
 
+# 移动端「点同意/拒绝」的决策值。决策落在 state/tasks/{id}/review.json，
+# 与 meta/events/result 并列，不污染 agent 代码，也不改任务执行流程。
+ReviewDecision = Literal["approved", "rejected"]
+
 
 class TaskCreateRequest(BaseModel):
     """POST /tasks 请求体。
@@ -40,6 +44,24 @@ class TaskMeta(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
+    # 列表态附带的人工决策（approved/rejected/未决=None）。仅 list_tasks 读 review.json
+    # 后回填到内存对象，**不写入 meta.json**（_write_meta exclude_none 会丢弃 None）。
+    decision: ReviewDecision | None = None
+
+
+class ReviewRequest(BaseModel):
+    """POST /tasks/{id}/review 请求体：移动端点同意/拒绝 + 可选备注。"""
+
+    decision: ReviewDecision
+    note: str | None = None
+
+
+class Review(BaseModel):
+    """一条任务决策，落在 state/tasks/{id}/review.json。可重复改判（覆盖）。"""
+
+    decision: ReviewDecision
+    note: str | None = None
+    reviewed_at: str
 
 
 class TaskEvent(BaseModel):
@@ -75,3 +97,5 @@ class TaskDetailResponse(BaseModel):
     # 完成态时按命令从 result 提取的可审看产物清单（[{label, kind, url, path}]）；
     # 移动端据此读稿/听音/看片，见 server.artifacts.extract_artifacts。
     artifacts: list[dict[str, Any]] | None = None
+    # 人工决策（移动端点同意/拒绝写入），未决为 None。见 POST /tasks/{id}/review。
+    review: Review | None = None

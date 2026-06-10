@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ncds_opus_factory.server.schemas import TaskEvent, TaskMeta, TaskStatus
+from ncds_opus_factory.server.schemas import Review, TaskEvent, TaskMeta, TaskStatus
 
 
 def _now_ms() -> int:
@@ -58,6 +58,9 @@ class TaskStore:
 
     def result_path(self, task_id: str) -> Path:
         return self.task_dir(task_id) / "result.json"
+
+    def review_path(self, task_id: str) -> Path:
+        return self.task_dir(task_id) / "review.json"
 
     def exists(self, task_id: str) -> bool:
         return self.meta_path(task_id).exists()
@@ -97,6 +100,11 @@ class TaskStore:
                 continue
             meta = self.get_meta(d.name)
             if meta is not None:
+                # 回填人工决策，供移动端「待验收收件箱」一次拉到，省去逐条查详情。
+                # 只挂在内存对象上，不写回 meta.json（决策真源是 review.json）。
+                review = self.get_review(d.name)
+                if review is not None:
+                    meta.decision = review.decision
                 metas.append(meta)
         # created_at 是 ISO 时间串，字典序即时间序，倒排得最新在前
         metas.sort(key=lambda m: m.created_at, reverse=True)
@@ -160,3 +168,19 @@ class TaskStore:
         if not path.exists():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
+
+    # ------------------------------------------------------------
+    # Review（人工决策：同意 / 拒绝 + 备注）
+    # ------------------------------------------------------------
+    def write_review(self, task_id: str, review: Review) -> None:
+        """覆盖写 review.json（允许重复改判）。"""
+        self.review_path(task_id).write_text(
+            review.model_dump_json(indent=2, exclude_none=True),
+            encoding="utf-8",
+        )
+
+    def get_review(self, task_id: str) -> Review | None:
+        path = self.review_path(task_id)
+        if not path.exists():
+            return None
+        return Review(**json.loads(path.read_text(encoding="utf-8")))

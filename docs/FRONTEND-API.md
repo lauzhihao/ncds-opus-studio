@@ -43,8 +43,9 @@ NOF_SERVER_PORT=8810 PYTHONPATH=src python3 -m ncds_opus_factory.server.app
 | 命令表单 | `GET /commands/{cmd}/schema` | 该命令要填什么 → 渲染输入表单 |
 | 建任务 | `POST /tasks` | body `{cmd, params}` → **201 + `Location: /tasks/{id}`** |
 | 任务列表 | `GET /tasks` | 所有实例（最新在前） |
-| 任务详情 | `GET /tasks/{task_id}` | 含 `result` + `artifacts` |
+| 任务详情 | `GET /tasks/{task_id}` | 含 `result` + `artifacts` + `review` |
 | 任务进度 | `GET /tasks/{task_id}/events` | **SSE** |
+| 提交决策 | `POST /tasks/{task_id}/review` | body `{decision, note?}` → 同意/拒绝 + 备注 |
 | 读产物 | `GET /artifacts/files/{relpath}` | md/mp3/mp4/png/json，**支持 Range** |
 | 列目录 | `GET /artifacts/dir/{relpath}` | 浏览采集目录 / 分镜实例 / 待验收清单 |
 
@@ -176,7 +177,29 @@ es.onmessage = (e) => {
 
 ---
 
-## 8. 错误与状态码
+## 8. 决策（同意 / 拒绝 + 备注）
+
+移动端「点同意/拒绝」走一个独立端点，与任务执行解耦 —— 它不改任务状态、不触发重跑，
+只把一条人工决策落到 `state/tasks/{id}/review.json`。
+
+```js
+// 点「同意」并附一句语音/打字备注
+await fetch(`${API}/tasks/${id}/review`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ decision: 'approved', note: '配音再快点' }),
+});
+// → 200 { decision, note, reviewed_at }
+```
+
+- `decision ∈ approved | rejected`；`note` 可选（适合塞语音转写 / 修改意见，可当下一轮任务的 params 喂回去）。
+- **幂等覆盖**：再次 POST 即改判，最后一次为准。
+- `GET /tasks/{id}` 终态详情多一个 `review` 字段（未决为 `null`）。
+- `GET /tasks` 列表里每条 meta 多一个 `decision`（`approved`/`rejected`/`null`），
+  做「待我验收」收件箱时一次拉到，不用逐条查详情。
+- 任务不存在 → 404。
+
+## 9. 错误与状态码
 
 - 任务 `status ∈ pending | running | completed | failed`（见 TaskMeta / 详情）。
 - `POST /tasks` 未知 cmd → 404；建成功 → 201。
