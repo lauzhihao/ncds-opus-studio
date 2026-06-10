@@ -496,7 +496,10 @@ class PipelineRunner:
         """
         state = self._load(job_id)
         if state.mock:
-            # mock：各模型 draft 已由 rw mock 静态写好，不重生；sleep 后重发 rw 状态收尾
+            # mock 同样校验 model_id：否则 bogus 模型也会静默返回 200，与真实路径行为不一致。
+            if not any(c["id"] == model_id for c in MODEL_CANDIDATES):
+                raise KeyError(f"unknown model: {model_id}")
+            # 各模型 draft 已由 rw mock 静态写好，不重生；sleep 后重发 rw 状态收尾
             await self._mock_regen_delay()
             n = state.nodes.get("rw")
             if n is not None:

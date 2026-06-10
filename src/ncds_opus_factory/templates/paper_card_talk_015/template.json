@@ -1,0 +1,30 @@
+{
+  "id": "paper_card_talk_015",
+  "name": "Paper Card Talk 015",
+  "title": "暖纸卡片口播 015 · Studio 主用模板",
+  "entry": "015-draft.html",
+  "style": ".015-draft-assets/styles.css",
+  "script": ".015-draft-assets/player.js",
+  "assets": ".015-draft-assets/",
+  "description": "Studio 当前主用的 paper-card-talk 模板（009 风格演进版）：episode.json 单文件数据源驱动 beats/scenes/overlays/fonts，bootstrap.js 注入 React inspector + edit-mode 编辑层，render.mjs 出片。与 009/010 不同，015 把字幕、分镜、字体、覆盖层统一收进 episode.json，并内置 35+ 字体家族（@font-face 注入 + Inspector 字体下拉）。对应 pipeline_id=paper_card_talk_015，preview 路由从此目录取引擎层（HTML/JS/CSS/fonts），内容产物（episode/audio/pictures）只从 job 节点产物取。",
+  "version": "1.0.0",
+  "features": [
+    "episode.json 单文件数据源：meta/visual/playback/audio/image/fonts/beats/scenes/overlays 全收一处",
+    "bootstrap.js 注入 React inspector.jsx + tweaks.jsx + edit-mode.js 编辑层",
+    "35+ 字体家族 @font-face 注入 + Inspector 字体下拉",
+    "overlays 叠加层：按 scene 维护，preview 抽屉可增删改",
+    "render.mjs 出片，pic_gen.py / tts_gen.py 单 scene 重生",
+    "preview 路由合成：模板引擎层 + job 节点产物（episode/audio/pictures）"
+  ],
+  "entryAssets": ".015-draft-assets/",
+  "scripts": [
+    ".015-draft-assets/bootstrap.js",
+    ".015-draft-assets/image-slot.js",
+    ".015-draft-assets/overlays.js",
+    ".015-draft-assets/player.js",
+    ".015-draft-assets/inspector.jsx",
+    ".015-draft-assets/tweaks-panel.jsx",
+    ".015-draft-assets/tweaks.jsx",
+    ".015-draft-assets/edit-mode.js"
+  ]
+}

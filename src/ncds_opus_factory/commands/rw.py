@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ncds_opus_factory.common.node_runtime import resolve_node
+
 ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE_DIR = ROOT
 RW_RUNNER = ROOT / "scripts" / "rewrite_command_runner.mjs"
@@ -101,7 +103,7 @@ def run(
     env.setdefault("OPENCLAW_WORKSPACE_DIR", str(WORKSPACE_DIR))
 
     on_progress(f"启动 /rw runner（job={job_id}）")
-    command = ["node", str(RW_RUNNER), json.dumps(rw_payload, ensure_ascii=False)]
+    command = [resolve_node(), str(RW_RUNNER), json.dumps(rw_payload, ensure_ascii=False)]
     proc = subprocess.run(command, cwd=str(WORKSPACE_DIR), env=env, timeout=timeout_seconds, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"/rw runner exited with code {proc.returncode}. trace_log={trace_log}")

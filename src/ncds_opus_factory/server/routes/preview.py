@@ -7,11 +7,11 @@ URL 形态
 GET  /preview/{job_id}/                                  → 015-draft.html
 GET  /preview/{job_id}/015-draft.html                    → 同上
 GET  /preview/{job_id}/.015-draft-assets/episode.json
-        → video-jobs/{job_id}/02_rw/episode.json，没有 404（rw 节点必须先跑）
+        → video-jobs/{job_id}/02_rw/episode.json，缺失就 404（rw 节点必须先跑）
 GET  /preview/{job_id}/.015-draft-assets/audio/<file>
-        → video-jobs/{job_id}/04_tts/<file>，没有 404（tts 节点必须先跑）
+        → video-jobs/{job_id}/04_tts/<file>，缺失就 404（tts 节点必须先跑）
 GET  /preview/{job_id}/.015-draft-assets/pictures/<file>
-        → video-jobs/{job_id}/03_image/<file>，没有 404（image 节点必须先跑）
+        → video-jobs/{job_id}/03_image/<file>，缺失就 404（image 节点必须先跑）
 GET  /preview/{job_id}/.015-draft-assets/fonts/<path>
         → 模板内置字体目录（35 个家族）
 GET  /preview/{job_id}/.015-draft-assets/<其他>
@@ -116,7 +116,7 @@ async def preview_reload_events(job_id: str) -> StreamingResponse:
     )
 
 
-def _load_or_404(job_id: str) -> dict[str, Any]:
+def _load_episode_or_409(job_id: str) -> dict[str, Any]:
     ep = PIPELINE_RUNNER.get_episode(job_id)
     if ep is None:
         raise HTTPException(409, "episode.json not yet produced; run rw first")
@@ -147,7 +147,7 @@ async def preview_save_overlays(job_id: str, body: dict[str, Any] = Body(...)) -
     if not isinstance(patches, list):
         raise HTTPException(400, "patches must be list")
 
-    ep = _load_or_404(job_id)
+    ep = _load_episode_or_409(job_id)
     scenes = ep.get("scenes") or {}
     touched = 0
     for p in patches:
@@ -179,15 +179,23 @@ async def preview_save_episode(job_id: str, body: dict[str, Any] = Body(...)) ->
     if not isinstance(patches, dict):
         raise HTTPException(400, "patches must be dict of {path: value}")
 
-    ep = _load_or_404(job_id)
+    ep = _load_episode_or_409(job_id)
     for path, value in patches.items():
         if not isinstance(path, str) or not path:
             raise HTTPException(400, f"bad path: {path!r}")
         parts = path.split(".")
         cur: Any = ep
         for p in parts[:-1]:
-            if p not in cur or not isinstance(cur[p], dict):
+            if p not in cur:
                 cur[p] = {}
+            elif not isinstance(cur[p], dict):
+                # 中间路径段已存在但不是 dict（如 list / 标量）：以前会被静默覆盖成 {}，
+                # 悄无声息清掉原数据。改为明确 400，由调用方先取消歧义再写。
+                raise HTTPException(
+                    400,
+                    f"cannot set {path!r}: intermediate field {p!r} is "
+                    f"{type(cur[p]).__name__}, not an object",
+                )
             cur = cur[p]
         cur[parts[-1]] = value
     PIPELINE_RUNNER.write_episode(job_id, ep)
@@ -205,7 +213,7 @@ async def preview_add_overlay(job_id: str, body: dict[str, Any] = Body(...)) -> 
     if not isinstance(overlay, dict):
         raise HTTPException(400, "overlay must be an object")
 
-    ep = _load_or_404(job_id)
+    ep = _load_episode_or_409(job_id)
     scenes = ep.get("scenes") or {}
     if scene not in scenes:
         raise HTTPException(400, f"scene not found: {scene}")
@@ -229,7 +237,7 @@ async def preview_del_overlay(job_id: str, body: dict[str, Any] = Body(...)) -> 
     if not isinstance(index, int):
         raise HTTPException(400, "index must be int")
 
-    ep = _load_or_404(job_id)
+    ep = _load_episode_or_409(job_id)
     scenes = ep.get("scenes") or {}
     if scene not in scenes:
         raise HTTPException(400, f"scene not found: {scene}")
@@ -247,14 +255,15 @@ async def preview_del_overlay(job_id: str, body: dict[str, Any] = Body(...)) -> 
 # 静态资源 / HTML 入口
 # ──────────────────────────────────────────────────────────────────
 
-@router.get("/preview/{job_id}")
-@router.get("/preview/{job_id}/")
+# GET + HEAD：iframe src 走 GET，但探活/预检逻辑可能用 HEAD 预取资源头，一并支持。
+@router.api_route("/preview/{job_id}", methods=["GET", "HEAD"])
+@router.api_route("/preview/{job_id}/", methods=["GET", "HEAD"])
 async def preview_root(job_id: str) -> FileResponse:
     _require_job(job_id)
     return FileResponse(_TEMPLATE_DIR / _HTML_FILE)
 
 
-@router.get("/preview/{job_id}/{full_path:path}")
+@router.api_route("/preview/{job_id}/{full_path:path}", methods=["GET", "HEAD"])
 async def preview_serve(job_id: str, full_path: str) -> FileResponse:
     _require_job(job_id)
     job_dir = PIPELINE_RUNNER.video_jobs_dir / job_id

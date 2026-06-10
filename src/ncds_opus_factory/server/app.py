@@ -4,12 +4,17 @@
     nof-server                          # pyproject scripts 注册的命令
     uvicorn ncds_opus_factory.server.app:app --host 0.0.0.0 --port 8810
 
-服务暴露：
+服务暴露（详见各 routes/*.py）：
     GET  /health
-    GET  /tasks
-    POST /tasks/{cmd}
-    GET  /tasks/{task_id}
-    GET  /tasks/{task_id}/events     (SSE)
+    commands : GET /commands, GET /commands/{cmd}/schema
+    tasks    : GET/POST /tasks, GET /tasks/{id}, GET /tasks/{id}/events(SSE), POST /tasks/{id}/review
+    jobs     : /jobs 及 nodes/* 节点操作（routes/pipelines.py + routes/jobs.py），SSE /jobs/{id}/events
+    pipelines: GET /pipelines, GET /pipelines/{id}, GET /pipelines/{id}/cover
+    templates: GET /templates, GET /templates/{name}/episode.json
+    preview  : GET /preview/{job_id}/* 合成预览 + 编辑写盘端点
+    artifacts: GET /artifacts/{dir,files}/{relpath}（白名单产物服务，移动端审看）
+    mock     : POST /mock/ensure
+    studio   : /studio SPA（prod 静态 web/dist；NOF_DEV=1 反代 vite）
 """
 
 from __future__ import annotations

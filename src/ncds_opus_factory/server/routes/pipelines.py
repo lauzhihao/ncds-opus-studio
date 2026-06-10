@@ -1,15 +1,28 @@
 """Pipeline / Jobs HTTP 端点。
 
+注意：本文件除 /pipelines 外，承载了 /jobs 的绝大部分逻辑（创建/列表/详情/删除、
+所有 nodes/* 节点操作、episode、cover、SSE events）。唯一例外是产物文件读写
+GET/PUT /jobs/{job_id}/files/{relpath}，在 routes/jobs.py。按文件名找 /jobs 端点时留意。
+
 端点
 ----
 GET    /pipelines                                列出已注册 pipeline 定义（前端模板列表用）
 GET    /pipelines/{pipeline_id}                  pipeline 详情（节点 schema、默认布局）
+GET    /pipelines/{pipeline_id}/cover            模板封面（模板自带 episode 首场景图）
 POST   /jobs                                     创建作品（body: pipeline_id / title / inputs）
 GET    /jobs                                     列表
 GET    /jobs/{job_id}                            作品详情（节点状态 + 用户位置）
 DELETE /jobs/{job_id}                            删除作品（含工作目录）
+GET    /jobs/{job_id}/cover                      作品封面（成片首帧 → 首场景容器图 → 404）
 POST   /jobs/{job_id}/nodes/{node}/run           跑某节点（会 reset 自身 + 下游）
+POST   /jobs/{job_id}/nodes/{node}/cancel        取消正在跑的节点
 PUT    /jobs/{job_id}/nodes/{node}/position      更新节点画布位置
+POST   /jobs/{job_id}/nodes/rw/rewrite/{model}   单模型重写 rw draft
+PUT    /jobs/{job_id}/nodes/rw/select            选某模型 draft 为定稿
+POST   /jobs/{job_id}/nodes/image/regen/{scene}  重生某 scene 容器图
+POST   /jobs/{job_id}/nodes/tts/regen-scene/{s}  重生某 scene 音频
+PUT    /jobs/{job_id}/inputs                     更新 input 节点（urls/raw_text/shares）
+PUT    /jobs/{job_id}/title                      改作品标题
 GET    /jobs/{job_id}/episode                    读 rw 节点产物 episode.json
 PUT    /jobs/{job_id}/episode                    写 episode.json（用户微调）
 GET    /jobs/{job_id}/events                     SSE 事件流（节点状态变更）
@@ -41,6 +54,12 @@ router = APIRouter()
 
 # ncds_opus_factory/templates（封面取模板自带 episode + pictures 的首场景图）
 _TEMPLATES_ROOT = Path(__file__).resolve().parents[2] / "templates"
+
+
+def _exc_msg(e: Exception) -> str:
+    """KeyError 的 str() 会给消息套一层引号（str(KeyError("x")) == "'x'"）；
+    取 args[0] 得到干净文案，与先 get_job + 自定义 HTTPException 的端点保持一致。"""
+    return str(e.args[0]) if e.args else str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +218,7 @@ async def run_node(
     try:
         await PIPELINE_RUNNER.run_node(job_id, node, params)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, _exc_msg(e))
     except (ValueError, RuntimeError) as e:
         raise HTTPException(400, str(e))
     state = PIPELINE_RUNNER.get_job(job_id)
@@ -208,10 +227,13 @@ async def run_node(
 
 @router.post("/jobs/{job_id}/nodes/{node}/cancel")
 async def cancel_node(job_id: str, node: str) -> dict[str, Any]:
+    # 先校验 job 存在：cancel_node 只查内存 _running_nodes、从不 raise KeyError，
+    # 不显式校验的话不存在的 job 会静默返回 200 {"cancelled": false}，与同组其它端点不一致。
     try:
-        cancelled = await PIPELINE_RUNNER.cancel_node(job_id, node)
-    except KeyError as e:
-        raise HTTPException(404, str(e))
+        PIPELINE_RUNNER.get_job(job_id)
+    except KeyError:
+        raise HTTPException(404, f"job not found: {job_id}")
+    cancelled = await PIPELINE_RUNNER.cancel_node(job_id, node)
     return {"cancelled": cancelled, "job_id": job_id, "node": node}
 
 
@@ -224,7 +246,7 @@ async def rewrite_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
     try:
         await PIPELINE_RUNNER.rewrite_rw_model(job_id, model_id)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, _exc_msg(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "model_id": model_id}
@@ -235,7 +257,7 @@ async def select_rw_model(job_id: str, body: SelectModelBody) -> dict[str, Any]:
     try:
         PIPELINE_RUNNER.select_rw_model(job_id, body.model_id)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, _exc_msg(e))
     except (ValueError, FileNotFoundError) as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "selected_model_id": body.model_id}
@@ -247,7 +269,7 @@ async def regen_image_scene(job_id: str, scene_id: str) -> dict[str, Any]:
     try:
         await PIPELINE_RUNNER.regen_image_scene(job_id, scene_id)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, _exc_msg(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "scene_id": scene_id}
@@ -259,7 +281,7 @@ async def regen_image_sketch(job_id: str, scene_id: str, n: int) -> dict[str, An
     try:
         rel = await PIPELINE_RUNNER.regen_image_sketch(job_id, scene_id, n)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, _exc_msg(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "scene_id": scene_id, "n": n, "image_relpath": rel}
@@ -271,7 +293,7 @@ async def regen_scene_image_from_preview(job_id: str, scene_id: str) -> dict[str
     try:
         rel = await PIPELINE_RUNNER.regen_scene_image_from_preview(job_id, scene_id)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, _exc_msg(e))
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"image_relpath": rel}
@@ -283,7 +305,7 @@ async def regen_tts_scene(job_id: str, scene_id: str) -> dict[str, Any]:
     try:
         await PIPELINE_RUNNER.regen_tts_scene(job_id, scene_id)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, _exc_msg(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "scene_id": scene_id}
@@ -332,7 +354,7 @@ async def update_position(job_id: str, node: str, body: NodePositionRequest) -> 
     try:
         PIPELINE_RUNNER.update_node_position(job_id, node, body.x, body.y)
     except KeyError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, _exc_msg(e))
     return {"job_id": job_id, "node": node, "position": {"x": body.x, "y": body.y}}
 
 

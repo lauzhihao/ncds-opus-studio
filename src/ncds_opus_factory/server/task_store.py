@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import time
 from datetime import datetime
@@ -22,6 +23,15 @@ from pathlib import Path
 from typing import Any
 
 from ncds_opus_factory.server.schemas import Review, TaskEvent, TaskMeta, TaskStatus
+
+# task_id 白名单：只允许字母/数字/下划线/连字符。task_dir = base_dir / task_id 是
+# 直接拼接，不显式校验的话像 ../../etc 这样的 task_id 会越出 base_dir。这里禁掉 . 和 /
+# 即可挡住路径穿越，同时兼容 _new_task_id() 的 t_<ms>_<hex> 与历史种子 id（如 t_demo_*）。
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _valid_task_id(task_id: str) -> bool:
+    return bool(_TASK_ID_RE.match(task_id))
 
 
 def _now_ms() -> int:
@@ -63,7 +73,9 @@ class TaskStore:
         return self.task_dir(task_id) / "review.json"
 
     def exists(self, task_id: str) -> bool:
-        return self.meta_path(task_id).exists()
+        # 非法 task_id 直接当作不存在：调用方（review / events 路由）据此返回 404，
+        # 既挡住路径穿越，又不抛 500。
+        return _valid_task_id(task_id) and self.meta_path(task_id).exists()
 
     # ------------------------------------------------------------
     # Create / update meta
@@ -85,6 +97,8 @@ class TaskStore:
         return meta
 
     def get_meta(self, task_id: str) -> TaskMeta | None:
+        if not _valid_task_id(task_id):
+            return None
         path = self.meta_path(task_id)
         if not path.exists():
             return None

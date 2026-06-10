@@ -76,11 +76,12 @@ const DEFAULT_RW_PROFILE = 'freestyle';
 
 // 模型展示名按 model_id 在前端映射 —— label 是展示层，改这里立即对所有 job（含历史 job）
 // 生效，不依赖后端 outputs 里存的旧 label。outputs.label 仅作未知 id 的兜底。
+// 泛化：对外只暴露「改写方案 A/B/C/D」，不泄露真实模型身份（与后端 MODEL_CANDIDATES.label 一致）。
 const MODEL_LABELS: Record<string, string> = {
-  opus: 'Claude Opus 4.7',
-  gpt5: 'GPT-5.5',
-  gemini_local: 'GEMINI-3.5 FLASH',
-  deepseek: 'DeepSeek V4 Pro',
+  opus: '改写方案 A',
+  gpt5: '改写方案 B',
+  gemini_local: '改写方案 C',
+  deepseek: '改写方案 D',
 };
 const modelLabel = (id: string, fallback: string): string => MODEL_LABELS[id] ?? fallback;
 

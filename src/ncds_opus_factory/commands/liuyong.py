@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_factory.common import ai_taste, quality_rubric
+from ncds_opus_factory.common.node_runtime import resolve_node
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNNER = ROOT / "scripts" / "content_rewrite_runner.mjs"
@@ -117,7 +118,7 @@ def run(
     env = os.environ.copy()
     on_progress(f"柳永启动(job={job_id}) 选题: {topic.strip()[:40]}")
     proc = subprocess.run(
-        ["node", str(RUNNER), json.dumps(payload, ensure_ascii=False)],
+        [resolve_node(), str(RUNNER), json.dumps(payload, ensure_ascii=False)],
         cwd=str(ROOT),
         env=env,
         timeout=timeout_seconds,
