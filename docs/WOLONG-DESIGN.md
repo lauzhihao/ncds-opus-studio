@@ -1,12 +1,17 @@
 # 卧龙实装设计：调度、闸门与离线学习
 
-> 状态：设计稿 v2.1（2026-06-11）。尚未实施。
-> v2 修订：经三视角对抗核查（后端代码论断 / iOS 副作用 / 设计漏洞），修复 v1 的 4 个 blocker——
-> ①防递归规则与续跑机制自相矛盾 ②无闸阶段与失败任务无事件推动 round（永久挂起）
-> ③cron/系统任务淹没 iOS 待验收桶并把首页灯打成永久红闪 ④柳永打回自动重投与卧龙返工双重派单。
-> v2.1 修订（业务方裁定）：打回理由必填（语音）是有意设计，保留——Leader 直接意见是最高质量标签，
-> 省掉卧龙重载上下文推断的成本与误差；卧龙推断降级为兜底。仅补听写稿轻量编辑。
-> 前置阅读：FRONTEND-API.md（各 agent 脾气）、scripts/wolong_sop.md（卧龙现行 SOP）。
+> 状态：v3（2026-06-11）。**P1/P2/P3 已实施并部署生产（:8810），P4/P5 待实施。**
+> 新会话执行 P4/P5 前必读 **§8 实施纪要**——P3 落地时的架构决策（卧龙段=确定性 Python）
+> 改变了 §5 部分条目的注入点与接线方式，以 §8.3/§8.4 的修正为准。
+> 测试基线：`cd ncds-opus-studio && .venv/bin/pytest tests/`（当前 105 全过）。
+>
+> v2 修订：经三视角对抗核查，修复 v1 的 4 个 blocker——①防递归规则与续跑机制自相矛盾
+> ②无闸阶段与失败任务无事件推动 round ③cron/系统任务淹没 iOS 待验收桶
+> ④柳永打回自动重投与卧龙返工双重派单。
+> v2.1 修订（业务方裁定）：打回理由必填（语音）是有意设计，保留——Leader 直接意见是
+> 最高质量标签；卧龙推断降级为兜底。仅补听写稿轻量编辑。
+> v3 修订：P1-P3 实施完成，新增 §8 实施纪要（as-built 架构 + P4/P5 执行指引）。
+> 前置阅读：FRONTEND-API.md（各 agent 脾气）。
 
 ## 0. 设计原则（业务约束，高于一切技术取舍）
 
@@ -235,12 +240,195 @@ iOS 的归类是写死的：completed 且无 decision = 待验收桶 + 首页红
 
 ## 7. 实施顺序（v2 重排范围，期序不变）
 
-| 期 | 内容 | 说明 |
+| 期 | 内容 | 状态 |
 |----|------|------|
-| **P1** | 案卷库（含 reviewer/note_origin 字段）+ 清扫修正 + 溯源字段；iOS：TaskMeta 三个 `String?` 字段 + listTasks 逐条容错解码 | **标签有时间价值，晚一天少一天数据**。纯增量，零风险 |
-| **P2** | 调度器（队列/额度/出队 CAS/启动恢复/requeue 收口）+ 订阅传感器（含 benchmark_store 新查询、事件去重）+ **cron 任务自动归档豁免** + 续跑 carve-out 的 source 设计 | 多实例收口是一切派单的前提；豁免必须与传感器同期，否则收件箱从上线第一天开始被污染 |
-| **P3** | 卧龙分段编排（run() 签名/可取消/round 原子写/intent 幂等键/禁 restore）+ **双事件源接线**（decision + 任务终态）+ 对账协程 + 续跑合并 + 定案语义 + round 任务自动归档豁免 + 选题库 consumed 写回；iOS：柳永打回不自动重投（round 任务）+ 隐藏 round 任务重试按钮 | 核心闭环：派单→检查点→(人+机)反馈→续跑→战报。机器反馈和 reconciler 不是可选项——缺了 round 成批挂死 |
-| **P4** | 复盘（retro 独立配额、低峰 cron、注入防御）+ rubric 版本化/自动回退 + 预筛 + **探索流量与假阴性率跟踪** | 需要 P1 攒的标签和 P3 的 round 机制 |
-| **P5** | 排产策略（含选题库完整改造）+ iOS 增强（角标/打回听写稿可编辑+快捷理由标签/战报页/改判入口/续跑卡折叠/灯态轮询/pending 文案） | 锦上添花，前面跑顺再上 |
+| **P1** | 案卷库（含 reviewer/note_origin 字段）+ 清扫修正 + 溯源字段；iOS：TaskMeta 三个 `String?` 字段 + listTasks 逐条容错解码 | ✅ 已上线（后端 6053d7e，iOS 040db04） |
+| **P2** | 调度器（队列/额度/出队 CAS/启动恢复/requeue 收口）+ 订阅传感器 + cron 任务自动归档豁免 + 配额分桶 | ✅ 已上线（后端 d1a7ed7） |
+| **P3** | 卧龙分段编排 + 双事件源接线 + 对账协程 + 续跑合并 + 定案语义 + 止损/清场；iOS：round 任务打回交还卧龙 + 隐藏重试 | ✅ 已上线（后端 c79e719，iOS 0510b1b） |
+| **P4** | 复盘（retro 独立配额、低峰 cron、注入防御）+ rubric 版本化/自动回退 + 预筛 + 探索流量与假阴性率跟踪 | ⬜ 待实施，**按 §8.3 执行** |
+| **P5** | 排产策略（含选题库完整改造）+ iOS 增强（角标/打回听写稿可编辑+快捷理由标签/战报页/改判入口/续跑卡折叠/灯态轮询/pending 文案/订阅管理页） | ⬜ 待实施，**按 §8.4 执行** |
 
-P1 改动面：后端 schemas.py、task_store.py、routes/tasks.py、app.py 四个文件；iOS NofModels.swift、NofClient.swift 两个文件。当天可上线。
+## 8. 实施纪要（as-built，2026-06-11）——新会话从这里接力
+
+### 8.1 进度与提交
+
+仓库 `~/Documents/vooice-projects/ncds-opus-studio`（后端）与 ClaudeTrafficLight（iOS，
+分支 claude/unruffled-germain-e0ce91）。提交序列：27ab75f(设计文档) → 6053d7e(P1) →
+d1a7ed7(P2) → c79e719(P3)；iOS 040db04(P1) → 0510b1b(P3)。每期均经
+多视角对抗复审 + 测试（105 例）+ 真实服务 E2E 冒烟后合入。
+
+### 8.2 已建成的架构（文件地图 + 关键决策）
+
+**最重要的偏离：P3 把卧龙段做成了确定性 Python，不是 opus SOP 会话。**
+round 的机械部分（状态机/派发/返工计数/战报）在 `commands/wolong_rounds.py`；
+LLM 判断力（rubric/预筛/复盘）P4 注入。原 opus 一把梭保留为 `mode=legacy`
+（scripts/run_wolong.sh + wolong_sop.md，仅 legacy 用）。
+
+后端文件地图：
+
+| 文件 | 职责 |
+|------|------|
+| `server/label_store.py` | 案卷库。`state/wolong/labels/{task_id}.json`，原子写；revised 粘滞、revoked 标记 |
+| `server/task_runner.py` | 调度器。per-cmd 队列+额度；配额分桶（主/cron/gate/retro，`DAILY_QUOTA["_retro"]=8` 已预留）；wolong 并发硬钳 1；intent_key 幂等派发；in-flight 集合；启动恢复；`_maybe_auto_archive`（cron/卧龙段/`_UNGATED_ROUND_CMDS={"guiguzi"}`）；`on_terminal` 钩子 |
+| `server/rounds_gate.py` | 事件接线（decision 只认 reviewer=user；终态钩子；cancel 卧龙段=终止本轮）；maybe_resume（同 round 单在途段+gate 配额检查）；reconcile_once（store↔round 终态补账+补投+超时收尾 48h）；terminate_round+清场 |
+| `common/round_store.py` | round 文件存储。原子写+跨线程锁（**锁内禁 HTTP，防与 event loop 死锁**）；事件去重；decision 定案 |
+| `commands/wolong_rounds.py` | 派单段/续跑段。A(锁内消费)/B(锁外幂等派发)/C(锁内回填)三段式套圈；暂缓语义（回填窗口的事件不消费）；乱序状态守卫；返工全量带历史意见+选题母题(`_topic_context`)；round_id=round_<task_id> 确定化 |
+| `commands/wolong.py` | `run(count, benchmark_path, avoid, round_id, resume, mode, _dispatch_task_id)`；**`mode="retro"` 现为 NotImplementedError——P4 的入口就在这里**；HttpTransport.ping 防孤儿 round |
+| `server/subscriptions.py` + `routes/subscriptions.py` | 订阅传感器。`state/shenkuo/subscriptions.json` 热读；tick 三道闸（在途/周期/配额）；GET/PUT /subscriptions + POST /subscriptions/tick |
+| `common/signals.py` + `common/benchmark_store.py` | 信号层。new_post 两道闸（首轮豁免+发布时间闸）；spike 归一化增速、仅本轮快照、24h 冷却；去重在 SQLite（signal_dedup 表）；事件落 `state/shenkuo/events.jsonl`（O_APPEND） |
+| `routes/rounds.py` | GET /rounds、GET /rounds/{id}、POST /rounds/{id}/terminate |
+| `server/mock_agents.py` | NOF_MOCK_AGENTS；mock_guiguzi 产 topics（含 potential）、mock_liuyong 产双稿 |
+| `server/schemas.py` | TaskSource=user\|wolong\|gate\|cron\|retro；Reviewer=user\|wolong\|system；NoteOrigin=user\|machine\|inferred；intent_key |
+| `server/app.py` | startup 接线（on_terminal 钩子、recover、订阅循环、对账协程 300s、清扫:弃用 168h/cron 72h/案卷回填） |
+
+iOS（Factory/）：NofModels（溯源 String? 字段、Lossy 容错列表）、NofClient（review 带
+noteOrigin、全损抛错）、LiuyongTaskDetailView（round 任务打回只写 review 不重投、
+pendingRejectNote 重试、打回语音必填是有意设计）、AgentTaskDetailView/AgentTaskListView
+（round 任务隐藏重试、报错三档）。
+
+关键 env：NOF_STATE_DIR/NOF_MOCK_AGENTS/NOF_CONCURRENCY/NOF_DAILY_QUOTA/
+NOF_CRON_TTL_HOURS/NOF_ROUND_RECONCILE_S/NOF_ROUND_TIMEOUT_HOURS/
+NOF_SPIKE_DIGG_PER_HOUR/NOF_SPIKE_MIN_DELTA/NOF_SUBSCRIPTIONS/NOF_RECOVER_MAX_AGE_HOURS。
+
+### 8.3 P4 执行指引（对 §5.2/§5.3 的落地修正——以下决策已裁定，照此实施）
+
+P3 之后 §5.3 的"注入 run_wolong.sh"已失效（round 段无 prompt）。
+**术语区分（必读）**：`common/quality_rubric.py` 是**静态体裁评分**（50 分制，明文
+"仅标注不打回"），与 P4 的 **learned rubric**（复盘产出的 Leader 审美备忘录，
+`state/wolong/rubric/`）是两个东西，文件、用途、生命周期都不同，不要混。
+
+1. **复盘（retro）**：实现 `commands/wolong.py` 的 `mode="retro"` 分支（当前 raise）。
+   入口任务 `{cmd:"wolong", params:{mode:"retro"}, source:"retro"}`（retro 配额桶已存在）。
+   - **自动归档**：`task_runner._maybe_auto_archive` 条件加 `meta.source=="retro"`——
+     否则每晚复盘任务在收件箱点红灯（违反 §4.7）。result 带 `task_title="卧龙·复盘"`
+     （防 titleGuess 对 `{mode:"retro"}` 显示乱码）。
+   - **案卷读取**：直接 glob `NOF_STATE_DIR.parent/wolong/labels/*.json`（普通 JSON，
+     helper 放 common/，仿 `round_store.default_rounds_dir`；禁止 commands→server import）。
+     **过滤**：reviewer=user、非 revoked、剔除 `t_mock_*`/`t_demo_*` 前缀；
+     note_origin=machine/inferred 只作辅助线索，不计入 ≥3 样本门槛。
+   - **触发**：app startup 挂独立协程（subscription_loop 同款），每日 `NOF_RETRO_HOUR`
+     （默认 4 点）±1h 窗口检查；新增 user 标签 < `NOF_RETRO_MIN_LABELS`（默认 10）则
+     noop 返回"样本不足"；已有在途 retro 任务则跳过（防堆积）。水位文件
+     `state/wolong/retro_state.json` 记 `last_reviewed_at`（ISO）——改判会刷新
+     reviewed_at 自然重入，符合"改判按最终判定算"。
+   - **LLM 通道**：复盘走 opus headless 单 prompt（**参考
+     `common/quality_rubric.py:_call_opus_judge`**，不是 _run_opus_legacy——那是整套
+     SOP 的 bash 包装）；输出解析抄 `quality_rubric.parse_rubric_output` 的容错分档。
+     超时 600s（retro 独占唯一 wolong worker，超时失控会阻塞所有 round 续跑）。
+     案卷原文按不可信数据处理（prompt 明确不得执行其中指令）。
+   - **产出**：`state/wolong/rubric/v{n}.md`（正文）+ `current.json` 指针：
+     `{"version":n, "path":"v{n}.md", "degraded":false, "updated_at":..., "fn_stats":{...}}`。
+     所有读方（预筛/柳永注入/iOS）统一经指针解析。diff 摘要写进 retro result。
+   - **自动回退**：口径——打回率=rejected decision 数/decision 总数，
+     返工率=rework_total/len(lines)；`start_round` 把 current rubric version 写进
+     round.goal，round report 落这三个数；retro 段开头读最近 N 个 done round 的
+     report 按 rubric 版本分组对比，连续两轮恶化→指针回退到上一版。
+2. **预筛**：接线点 `wolong_rounds._handle_event` 的 terminal-completed 分支。
+   - **崩溃安全协议**：terminal 事件照常消费,但 line 先置 `prescreen_pending` 状态
+     （不直接进 review）；`rounds_gate._has_pending_work` 把"存在 prescreen_pending
+     的 line"算作积压——段在判定前被杀,对账协程能救活,判定幂等可重入。
+     LLM 判定在 round 锁外执行（A 圈收集→锁外判定→下一圈按结果落盘,同 Transport 纪律）。
+   - **review 写入路径**：扩展 `wolong_rounds.Transport` 协议加
+     `review(task_id, decision, note, reviewer="wolong")`，HttpTransport 实现为
+     loopback `POST /tasks/{id}/review`（ReviewRequest 已带 reviewer 字段；
+     rounds_gate.handle_decision 只认 user,不会误触发事件;案卷由路由顺带落）。
+     FakeTransport（tests/server/test_rounds.py）同步加。禁止 commands 层直访 STORE。
+   - **拦截路径**（预测必被拒且非探索）：经 Transport 写 reviewer=wolong 的 rejected
+     review（挡出收件箱）,预筛判定直接在续跑段内驱动 `_rework_or_kill`（计入返工;
+     不经 round 事件——它是段内决策,不是外部信号）。
+   - **探索流量**（10-20%，按 task_id 哈希取模可复现）：**不写任何 review**（写了就被
+     归档,用户永远没机会验收,探索失效）,照常进待验收;预测只记 round line:
+     `line["prescreen"]={"prediction":"rejected","explore":true,"at":...}`。
+     假阴性=prediction=rejected 且最终 approved,由 `_finalize_if_done` 统计进 report。
+   - **降级**：跨轮累计探索样本 ≥5（最近 5 轮窗口,统计存 current.json 的 fn_stats）
+     才评估;假阴性率 >30% → current.json 标 degraded=true（只警告不拦截）。
+     rubric 不存在/degraded 时预筛直接放行（冷启动安全）。
+   - **LLM 通道**：预筛走 scodex shim（**参考 `commands/guiguzi.py:_scodex`**,
+     快/便宜/不占 sclaude 池;预筛在 round 关键路径上）。超时 60s,超时按"放行"处理。
+3. **柳永注入（两处,生成为主）**：
+   (a) 生成侧——`commands/liuyong.py` 的 payload `userRequirements` 拼接处附加
+   learned rubric 摘要（截断 ≤800 字）,直接影响成稿内容,这是"口味向上游传导"的主通道;
+   (b) 质检侧——`common/quality_rubric.py:build_rubric_prompt` 增加"Leader 口味备忘录"
+   段,只影响打分与 issues 展示,不改打回行为（该层本就仅标注）。
+4. **测试**：env fixture 照抄 test_labels.py 模式。LLM 调用做成**模块级函数属性**
+   （如 `wolong_retro.LLM_FN`、`prescreen.JUDGE_FN`）,测试 monkeypatch,E2E 冒烟用
+   env 开关换成固定输出假函数（NOF_MOCK_AGENTS 只能整命令替换,卧龙必须真跑 round 逻辑）。
+   **P4 必测行为清单**：样本不足 noop / 过滤剔除 mock·revoked·非 user / rubric vN+
+   current 产出与回退 / 预筛拦截写 wolong review 并驱动返工 / 探索流量放行且 line 记
+   预测 / 假阴性率进 report / 超阈降级只警告 / 无 rubric 冷启动放行 / 段在判定前被杀
+   对账能救活 / retro 任务自动归档 / 柳永注入截断。
+
+### 8.4 P5 执行指引（现状指针——以下决策已裁定，照此实施）
+
+**冷启动注意**：信号/选题的产出**机制**已就绪,但生产环境尚无数据（无订阅配置、
+state/shenkuo/ 与 topics.json 都不存在）。排产协程对"无事件文件/无选题库/无对标数据"
+三种缺失一律**静默空转**,绝不产 failed 任务。
+
+1. **排产策略**（纯规则协程,挂 app startup,周期 `NOF_PLANNER_INTERVAL_S` 默认 300）：
+   - **source 一律用 cron**：复用自动归档豁免（_maybe_auto_archive 对 source=cron 的
+     任意 cmd 生效）与 _cron 配额桶;派发前 `RUNNER.quota_remaining(cmd, source="cron")`
+     自查。不新增 TaskSource 值（要加就同步改 Literal+_quota_key_and_limit+
+     _maybe_auto_archive 三处）。
+   - **offset**：`state/shenkuo/events_offset.json` 存**字节偏移**（events.jsonl 是
+     O_APPEND 整批写,行完整,seek 续读）,tmp+rename 原子写;**先处理完一批并确认派发
+     成功,再推进 offset**（crash 宁可重派——重派防护见下）。events.jsonl 本期不轮转(TODO)。
+   - **事件驱动链的数据交接（重要,现有代码单条深采的产物喂不了鬼谷子）**：
+     事件自带 sec_uid。spike/new_post → ①深采该条（shenkuo `params={"aweme": id}`,
+     素材入池）;②选题分析用 `author_{sec_uid}/all_posts.json`（订阅刷新轮已持续在写,
+     shenkuo.py:604）作 benchmark_path 派鬼谷子,**category 必须显式传 None**
+     （guiguzi 默认 'growth' 过滤,不匹配直接 ValueError）。本期不做"针对单条重点分析"
+     （guiguzi 无此入口）,spike 的语义=该作者数据新鲜值得深采+补选题。
+   - **链式时序**：排产协程自己轮询 store 等深采终态（参考 reconcile_once 扫描模式）,
+     不要动 RUNNER.on_terminal（单钩子,已被 rounds_gate 占用）。
+   - **重启防重派**：派发前扫 store,同 params.aweme（或同 author+近 24h）的 cron 任务
+     已存在则跳过（intent_key 幂等只在 round 内生效,排产用不上）。
+   - **库存驱动补货**：选题库 fresh 条数 < `NOF_TOPIC_LOW_WATER`（默认 5）→ 派鬼谷子;
+     benchmark_path 用 `wolong_rounds.discover_benchmark()` 自动发现（None 则 noop 记
+     日志）;avoid=库内全部非 expired 的 title。
+2. **选题库改造（硬前置）**：文件仍为 `state/benchmark/topics/topics.json`,新格式
+   `{"version":2, "topics":[{topic_id, title, motif?, why?, angle?, potential, source,
+   status:"fresh|consumed|expired", created_at, consumed_by?}]}`;读到旧 list 格式自动迁移。
+   常量:topic_id=sha1(title)[:12];guiguzi **合并写**,按 title 精确去重;
+   expired=created_at 超 `NOF_TOPIC_TTL_DAYS`（默认 14）天,读时惰性标记。
+   - **消费方裁定（结构性改动,二选一已定 a）**：`start_round` 先查选题库 fresh 条数,
+     ≥goal.count → **直接开产线跳过鬼谷子**（round 无 guiguzi intent,stage 直接
+     scripts,挑题即写回 consumed_by=round_id）;不足 → 照旧派鬼谷子,其结果 merge 入库
+     后由续跑段从**库**里挑（_plan_scripts 改为读库而非读 task result）。
+     这让"补货的存货"有真实消费者,排产闭环才成立。
+   - P3 的 best-effort（`_mark_topics_consumed`/`_recent_round_topics`）改为读写新库;
+     防撞题的 avoid 改为"库内非 expired title"。
+3. **iOS 清单**（每项的后端接口均已就绪）：
+   - 来源角标：TaskMeta.source 已下发。
+   - 打回听写稿轻量编辑 + 快捷理由标签：语音必填语义不变（v2.1）;初始标签集
+     「开头太绕/钩子弱/AI味重/太啰嗦/选题不对」,标签是**追加**到口述文本,
+     note_origin 恒为 user（纯标签无口述不允许提交）。
+   - **战报页**：数据源 GET /rounds（列表项:
+     `{round_id,status,stage,created_at,updated_at,goal_count,lines:[{slot,status,
+     title,rework}],report}`）与 GET /rounds/{id}（round 文件全量,含 intents/events）。
+     **report 有两种形态**:正常收盘 `{approved,killed,rework_total,approved_tasks,
+     summary_lines,finished_at}` / 终止 `{approved,killed,reason,summary_lines,
+     finished_at}`——iOS 模型字段全可选。需新增 Round 系列模型 +
+     NofClient.rounds()/round(id)/terminateRound(id);现有 WolongResult 仅 legacy 任务用。
+     "终止本轮"按钮→POST /rounds/{id}/terminate。
+   - **续跑卡折叠**：第一步 iOS TaskMeta 加 `let title: String?`/`subtitle: String?`
+     并在 titleGuess **之前**优先取用（后端完成时回填,running 中的续跑卡端上写死
+     "卧龙·续跑段"）;折叠分组键=round_id,识别键=params.resume==true。
+   - **改判入口**（归档详情页）：定案判定建议后端在 TaskDetailResponse 加
+     `decision_finalized: bool`（查 round events 里该 task 的 decision 是否 consumed,
+     无 round 的任务恒 false）,列入 P5 后端小改;已定案的改判提示"只影响标注,不回卷流程"。
+   - 灯态轮询（建议 30s,仅前台）;pending 详情页文案（排队中≠创作中）;
+     订阅管理页（GET/PUT /subscriptions + POST /subscriptions/tick 已就绪）。
+
+### 8.5 运维
+
+- 生产：`nof-server`（nohup 孤儿进程，无 launchd），日志 `/tmp/nof-server.log`，
+  无特殊 env。重启：`kill -TERM $(lsof -ti :8810)` → `cd ncds-opus-studio &&
+  nohup ./.venv/bin/nof-server >> /tmp/nof-server.log 2>&1 & disown`。
+  重启前查真实在途任务（排除 t_mock_/t_demo_）。优雅停服安全：执行中任务保持
+  running，重启自动恢复。
+- E2E 冒烟模式：独立端口 + `NOF_STATE_DIR=/tmp/xxx/state/tasks` +
+  `NOF_MOCK_AGENTS=guiguzi,liuyong`（卧龙真跑 round 逻辑）+ `NOF_SUBSCRIPTIONS=0`；
+  卧龙开盘需 benchmark 文件（临时 `echo "[]" > /tmp/xxx/all_posts.json` 并显式传参）。
+- 真实使用前提：卧龙 round 需要真实对标数据（先跑一次沈括 author 模式采集，
+  或配置订阅）；scripts/run_wolong.sh 的默认 benchmark 路径仍指向不存在文件
+  （仅影响 legacy 模式，有任务卡待修）。
