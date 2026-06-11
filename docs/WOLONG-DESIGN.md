@@ -202,7 +202,9 @@ iOS 的归类是写死的：completed 且无 decision = 待验收桶 + 首页红
 ### 5.3 rubric 注入与预筛
 
 - **rubric 版本化**（v1 是单文件直写，学坏无法回滚）：每次复盘写 `state/wolong/rubric/v{n}.md` + 变更 diff 进战报，保留最近 N 版；战报里打回率/返工率连续两轮恶化 → 自动停用最新版回退上一版；iOS 战报页支持一键回退（P5）。
-- 注入三处：`run_wolong.sh` 拼 prompt（派单段+续跑段）、柳永质检 prompt、预筛自查——用户口味向上游传导，废品在成稿环节内部就死掉。
+- 注入点（v3 修正,以 §8.3 第 3 条为准）：**只注入柳永的生成输入**（更好的 brief）+
+  预筛自查。不注入柳永自检/质检层——自检是工艺检查,验收是口味判断,两者不是一回事,
+  口味把关由预筛行使。
 - **预筛的执行机制**（v1 没设计）：卧龙对完成的检查点产物按 rubric 自查，预测"必被拒"的写 `reviewer=wolong, decision=rejected` 的 review → 自然挡出待验收桶（桶语义=completed 且无任何 review），同时**绝不混入用户标注训练集**（§5.1 防火墙）——否则 rubric 学习自己的输出，回声室。
 - **探索流量防选择偏差**（v1 致命漏洞：rubric 学坏一条规则，预筛把符合该错误规则的好稿全拦在用户视线外，用户永远没机会用 approved 纠正——训练数据被自己的闸门审查）：预筛判"必被拒"的按 10–20% 比例照常送验收并附预筛预测；用用户实际判定算预筛**假阴性率**，进战报逐轮跟踪；超阈值自动把预筛降级为"只警告不拦截"。预筛导致的止损在战报里醒目呈现，支持一键"放行重审"。
 - 成功度量（战报逐轮跟踪）：用户打回率↓、单位通过作品的人工点击次数↓、预筛假阴性率、返工率先升后降（预筛生效特征）。这是"Leader 从标注员逐步解放"的量化曲线。
@@ -345,11 +347,20 @@ P3 之后 §5.3 的"注入 run_wolong.sh"已失效（round 段无 prompt）。
      rubric 不存在/degraded 时预筛直接放行（冷启动安全）。
    - **LLM 通道**：预筛走 scodex shim（**参考 `commands/guiguzi.py:_scodex`**,
      快/便宜/不占 sclaude 池;预筛在 round 关键路径上）。超时 60s,超时按"放行"处理。
-3. **柳永注入（两处,生成为主）**：
-   (a) 生成侧——`commands/liuyong.py` 的 payload `userRequirements` 拼接处附加
-   learned rubric 摘要（截断 ≤800 字）,直接影响成稿内容,这是"口味向上游传导"的主通道;
-   (b) 质检侧——`common/quality_rubric.py:build_rubric_prompt` 增加"Leader 口味备忘录"
-   段,只影响打分与 issues 展示,不改打回行为（该层本就仅标注）。
+3. **三层质量体系（业务方裁定,不许混淆）**：
+   - **第一层·柳永自检**（成稿过程内,工艺检查）：写完自查 AI 味句式（qc 密度/硬禁,
+     命中触发 `_purge_ai_taste` 内部重写循环——"重写第 N 轮"是柳永自己的工艺迭代,
+     **对 round 不可见、不计入返工配额**）+ qc_rubric 体裁打分（quality_rubric.py,
+     仅标注）。判据是**客观工艺**（句式/密度/体裁规范）,不是 Leader 口味——
+     自检不替用户做验收。
+   - **第二层·卧龙预筛**（P4 新增,成稿完成后、进收件箱前）：用 learned rubric
+     **模拟 Leader 的验收判断**（见上文第 2 条）,这才是口味闸门的机器版。
+   - **第三层·用户验收**（闸1）：唯一的标注来源。自检 verdict/rubric 分/预筛预测
+     都**不是标注**,复盘只学 reviewer=user 的案卷（防火墙已有）。
+   - **learned rubric 的注入点（唯一）**：生成侧——`commands/liuyong.py` payload 的
+     `userRequirements` 附加 rubric 摘要（≤800 字）,让柳永一开始就照 Leader 口味写
+     （更好的 brief,不是替用户把关）。**不注入自检/质检层**——把口味混进工艺打分会
+     让三层判据互相污染且与预筛重复;v2 §5.3"柳永质检 prompt 注入"按本条作废。
 4. **测试**：env fixture 照抄 test_labels.py 模式。LLM 调用做成**模块级函数属性**
    （如 `wolong_retro.LLM_FN`、`prescreen.JUDGE_FN`）,测试 monkeypatch,E2E 冒烟用
    env 开关换成固定输出假函数（NOF_MOCK_AGENTS 只能整命令替换,卧龙必须真跑 round 逻辑）。
