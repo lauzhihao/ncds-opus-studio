@@ -80,7 +80,14 @@ class TaskStore:
     # ------------------------------------------------------------
     # Create / update meta
     # ------------------------------------------------------------
-    def create(self, cmd: str, params: dict[str, Any]) -> TaskMeta:
+    def create(
+        self,
+        cmd: str,
+        params: dict[str, Any],
+        source: str | None = None,
+        parent_task_id: str | None = None,
+        round_id: str | None = None,
+    ) -> TaskMeta:
         task_id = _new_task_id()
         task_dir = self.task_dir(task_id)
         task_dir.mkdir(parents=True, exist_ok=True)
@@ -92,6 +99,9 @@ class TaskStore:
             params=params,
             status="pending",
             created_at=_now_iso(),
+            source=source,
+            parent_task_id=parent_task_id,
+            round_id=round_id,
         )
         self._write_meta(meta)
         return meta

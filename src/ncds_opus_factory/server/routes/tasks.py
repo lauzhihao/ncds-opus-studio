@@ -27,7 +27,7 @@ from ncds_opus_factory.server.schemas import (
     TaskDetailResponse,
     TaskMeta,
 )
-from ncds_opus_factory.server.state import RUNNER, STORE
+from ncds_opus_factory.server.state import LABELS, RUNNER, STORE
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,18 @@ async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreate
             status_code=404,
             detail=f"unknown command: {body.cmd}. available: {RUNNER.list_commands()}",
         )
-    task_id = await RUNNER.submit(body.cmd, body.params)
+    task_id = await RUNNER.submit(
+        body.cmd,
+        body.params,
+        source=body.source,
+        parent_task_id=body.parent_task_id,
+        round_id=body.round_id,
+    )
     response.headers["Location"] = f"/tasks/{task_id}"
-    logger.info("[server] task submitted: cmd=%s task_id=%s", body.cmd, task_id)
+    logger.info(
+        "[server] task submitted: cmd=%s task_id=%s source=%s",
+        body.cmd, task_id, body.source or "user",
+    )
     return TaskCreateResponse(task_id=task_id, status="pending")
 
 
@@ -74,6 +83,9 @@ async def get_task(task_id: str) -> TaskDetailResponse:
         started_at=meta.started_at,
         finished_at=meta.finished_at,
         error=meta.error,
+        source=meta.source,
+        parent_task_id=meta.parent_task_id,
+        round_id=meta.round_id,
         result=result,
         artifacts=artifacts,
         review=STORE.get_review(task_id),
@@ -93,8 +105,18 @@ async def review_task(task_id: str, body: ReviewRequest) -> Review:
         decision=body.decision,
         note=body.note,
         reviewed_at=datetime.now().isoformat(),
+        reviewer=body.reviewer,
+        note_origin=body.note_origin,
     )
     STORE.write_review(task_id, review)
+    # 同步落案卷（决策=标注,复盘的训练数据真源）。失败不挡验收:review.json 已写,
+    # 沈括弃用件清扫前还有补写兜底(app.sweep);其余 cmd 改判时也会重写。
+    try:
+        meta = STORE.get_meta(task_id)
+        if meta is not None:
+            LABELS.write(meta, review, STORE.get_result(task_id))
+    except Exception:  # noqa: BLE001
+        logger.exception("[server] label write failed: task_id=%s", task_id)
     logger.info("[server] task reviewed: task_id=%s decision=%s", task_id, body.decision)
     return review
 
@@ -140,6 +162,14 @@ async def revoke_review(task_id: str) -> dict:
     if not STORE.exists(task_id):
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
     removed = STORE.delete_review(task_id)
+    # 案卷不删,标 revoked(被撤回的判断不能留在训练集里冒充有效标注)。
+    # 自愈式:即使本次 removed=False,只要案卷还在就补标——覆盖上一次打标失败
+    # 后的重试(review.json 已删而案卷未标的半完成态)。失败不挡撤销,下次再试。
+    if removed or LABELS.get(task_id) is not None:
+        try:
+            LABELS.mark_revoked(task_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("[server] label revoke mark failed: task_id=%s", task_id)
     logger.info("[server] task review revoked: task_id=%s removed=%s", task_id, removed)
     return {"ok": True, "removed": removed}
 

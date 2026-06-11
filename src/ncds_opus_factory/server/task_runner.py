@@ -37,10 +37,19 @@ class TaskRunner:
     def list_commands(self) -> list[str]:
         return sorted(self.registry.keys())
 
-    async def submit(self, cmd: str, params: dict[str, Any]) -> str:
+    async def submit(
+        self,
+        cmd: str,
+        params: dict[str, Any],
+        source: str | None = None,
+        parent_task_id: str | None = None,
+        round_id: str | None = None,
+    ) -> str:
         if cmd not in self.registry:
             raise KeyError(f"unknown command: {cmd}")
-        meta = self.store.create(cmd, params)
+        meta = self.store.create(
+            cmd, params, source=source, parent_task_id=parent_task_id, round_id=round_id
+        )
         # fire-and-forget；不持引用是因为完成态全部通过文件读取
         asyncio.create_task(self._run(meta.task_id, cmd, params))
         return meta.task_id

@@ -48,7 +48,7 @@ from ncds_opus_factory.server.routes import pipelines as pipelines_routes
 from ncds_opus_factory.server.routes import preview as preview_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
-from ncds_opus_factory.server.state import RUNNER, STATE_DIR, STORE
+from ncds_opus_factory.server.state import LABELS, RUNNER, STATE_DIR, STORE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -134,6 +134,27 @@ DISCARD_TTL_HOURS = float(os.environ.get("NOF_DISCARD_TTL_HOURS", "168"))   # �
 _DISCARD_SWEEP_INTERVAL_S = 3600
 
 
+def backfill_labels_once() -> int:
+    """案卷对账:凡有决策(review.json)而无案卷的任务,幂等补写一份。返回补写数。
+
+    吃下两类缺口:P1 上线前的存量决策(现成的种子语料)、review 路由落卷失败
+    被吞掉的样本。每小时随清扫跑一轮,复盘(P4)只读 labels/,缺卷即缺样本。
+    """
+    filled = 0
+    for meta in STORE.list_tasks():
+        if meta.decision is None or LABELS.exists(meta.task_id):
+            continue
+        review = STORE.get_review(meta.task_id)
+        if review is None:
+            continue
+        try:
+            LABELS.write(meta, review, STORE.get_result(meta.task_id))
+            filled += 1
+        except Exception:  # noqa: BLE001 — 单条失败不影响整轮
+            logger.exception("[sweep] 案卷回填失败 %s", meta.task_id)
+    return filled
+
+
 def sweep_discarded_once() -> int:
     """清一轮:沈括 rejected 且超过保留期的任务。返回删除数。"""
     import shutil
@@ -152,6 +173,14 @@ def sweep_discarded_once() -> int:
         except ValueError:
             continue
         if ts < cutoff:
+            # 删除前确认案卷已存在(决策=标注,负样本是卧龙复盘的训练数据,
+            # 任务目录可以清,标签不能丢)。补写失败则本轮跳过,下轮再试。
+            try:
+                if not LABELS.exists(meta.task_id):
+                    LABELS.write(meta, review, STORE.get_result(meta.task_id))
+            except Exception:  # noqa: BLE001
+                logger.exception("[sweep] 案卷补写失败,跳过删除 %s", meta.task_id)
+                continue
             shutil.rmtree(STORE.task_dir(meta.task_id), ignore_errors=True)
             removed += 1
             logger.info("[sweep] 清除弃用沈括任务 %s (reviewed_at=%s)", meta.task_id, review.reviewed_at)
@@ -163,6 +192,10 @@ async def _discard_sweeper() -> None:
 
     while True:
         try:
+            # 先对账补卷,再清扫——回填和守门双保险,标签先于删除存在
+            filled = backfill_labels_once()
+            if filled:
+                logger.info("[sweep] 本轮回填 %d 份案卷", filled)
             n = sweep_discarded_once()
             if n:
                 logger.info("[sweep] 本轮清除 %d 条弃用任务", n)

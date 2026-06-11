@@ -19,6 +19,20 @@ TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 # 与 meta/events/result 并列，不污染 agent 代码，也不改任务执行流程。
 ReviewDecision = Literal["approved", "rejected"]
 
+# 任务发起方（docs/WOLONG-DESIGN.md §3）。缺省 None 视为 user（向后兼容旧请求/旧任务）：
+#   user=移动端手发  wolong=卧龙派单段  gate=验收/终态事件触发的续跑段
+#   cron=订阅传感器  retro=离线复盘
+TaskSource = Literal["user", "wolong", "gate", "cron", "retro"]
+
+# 决策是谁写的（docs/WOLONG-DESIGN.md §4.7/§5.1 的防火墙字段）：
+#   user=Leader 人工验收  wolong=卧龙预筛预测  system=后端自动归档(免验收任务)
+# 离线复盘只把 reviewer=user 的案卷当标注样本。
+Reviewer = Literal["user", "wolong", "system"]
+
+# 备注的来源：user=人工口述/输入  machine=客户端模板生成(如柳永"采用 X 稿")
+# inferred=卧龙事后推断。复盘归纳时 machine/inferred 只作辅助线索。
+NoteOrigin = Literal["user", "machine", "inferred"]
+
 
 class TaskCreateRequest(BaseModel):
     """POST /tasks 请求体。
@@ -31,6 +45,10 @@ class TaskCreateRequest(BaseModel):
 
     cmd: str
     params: dict[str, Any] = Field(default_factory=dict)
+    # 溯源（可选，缺省=用户手发）。agent 派单/cron/续跑段创建任务时填写。
+    source: TaskSource | None = None
+    parent_task_id: str | None = None
+    round_id: str | None = None
 
 
 class TaskMeta(BaseModel):
@@ -44,6 +62,10 @@ class TaskMeta(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
+    # 溯源三件套（None 不落盘，旧任务 meta.json 无这些键 → 读回即 None=user）
+    source: TaskSource | None = None
+    parent_task_id: str | None = None
+    round_id: str | None = None
     # 列表态附带的人工决策（approved/rejected/未决=None）。仅 list_tasks 读 review.json
     # 后回填到内存对象，**不写入 meta.json**（_write_meta exclude_none 会丢弃 None）。
     decision: ReviewDecision | None = None
@@ -58,6 +80,10 @@ class ReviewRequest(BaseModel):
 
     decision: ReviewDecision
     note: str | None = None
+    # 缺省 user：移动端无需传。预筛(wolong)/自动归档(system)由后端自己写。
+    reviewer: Reviewer = "user"
+    # 备注来源。缺省按"有 note 即 user"推定；客户端模板生成的备注应显式传 machine。
+    note_origin: NoteOrigin | None = None
 
 
 class Review(BaseModel):
@@ -66,6 +92,9 @@ class Review(BaseModel):
     decision: ReviewDecision
     note: str | None = None
     reviewed_at: str
+    # 旧 review.json 无此键 → pydantic 默认 user，向后兼容
+    reviewer: Reviewer = "user"
+    note_origin: NoteOrigin | None = None
 
 
 class TaskEvent(BaseModel):
@@ -97,6 +126,10 @@ class TaskDetailResponse(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     error: str | None = None
+    # 溯源三件套（与列表一致:详情页角标/round 任务的重试策略都要读它）
+    source: TaskSource | None = None
+    parent_task_id: str | None = None
+    round_id: str | None = None
     result: dict[str, Any] | None = None
     # 完成态时按命令从 result 提取的可审看产物清单（[{label, kind, url, path}]）；
     # 移动端据此读稿/听音/看片，见 server.artifacts.extract_artifacts。
