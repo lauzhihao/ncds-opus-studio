@@ -13,7 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-TaskStatus = Literal["pending", "running", "completed", "failed"]
+TaskStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
 
 # 移动端「点同意/拒绝」的决策值。决策落在 state/tasks/{id}/review.json，
 # 与 meta/events/result 并列，不污染 agent 代码，也不改任务执行流程。

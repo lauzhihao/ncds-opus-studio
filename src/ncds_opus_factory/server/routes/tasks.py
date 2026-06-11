@@ -99,6 +99,38 @@ async def review_task(task_id: str, body: ReviewRequest) -> Review:
     return review
 
 
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str) -> dict:
+    """取消未开始/进行中的任务 -> cancelled(App 归入已归档,可恢复重新入队)。
+
+    工作线程无法强杀:运行中的任务标记取消后后台跑完,结果作废、状态保持 cancelled。
+    """
+    if not STORE.exists(task_id):
+        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    meta = STORE.get_meta(task_id)
+    if meta.status not in ("pending", "running"):
+        raise HTTPException(status_code=409, detail=f"cannot cancel a {meta.status} task")
+    STORE.update_status(task_id, "cancelled")
+    STORE.append_progress(task_id, "任务已被用户取消")
+    logger.info("[server] task cancelled: task_id=%s (was %s)", task_id, meta.status)
+    return {"ok": True, "status": "cancelled"}
+
+
+@router.post("/tasks/{task_id}/restore")
+async def restore_task(task_id: str) -> dict:
+    """已取消任务恢复并重新入队(沿用原 task_id 与参数,事件流续写)。"""
+    if not STORE.exists(task_id):
+        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    meta = STORE.get_meta(task_id)
+    if meta.status != "cancelled":
+        raise HTTPException(status_code=409, detail=f"cannot restore a {meta.status} task")
+    STORE.reset_for_requeue(task_id)
+    STORE.append_progress(task_id, "已恢复,重新入队")
+    await RUNNER.requeue(task_id, meta.cmd, meta.params)
+    logger.info("[server] task restored: task_id=%s cmd=%s", task_id, meta.cmd)
+    return {"ok": True, "status": "pending"}
+
+
 @router.delete("/tasks/{task_id}/review")
 async def revoke_review(task_id: str) -> dict:
     """撤销人工决策:已归档拉回「待验收」(删 review.json)。
@@ -149,7 +181,7 @@ async def stream_events(task_id: str) -> EventSourceResponse:
                             yield {"data": line}
                     last_pos = f.tell()
             meta = STORE.get_meta(task_id)
-            if meta and meta.status in ("completed", "failed"):
+            if meta and meta.status in ("completed", "failed", "cancelled"):
                 # 终态后再读一轮，确保 done/error 事件被吐完
                 try:
                     size = events_path.stat().st_size

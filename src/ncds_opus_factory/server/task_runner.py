@@ -15,6 +15,7 @@ import asyncio
 import logging
 from typing import Any, Callable
 
+from ncds_opus_factory.common import cancel
 from ncds_opus_factory.server.task_store import TaskStore
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,19 @@ class TaskRunner:
         asyncio.create_task(self._run(meta.task_id, cmd, params))
         return meta.task_id
 
+    async def requeue(self, task_id: str, cmd: str, params: dict[str, Any]) -> None:
+        """已取消任务恢复后重新入队执行(沿用原 task_id,事件流续写)。"""
+        asyncio.create_task(self._run(task_id, cmd, params))
+
+    def _is_cancelled(self, task_id: str) -> bool:
+        meta = self.store.get_meta(task_id)
+        return bool(meta and meta.status == "cancelled")
+
     async def _run(self, task_id: str, cmd: str, params: dict[str, Any]) -> None:
+        # 排队期间被取消:不执行
+        if self._is_cancelled(task_id):
+            logger.info("[TaskRunner] task %s cancelled before start, skipped", task_id)
+            return
         run_fn = self.registry[cmd]
         self.store.update_status(task_id, "running")
 
@@ -56,13 +69,19 @@ class TaskRunner:
                 logger.warning("[TaskRunner] append_progress failed: %s", exc)
 
         try:
-            # 把同步 run 推到默认线程池；不能让 subprocess 堵 event loop
+            # 把同步 run 推到默认线程池；不能让 subprocess 堵 event loop。
+            # 同时安装协作式取消 checker:命令在步骤边界检查,长子进程被直接 SIGTERM。
             result = await asyncio.to_thread(
                 _invoke,
                 run_fn,
                 params,
                 on_progress,
+                lambda: self._is_cancelled(task_id),
             )
+            # 执行中被取消:工作线程无法强杀,跑完后结果作废,保持 cancelled
+            if self._is_cancelled(task_id):
+                logger.info("[TaskRunner] task %s finished after cancel, result discarded", task_id)
+                return
             self.store.write_result(task_id, result)
             self.store.append_done(task_id, result)
             self.store.update_status(task_id, "completed")
@@ -71,6 +90,9 @@ class TaskRunner:
                 self.store.set_display(task_id, result.get("task_title"), result.get("task_subtitle"))
             logger.info("[TaskRunner] task %s (%s) completed", task_id, cmd)
         except BaseException as exc:  # noqa: BLE001 - 任何异常都需要记录
+            if self._is_cancelled(task_id):
+                logger.info("[TaskRunner] task %s errored after cancel, kept cancelled", task_id)
+                return
             err_text = f"{type(exc).__name__}: {exc}"
             self.store.append_error(task_id, err_text)
             self.store.update_status(task_id, "failed", error=err_text)
@@ -81,10 +103,16 @@ def _invoke(
     run_fn: RunFn,
     params: dict[str, Any],
     on_progress: Callable[[str], None],
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """同步调用 run_fn(**params, on_progress=...)。
 
     抽成独立函数是为了 asyncio.to_thread 接受 callable + args 的形态；
-    也方便测试时直接调用验证。
+    也方便测试时直接调用验证。cancel_check 装进线程局部,命令自行取用。
     """
-    return run_fn(on_progress=on_progress, **params)
+    if cancel_check is not None:
+        cancel.install(cancel_check)
+    try:
+        return run_fn(on_progress=on_progress, **params)
+    finally:
+        cancel.uninstall()

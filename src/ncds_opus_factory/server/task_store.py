@@ -136,10 +136,22 @@ class TaskStore:
         meta.status = status
         if status == "running" and not meta.started_at:
             meta.started_at = _now_iso()
-        if status in ("completed", "failed") and not meta.finished_at:
+        if status in ("completed", "failed", "cancelled") and not meta.finished_at:
             meta.finished_at = _now_iso()
         if error is not None:
             meta.error = error
+        self._write_meta(meta)
+        return meta
+
+    def reset_for_requeue(self, task_id: str) -> TaskMeta:
+        """已取消任务恢复:回到 pending,清掉上一轮的时间戳/错误(exclude_none 落盘即消失)。"""
+        meta = self.get_meta(task_id)
+        if not meta:
+            raise FileNotFoundError(f"task not found: {task_id}")
+        meta.status = "pending"
+        meta.started_at = None
+        meta.finished_at = None
+        meta.error = None
         self._write_meta(meta)
         return meta
 
