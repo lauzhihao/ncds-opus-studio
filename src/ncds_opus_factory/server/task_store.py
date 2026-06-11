@@ -91,6 +91,7 @@ class TaskStore:
         source: str | None = None,
         parent_task_id: str | None = None,
         round_id: str | None = None,
+        intent_key: str | None = None,
     ) -> TaskMeta:
         task_id = _new_task_id()
         task_dir = self.task_dir(task_id)
@@ -106,6 +107,7 @@ class TaskStore:
             source=source,
             parent_task_id=parent_task_id,
             round_id=round_id,
+            intent_key=intent_key,
         )
         self._write_meta(meta)
         return meta
@@ -242,6 +244,16 @@ class TaskStore:
             return False
         path.unlink()
         return True
+
+    def set_round(self, task_id: str, round_id: str) -> TaskMeta | None:
+        """回填 round_id(卧龙派单段在 run() 内部才生成 round,完成时补到 meta——
+        让任务卡可按 round 归组,也让自动归档判定生效)。"""
+        meta = self.get_meta(task_id)
+        if meta is None:
+            return None
+        meta.round_id = round_id
+        self._write_meta(meta)
+        return meta
 
     def set_display(self, task_id: str, title: str | None, subtitle: str | None) -> None:
         """命令完成后回填展示标题/副题(任务卡显示作品信息,不显示原始链接)。"""

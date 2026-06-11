@@ -84,8 +84,22 @@ def _generic_mock(cmd: str) -> RunFn:
     return run
 
 
+def mock_guiguzi(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
+    """逼真 mock：返回带 potential 的选题数组（卧龙 round 续跑段挑题要用）。"""
+    on_progress("鬼谷子启动(MOCK): 读对标数据,提炼母题")
+    time.sleep(0.4)
+    topics = [
+        {"title": f"为什么{kw},多数人都想反了", "angle": "反直觉", "potential": 95 - i * 8,
+         "source": "mock"}
+        for i, kw in enumerate(["钱越省越穷", "老板都爱画饼", "副业先亏后赚", "存款利率一直降", "年轻人不买房了"])
+    ]
+    on_progress(f"鬼谷子完成(MOCK): {len(topics)} 个选题")
+    return {"topics": topics, "out": "mock", "raw_len": 0}
+
+
 MOCK_RUNS: dict[str, RunFn] = {
     "liuyong": mock_liuyong,
+    "guiguzi": mock_guiguzi,
 }
 
 

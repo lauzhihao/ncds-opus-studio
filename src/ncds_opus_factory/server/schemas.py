@@ -49,6 +49,9 @@ class TaskCreateRequest(BaseModel):
     source: TaskSource | None = None
     parent_task_id: str | None = None
     round_id: str | None = None
+    # 派发幂等键(round_id+intent_key 唯一,§4.1):卧龙段崩溃重发不产生重复任务,
+    # 调度器查重直接返回既有 task_id
+    intent_key: str | None = None
 
 
 class TaskMeta(BaseModel):
@@ -66,6 +69,7 @@ class TaskMeta(BaseModel):
     source: TaskSource | None = None
     parent_task_id: str | None = None
     round_id: str | None = None
+    intent_key: str | None = None
     # 列表态附带的人工决策（approved/rejected/未决=None）。仅 list_tasks 读 review.json
     # 后回填到内存对象，**不写入 meta.json**（_write_meta exclude_none 会丢弃 None）。
     decision: ReviewDecision | None = None

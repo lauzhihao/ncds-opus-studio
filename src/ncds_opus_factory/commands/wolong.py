@@ -1,14 +1,14 @@
-"""/wolong —— 卧龙先生：抖音认知内容工厂的 CEO/操盘手（HTTP 包装层）。
+"""/wolong —— 卧龙先生：抖音认知内容工厂的 CEO/操盘手。
 
-卧龙本体是 opus(sclaude) headless 编排器：脑子在 scripts/wolong_sop.md，启动器在
-scripts/run_wolong.sh。它自主编排 鬼谷子(选题) -> 柳永(成稿+质检)，把待验收清单落到
-state/benchmark/review/。全程走 Claude 订阅(sclaude 账号池)，不碰 API。
+P3 起默认是**分段编排**（docs/WOLONG-DESIGN.md §4）：
+- 派单段（无 round_id）：建 round、派鬼谷子选题,然后退出;
+- 续跑段（round_id + resume）：由验收/任务终态事件驱动,消费积压事件推进 round
+  （开产线派柳永、返工/止损、全部落定出战报）;
+- 编排机械是确定性 Python（commands/wolong_rounds.py）,LLM 判断力(rubric/预筛/复盘)
+  P4 注入;mode="retro" 预留给 P4 复盘。
 
-本模块只做一件事：把 shell 启动器包装成和其它 command 一致的
-``run(...on_progress) -> dict`` 契约，让 server.task_runner 能像普通命令一样异步拉起它，
-把 opus 的 stdout 逐行喂给 on_progress（-> SSE），完成后把待验收目录带回。
-
-注意：run() 会拉起 opus(Claude Max 订阅)，属"重"任务、可能跑数分钟；deadline 到点会 kill。
+原 opus(sclaude) headless 一把梭保留为 mode="legacy"：脑子在 scripts/wolong_sop.md,
+启动器 scripts/run_wolong.sh,30 分钟 deadline kill。
 """
 
 from __future__ import annotations
@@ -16,17 +16,22 @@ from __future__ import annotations
 import argparse
 import os
 import select
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ncds_opus_factory.common import cancel
+from ncds_opus_factory.common.round_store import RoundStore
+from ncds_opus_factory.commands import wolong_rounds
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "run_wolong.sh"
 REVIEW_DIR = ROOT / "state" / "benchmark" / "review"
 
-DEFAULT_TIMEOUT_SECONDS = 1800  # opus 全链路编排，30 分钟封顶
+DEFAULT_TIMEOUT_SECONDS = 1800  # legacy opus 全链路编排，30 分钟封顶
 
 ProgressFn = Callable[[str], None]
 
@@ -40,22 +45,53 @@ def run(
     benchmark_path: str = "",
     avoid: str = "",
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    round_id: str | None = None,
+    resume: bool = False,
+    mode: str | None = None,
+    _dispatch_task_id: str | None = None,
     on_progress: ProgressFn = _noop,
 ) -> dict[str, Any]:
-    """拉起卧龙(opus headless)自主编排一轮内容生产。
+    """卧龙入口:默认分段编排;resume=True 跑续跑段;mode=legacy 走 opus 一把梭。
 
-    Args:
-        count: 本轮产出条数（run_wolong.sh 的位置参 1）。
-        benchmark_path: 对标数据 all_posts.json 路径；空串 = 用脚本内置默认。
-        avoid: 已发选题(逗号分隔)；空串 = 用脚本内置默认。
-    返回 {count, review_dir, returncode, tail}（tail = 最后若干行输出，便于排查）。
+    _dispatch_task_id 由 task_runner 注入(派单段确定化 round_id 用,重启重跑收敛
+    到同一个 round);CLI 直跑没有它,退回随机 round_id。
+    返回:派单段 {round_id, stage, guiguzi_task};续跑段 {round_id, consumed, status[, report]};
+    legacy {count, review_dir, returncode, tail}。
     """
+    if mode == "retro":
+        raise NotImplementedError("复盘模式(retro)P4 实装")
+    if mode == "legacy":
+        return _run_opus_legacy(count, benchmark_path, avoid, timeout_seconds, on_progress)
+
+    rounds = RoundStore()
+    transport = wolong_rounds.HttpTransport()
+    transport.ping()  # round 模式依赖 server(派发走 loopback):没起就清晰报错,别留孤儿 round
+    if resume:
+        if not round_id:
+            raise ValueError("续跑段必须携带 round_id")
+        return wolong_rounds.resume_round(rounds, transport, round_id, on_progress)
+    return wolong_rounds.start_round(
+        rounds, transport, count=count, benchmark_path=benchmark_path,
+        avoid=avoid, dispatch_task_id=_dispatch_task_id, on_progress=on_progress,
+    )
+
+
+# ---------------------------------------------------------------------------
+# legacy:opus headless 一把梭(P3 前的卧龙本体,保留作对照/兜底)
+# ---------------------------------------------------------------------------
+def _run_opus_legacy(
+    count: int,
+    benchmark_path: str,
+    avoid: str,
+    timeout_seconds: int,
+    on_progress: ProgressFn,
+) -> dict[str, Any]:
     if not SCRIPT.is_file():
         raise FileNotFoundError(f"缺启动器: {SCRIPT}")
 
     # run_wolong.sh 用 ${2:-默认} / ${3:-默认}，传空串会触发默认值，所以可安全传 ""
     cmd = ["bash", str(SCRIPT), str(count), benchmark_path or "", avoid or ""]
-    on_progress(f"wolong start: count={count} (opus headless orchestration, may take minutes)")
+    on_progress(f"wolong(legacy) start: count={count} (opus headless, may take minutes)")
 
     # 二进制 + 非阻塞读：select 配 deadline，子进程即便卡死(无输出)也能按时 kill
     proc = subprocess.Popen(
@@ -71,6 +107,7 @@ def run(
     os.set_blocking(fd, False)
 
     deadline = time.monotonic() + timeout_seconds
+    cancelled = cancel.current()
     tail: list[str] = []
     buf = b""
 
@@ -85,6 +122,10 @@ def run(
 
     try:
         while True:
+            if cancelled():
+                # 用户取消:SIGTERM 子进程,不再派发任何东西(防幽灵 round)
+                proc.send_signal(signal.SIGTERM)
+                raise cancel.TaskCancelled("wolong(legacy) cancelled by user")
             if time.monotonic() > deadline:
                 proc.kill()
                 raise TimeoutError(f"wolong timeout (>{timeout_seconds}s), opus killed")
@@ -122,10 +163,12 @@ def run(
 
 
 def _cli(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="nof wolong", description="卧龙先生: 内容工厂操盘手(opus 编排)")
+    parser = argparse.ArgumentParser(prog="nof wolong", description="卧龙先生: 内容工厂操盘手(分段编排)")
     parser.add_argument("--count", type=int, default=3, help="本轮产出条数")
-    parser.add_argument("--benchmark", default="", help="对标数据 all_posts.json 路径(空=脚本默认)")
-    parser.add_argument("--avoid", default="", help="已发选题,逗号分隔(空=脚本默认)")
+    parser.add_argument("--benchmark", default="", help="对标数据 all_posts.json 路径(空=自动发现最新)")
+    parser.add_argument("--avoid", default="", help="已发选题,逗号分隔")
+    parser.add_argument("--resume", default="", help="续跑指定 round_id(调试用;线上由事件驱动)")
+    parser.add_argument("--legacy", action="store_true", help="走 opus headless 一把梭(旧模式)")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     args = parser.parse_args(argv)
 
@@ -137,9 +180,12 @@ def _cli(argv: list[str] | None = None) -> int:
         benchmark_path=args.benchmark,
         avoid=args.avoid,
         timeout_seconds=args.timeout,
+        round_id=args.resume or None,
+        resume=bool(args.resume),
+        mode="legacy" if args.legacy else None,
         on_progress=on_progress,
     )
-    print(f"review_dir={result['review_dir']} returncode={result['returncode']}")
+    print(result)
     return 0
 
 

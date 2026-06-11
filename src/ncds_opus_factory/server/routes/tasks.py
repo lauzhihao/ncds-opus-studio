@@ -27,6 +27,7 @@ from ncds_opus_factory.server.schemas import (
     TaskDetailResponse,
     TaskMeta,
 )
+from ncds_opus_factory.server import rounds_gate
 from ncds_opus_factory.server.state import LABELS, RUNNER, STORE
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreate
         source=body.source,
         parent_task_id=body.parent_task_id,
         round_id=body.round_id,
+        intent_key=body.intent_key,
     )
     response.headers["Location"] = f"/tasks/{task_id}"
     logger.info(
@@ -160,6 +162,11 @@ async def review_task(task_id: str, body: ReviewRequest) -> Review:
             LABELS.write(meta, review, STORE.get_result(task_id))
     except Exception:  # noqa: BLE001
         logger.exception("[server] label write failed: task_id=%s", task_id)
+    # 闸门信号(§4.2):round 内任务的人工决策驱动卧龙续跑。失败不挡验收,对账协程兜底。
+    try:
+        await rounds_gate.handle_decision(task_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("[server] round decision wiring failed: task_id=%s", task_id)
     logger.info("[server] task reviewed: task_id=%s decision=%s", task_id, body.decision)
     return review
 
@@ -177,6 +184,11 @@ async def cancel_task(task_id: str) -> dict:
         raise HTTPException(status_code=409, detail=f"cannot cancel a {meta.status} task")
     STORE.update_status(task_id, "cancelled")
     STORE.append_progress(task_id, "任务已被用户取消")
+    # round 内任务被取消 = 机器弃单事件,续跑段决定返工或止损(§4.2)
+    try:
+        await rounds_gate.handle_cancelled(STORE.get_meta(task_id))
+    except Exception:  # noqa: BLE001
+        logger.exception("[server] round cancel wiring failed: task_id=%s", task_id)
     logger.info("[server] task cancelled: task_id=%s (was %s)", task_id, meta.status)
     return {"ok": True, "status": "cancelled"}
 
@@ -189,6 +201,11 @@ async def restore_task(task_id: str) -> dict:
     meta = STORE.get_meta(task_id)
     if meta.status != "cancelled":
         raise HTTPException(status_code=409, detail=f"cannot restore a {meta.status} task")
+    # 卧龙段禁用恢复(§4.1):恢复的段会与队列里的段并发读改写同一个 round 文件
+    if meta.cmd == "wolong":
+        raise HTTPException(
+            status_code=409, detail="卧龙段不支持恢复(round 状态会并发写),请重新发起一轮"
+        )
     # 执行中取消的任务,工作线程杀不掉还在跑:此时恢复会双线程跑同一任务
     # (旧线程的事件/结果与新跑交错互踩),必须等旧线程退出
     if RUNNER.is_inflight(task_id):

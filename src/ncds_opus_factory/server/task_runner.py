@@ -56,6 +56,10 @@ _DEFAULT_DAILY_QUOTA: dict[str, int] = {
     "_retro": 8,
 }
 
+# round 内不设人工闸的阶段(§4.6):完成即自动归档,机器反馈推动 round。
+# 闸1 在柳永(脚本验收),闸2 在终验;吴道子/伯牙接入后加进来
+_UNGATED_ROUND_CMDS = {"guiguzi"}
+
 # 真实任务 id 形态（task_store._new_task_id）；种子数据（t_demo_*/t_mock_*）
 # 不匹配——启动恢复绝不能把演示任务拉起来真跑
 _REAL_TASK_ID_RE = re.compile(r"^t_\d{12,}_[0-9a-f]{6,}$")
@@ -101,6 +105,9 @@ class TaskRunner:
         self._queues: dict[str, asyncio.Queue[str]] = {}
         self._workers: list[asyncio.Task] = []
         self._started = False
+        # 终态钩子(round 事件接线,§4.2):app startup 注入 rounds_gate.handle_terminal,
+        # 不在此 import——避免 server 子模块循环依赖
+        self.on_terminal: Callable[..., Any] | None = None
         # 配额记账 {(YYYY-MM-DD, 桶key): count}；只留当天,翻天即弃
         self._quota_used: dict[tuple[str, str], int] = {}
         # 在途集合:出队 CAS 看不见还活着的旧工作线程,restore 必须问这里——
@@ -115,6 +122,10 @@ class TaskRunner:
     # ------------------------------------------------------------
     @staticmethod
     def concurrency_for(cmd: str) -> int:
+        if cmd == "wolong":
+            # 硬钳 1,env 也不放行:rounds_gate 的"查在途段→submit"原子性和
+            # round 文件的串行写都建立在卧龙段不真并发之上
+            return 1
         return max(1, CONCURRENCY.get(cmd, CONCURRENCY["_default"]))
 
     @staticmethod
@@ -152,11 +163,21 @@ class TaskRunner:
         source: str | None = None,
         parent_task_id: str | None = None,
         round_id: str | None = None,
+        intent_key: str | None = None,
     ) -> str:
         if cmd not in self.registry:
             raise KeyError(f"unknown command: {cmd}")
+        # 派发幂等(§4.1):同 (round_id, intent_key) 已有任务直接返回既有 id——
+        # 卧龙段崩在"派发后、回填前"时,重发不产生重复任务
+        if round_id and intent_key:
+            for m in self.store.list_tasks():
+                if m.round_id == round_id and m.intent_key == intent_key:
+                    logger.info("[TaskRunner] intent 命中既有任务: %s/%s -> %s",
+                                round_id, intent_key, m.task_id)
+                    return m.task_id
         meta = self.store.create(
-            cmd, params, source=source, parent_task_id=parent_task_id, round_id=round_id
+            cmd, params, source=source, parent_task_id=parent_task_id,
+            round_id=round_id, intent_key=intent_key,
         )
         # 配额闸门：超额 fail-fast（任务可见、可改天重发），不入队
         key, quota = self._quota_key_and_limit(cmd, source)
@@ -164,6 +185,8 @@ class TaskRunner:
             msg = f"今日配额已用完(桶 {key}: {quota}/天),任务未入队;明天自动恢复或调大 NOF_DAILY_QUOTA"
             self.store.append_error(meta.task_id, msg)
             self.store.update_status(meta.task_id, "failed", error=msg)
+            # 系统任务(cron/gate)被配额拒绝也要自动归档,不准在收件箱点红灯
+            self._maybe_auto_archive(meta, None)
             logger.warning("[TaskRunner] quota exceeded: bucket=%s task=%s", key, meta.task_id)
             return meta.task_id
         self._quota_take(key)
@@ -216,13 +239,24 @@ class TaskRunner:
                     self._quota_used[(today, key)] = (
                         self._quota_used.get((today, key), 0) + 1
                     )
-                # cron 任务自动归档的崩溃窗口兜底:终态却没 review 的补写 system 归档
+                # 系统任务自动归档的崩溃窗口兜底:终态却没 review 的补写 system 归档
+                # (适用范围由 _maybe_auto_archive 自己判定:cron/卧龙段/无闸阶段)
                 if (
-                    meta.source == "cron"
-                    and meta.status in ("completed", "failed")
+                    meta.status in ("completed", "failed")
                     and self.store.get_review(meta.task_id) is None
                 ):
-                    self._maybe_auto_archive(meta, self.store.get_result(meta.task_id))
+                    result = self.store.get_result(meta.task_id)
+                    # 派单段崩在 set_round 回填前的窄窗口:先补回填再归档
+                    if (
+                        meta.cmd == "wolong"
+                        and meta.round_id is None
+                        and isinstance(result, dict)
+                        and result.get("round_id")
+                    ):
+                        refreshed = self.store.set_round(meta.task_id, str(result["round_id"]))
+                        if refreshed is not None:
+                            meta = refreshed
+                    self._maybe_auto_archive(meta, result)
                 if meta.status not in ("pending", "running"):
                     continue
                 # 种子/演示任务（t_demo_*/t_mock_*）不参与恢复——绝不能重启时真跑起来
@@ -284,6 +318,10 @@ class TaskRunner:
         self.store.update_status(task_id, "running")
         self._inflight.add(task_id)
         params = meta.params
+        # 卧龙派单段:注入任务 id 让 round_id 确定化(round_<task_id>)——
+        # 重启重跑同一任务收敛到同一个 round,绝不双倍生产
+        if cmd == "wolong" and not params.get("resume") and not params.get("mode"):
+            params = {**params, "_dispatch_task_id": task_id}
 
         # on_progress 在工作线程里被同步调用；写文件 + flush 即可让 SSE tail 看到
         def on_progress(text: str) -> None:
@@ -312,7 +350,19 @@ class TaskRunner:
             # 命令可选回传展示标题/副题(如沈括用作品标题替代任务卡上的分享链接)
             if isinstance(result, dict) and (result.get("task_title") or result.get("task_subtitle")):
                 self.store.set_display(task_id, result.get("task_title"), result.get("task_subtitle"))
+            # 卧龙派单段:round 在 run() 内部才生成,完成时回填 round_id 到 meta,
+            # 让自动归档判定生效(开盘卡不该在收件箱点红灯)
+            if (
+                isinstance(result, dict)
+                and result.get("round_id")
+                and meta.round_id is None
+                and meta.cmd == "wolong"
+            ):
+                refreshed = self.store.set_round(task_id, str(result["round_id"]))
+                if refreshed is not None:
+                    meta = refreshed
             self._maybe_auto_archive(meta, result)
+            await self._fire_terminal(meta, "completed", result)
             logger.info("[TaskRunner] task %s (%s) completed", task_id, cmd)
         except asyncio.CancelledError:
             # 优雅停服:worker 被 cancel。任务保持 running,交给下次启动的孤儿恢复;
@@ -329,20 +379,33 @@ class TaskRunner:
             err_text = f"{type(exc).__name__}: {exc}"
             self.store.append_error(task_id, err_text)
             self.store.update_status(task_id, "failed", error=err_text)
-            if meta.source == "cron":
-                # cron 任务失败也自动归档:机器自闭环,失败行不准在收件箱点红灯
-                self._maybe_auto_archive(meta, None)
+            # cron/round 系统任务失败也自动归档:机器自闭环,失败行不准点红灯
+            self._maybe_auto_archive(meta, None)
+            await self._fire_terminal(meta, "failed", None)
             logger.exception("[TaskRunner] task %s (%s) failed", task_id, cmd)
         finally:
             self._inflight.discard(task_id)
 
-    def _maybe_auto_archive(self, meta: TaskMeta, result: dict[str, Any] | None) -> None:
-        """系统任务不准打扰 Leader（§4.7）：cron 任务完成即自动归档。
+    async def _fire_terminal(self, meta: TaskMeta, status: str, result: dict[str, Any] | None) -> None:
+        """机器反馈(§4.2):带 round_id 的任务终态通知编排层。失败不影响任务本身。"""
+        if self.on_terminal is None or not meta.round_id:
+            return
+        try:
+            await self.on_terminal(meta, status, result)
+        except Exception:  # noqa: BLE001
+            logger.exception("[TaskRunner] on_terminal hook failed: task=%s", meta.task_id)
 
-        reviewer=system 的 review 让 iOS 现有逻辑直接归档（不进待验收、不点红灯），
-        案卷照写但复盘只学 reviewer=user 的样本——自动归档不污染训练集。
+    def _maybe_auto_archive(self, meta: TaskMeta, result: dict[str, Any] | None) -> None:
+        """系统任务不准打扰 Leader（§4.7）：机器自闭环的任务完成/失败即自动归档。
+
+        适用:cron 订阅刷新、round 内的卧龙段(派单/续跑)、round 内无闸阶段任务
+        (鬼谷子选题——闸1 在柳永)。reviewer=system 的 review 让 iOS 现有逻辑直接
+        归档(不进待验收、不点红灯),案卷照写但复盘只学 reviewer=user 的样本。
         """
-        if meta.source != "cron":
+        ungated_round = bool(meta.round_id) and (
+            meta.cmd == "wolong" or meta.cmd in _UNGATED_ROUND_CMDS
+        )
+        if meta.source != "cron" and not ungated_round:
             return
         review = Review(
             decision="approved",

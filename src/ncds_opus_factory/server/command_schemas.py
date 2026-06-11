@@ -111,7 +111,7 @@ COMMAND_SCHEMAS: dict[str, dict[str, Any]] = {
     "wolong": {
         "label": "卧龙 · 操盘手(CEO)",
         "group": "agent",
-        "summary": "opus 自主编排 鬼谷子->柳永->待验收清单（重任务，可能数分钟）",
+        "summary": "分段编排一轮生产:鬼谷子选题->柳永成稿->你验收->战报（验收驱动,自动推进）",
         "fields": [
             _f("count", "本轮产出条数", "int", default=3),
             _f("benchmark_path", "对标数据路径", "string", help="留空用脚本内置默认"),

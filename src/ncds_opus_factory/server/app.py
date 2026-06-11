@@ -46,9 +46,11 @@ from ncds_opus_factory.server.routes import jobs as jobs_routes
 from ncds_opus_factory.server.routes import mock as mock_routes
 from ncds_opus_factory.server.routes import pipelines as pipelines_routes
 from ncds_opus_factory.server.routes import preview as preview_routes
+from ncds_opus_factory.server.routes import rounds as rounds_routes
 from ncds_opus_factory.server.routes import subscriptions as subscriptions_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
+from ncds_opus_factory.server import rounds_gate
 from ncds_opus_factory.server.state import LABELS, RUNNER, STATE_DIR, STORE
 from ncds_opus_factory.server.subscriptions import subscription_loop, subscriptions_path
 
@@ -77,6 +79,7 @@ app.add_middleware(
 app.include_router(commands_routes.router)
 app.include_router(tasks_routes.router)
 app.include_router(subscriptions_routes.router)
+app.include_router(rounds_routes.router)
 app.include_router(templates_routes.router)
 app.include_router(jobs_routes.router)
 app.include_router(artifacts_routes.router)
@@ -236,6 +239,23 @@ def sweep_cron_once() -> int:
     return removed
 
 
+# round 对账周期(§4.5):比清扫快——续跑丢失要在分钟级被补上,不能等一小时
+_ROUND_RECONCILE_INTERVAL_S = float(os.environ.get("NOF_ROUND_RECONCILE_S", "300"))
+
+
+async def _round_reconciler() -> None:
+    import asyncio
+
+    while True:
+        try:
+            n = await rounds_gate.reconcile_once()
+            if n:
+                logger.info("[rounds] 对账处理 %d 个 round", n)
+        except Exception:  # noqa: BLE001 — 对账失败不影响服务
+            logger.exception("[rounds] reconcile failed")
+        await asyncio.sleep(_ROUND_RECONCILE_INTERVAL_S)
+
+
 async def _discard_sweeper() -> None:
     import asyncio
 
@@ -265,11 +285,14 @@ async def _startup_log() -> None:
         STATE_DIR,
         RUNNER.list_commands(),
     )
+    # round 事件接线(§4.2):任务终态 -> 编排层。先挂钩子再恢复积压,别漏事件
+    RUNNER.on_terminal = rounds_gate.handle_terminal
     # 调度器:恢复积压(重启后队列在内存里已蒸发) + 按 per-cmd 额度拉起 worker
     recovered = RUNNER.recover_and_start()
     if recovered:
         logger.info("[nof-server] 重启恢复: %d 个积压任务重新入队", recovered)
     asyncio.create_task(_discard_sweeper())
+    asyncio.create_task(_round_reconciler())
     logger.info("[sweep] 弃用清扫已启动: TTL=%.0fh, cron TTL=%.0fh, 间隔=%ds",
                 DISCARD_TTL_HOURS, CRON_TTL_HOURS, _DISCARD_SWEEP_INTERVAL_S)
     # 订阅传感器(NOF_SUBSCRIPTIONS=0 停用;无订阅文件时空转)
