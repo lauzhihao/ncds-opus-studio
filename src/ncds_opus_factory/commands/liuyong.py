@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ncds_opus_factory.common import ai_taste, quality_rubric
+from ncds_opus_factory.common import ai_taste, quality_rubric, rubric_store
 from ncds_opus_factory.common.node_runtime import resolve_node
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -91,11 +91,19 @@ def run(
 
     job_id = _build_job_id()
     ddir = deliverables_dir or str(ROOT / "video-jobs" / job_id / "deliverables")
+    # learned rubric 注入(P4,§8.3 第 3 条·唯一注入点):把卧龙复盘归纳的 Leader
+    # 口味摘要(≤800 字)附进生成 brief,让柳永一开始就照 Leader 口味写。
+    # 不注入自检/质检层——口味混进工艺打分会让三层判据互相污染。
+    reqs = user_requirements or ""
+    brief = rubric_store.injection_brief()
+    if brief:
+        reqs = (reqs + "\n\n" if reqs else "") + brief
+        on_progress("已注入 Leader 口味备忘(卧龙复盘)")
     payload = {
         "sourceText": topic.strip(),
         "deliverablesDir": ddir,
         "targetProfile": "douyin_cog",
-        "userRequirements": user_requirements or "",
+        "userRequirements": reqs,
     }
 
     # 运行时生成 model 配置：① 登记 openai-codex/gpt-5.5 过 resolveRewriteModels 的 configured 检查；

@@ -1,9 +1,10 @@
 # 卧龙实装设计：调度、闸门与离线学习
 
-> 状态：v3（2026-06-11）。**P1/P2/P3 已实施并部署生产（:8810），P4/P5 待实施。**
-> 新会话执行 P4/P5 前必读 **§8 实施纪要**——P3 落地时的架构决策（卧龙段=确定性 Python）
-> 改变了 §5 部分条目的注入点与接线方式，以 §8.3/§8.4 的修正为准。
-> 测试基线：`cd ncds-opus-studio && .venv/bin/pytest tests/`（当前 105 全过）。
+> 状态：v4（2026-06-11）。**P1/P2/P3/P4 已实施（P4 待部署重启 :8810），P5 待实施。**
+> 新会话执行 P5 前必读 **§8 实施纪要**——P3 落地时的架构决策（卧龙段=确定性 Python）
+> 改变了 §5 部分条目的注入点与接线方式，以 §8.3/§8.4 的修正为准;
+> P4 的 as-built 裁定见 **§8.5**。
+> 测试基线：`cd ncds-opus-studio && .venv/bin/pytest tests/`（当前 135 全过）。
 >
 > v2 修订：经三视角对抗核查，修复 v1 的 4 个 blocker——①防递归规则与续跑机制自相矛盾
 > ②无闸阶段与失败任务无事件推动 round ③cron/系统任务淹没 iOS 待验收桶
@@ -247,7 +248,7 @@ iOS 的归类是写死的：completed 且无 decision = 待验收桶 + 首页红
 | **P1** | 案卷库（含 reviewer/note_origin 字段）+ 清扫修正 + 溯源字段；iOS：TaskMeta 三个 `String?` 字段 + listTasks 逐条容错解码 | ✅ 已上线（后端 6053d7e，iOS 040db04） |
 | **P2** | 调度器（队列/额度/出队 CAS/启动恢复/requeue 收口）+ 订阅传感器 + cron 任务自动归档豁免 + 配额分桶 | ✅ 已上线（后端 d1a7ed7） |
 | **P3** | 卧龙分段编排 + 双事件源接线 + 对账协程 + 续跑合并 + 定案语义 + 止损/清场；iOS：round 任务打回交还卧龙 + 隐藏重试 | ✅ 已上线（后端 c79e719，iOS 0510b1b） |
-| **P4** | 复盘（retro 独立配额、低峰 cron、注入防御）+ rubric 版本化/自动回退 + 预筛 + 探索流量与假阴性率跟踪 | ⬜ 待实施，**按 §8.3 执行** |
+| **P4** | 复盘（retro 独立配额、低峰 cron、注入防御）+ rubric 版本化/自动回退 + 预筛 + 探索流量与假阴性率跟踪 | ✅ 已实施（as-built 见 §8.5） |
 | **P5** | 排产策略（含选题库完整改造）+ iOS 增强（角标/打回听写稿可编辑+快捷理由标签/战报页/改判入口/续跑卡折叠/灯态轮询/pending 文案/订阅管理页） | ⬜ 待实施，**按 §8.4 执行** |
 
 ## 8. 实施纪要（as-built，2026-06-11）——新会话从这里接力
@@ -430,7 +431,48 @@ state/shenkuo/ 与 topics.json 都不存在）。排产协程对"无事件文件
    - 灯态轮询（建议 30s,仅前台）;pending 详情页文案（排队中≠创作中）;
      订阅管理页（GET/PUT /subscriptions + POST /subscriptions/tick 已就绪）。
 
-### 8.5 运维
+### 8.5 P4 实施纪要（as-built，2026-06-11）
+
+按 §8.3 实施完成,经 5 视角对抗复审(43 agents) + 135 测试 + 真实服务 E2E 冒烟
+(复盘产 rubric→开盘→预筛拦截→返工→止损/探索放行→假阴性入战报全链路)。新文件:
+`common/rubric_store.py`(学习记忆层:rubric 版本库+案卷读取+复盘水位)、
+`commands/prescreen.py`(预筛判官,scodex)、`commands/wolong_retro.py`(复盘段,opus)、
+`server/retro_trigger.py`(每晚触发协程)。如下 as-built 裁定与 §8.3 的字面有出入或为补充:
+
+1. **预筛崩溃安全的两圈分离**：判定先持久化到 `line.prescreen`(含 task_id 键,
+   返工换稿后陈旧判定按新稿重判),下一圈才写 review/转移产线。重入段对已有判定
+   **不重判**——LLM 不确定性不会让同一稿的判定漂移出"已写 review 但稿被放行"的孤儿态。
+2. **用户竞态防线(§8.3 未覆盖,新增)**：成稿 completed 后到预筛判定前任务已在
+   收件箱可见。三道防线:review 路由对 reviewer=wolong 覆盖 user 决策回 409;
+   段内转移前查未消费 decision 让位;收敛靠用户 decision 事件(下一段消费,产线按
+   用户判定落定)。结论:用户标注永不被预筛覆盖,竞态最多延迟一段。
+3. **回退口径收紧**："连续两轮恶化"= 当前版最近两个 done round 的打回率与返工率
+   **双双严格高于**上一版各 round 均值(回退是破坏性动作,单指标抖动不触发)。
+   回退评估在复盘段开头、样本闸**之前**执行——坏 rubric 的下台不等新标签。
+4. **fn_stats 口径**：只记当前指针版本的账(旧版预测不指控新版);只记有探索样本的
+   round;窗口=最近 5 个此类 round;同 round 重复收盘幂等覆盖。新版本/回退都重置
+   fn_stats 与 degraded(预测表现重新攒)。假阴性以"产线最终判定对应那一稿"的标记计。
+5. **degraded 语义**：预筛放行 + 柳永注入停用(降级版备忘录本身是嫌疑人),直到
+   复盘产新版重置。降级期间不再积累探索样本,自愈通道只有复盘——这是设计内的单向门。
+6. **注入点在 `liuyong.run`**：所有柳永任务(含用户手发)都吃 Leader 口味 brief,
+   不只 round 内——更好的 brief 对谁都成立。≤800 字含标头,经 `injection_brief()`。
+7. **探索假阴性进复盘语料是特性不是回声室**(复审有此争议,裁定不采纳"降权"建议):
+   用户对探索稿的 approved 是地面真值,它反驳坏 rubric 的错误规则,是纠偏负反馈;
+   给它降权会削弱用户纠正坏 rubric 的能力,恰好违背 §5.3 探索流量的设计目的。
+8. **decision 事件未存 reviewer**(防火墙依赖唯一生产者):round 事件里的 decision
+   只可能来自 `rounds_gate.handle_decision`,它只放行 reviewer=user。若将来新增
+   decision 事件生产者,必须同步给事件加 reviewer 字段并在战报统计处过滤。
+9. **retro 600s 即熔断**：opus 子进程 timeout 到点 TimeoutExpired→任务 failed(自动
+   归档)→水位不动→翌日窗口重试,_retro 配额桶(8/天)是失控刹车。复盘独占唯一
+   wolong worker 期间 round 续跑排队,设计接受(低峰 4 点执行)。
+10. **新增 env**：NOF_RETRO_HOUR(默认4)/NOF_RETRO_MIN_LABELS(10)/NOF_RETRO_TIMEOUT(600)/
+    NOF_RETRO(=0停用触发器)/NOF_PRESCREEN_EXPLORE_PCT(15)/NOF_PRESCREEN_TIMEOUT(60);
+    E2E 冒烟假 LLM:NOF_RETRO_FAKE_LLM=1、NOF_PRESCREEN_FAKE_JUDGE=approved|rejected。
+    全部解析容错(非法值回退默认,不成为 import 期启动单点)。
+11. **测试隔离**：`tests/conftest.py` autouse 把 NOF_STATE_DIR 指到 tmp——否则
+    开发机上真实 rubric 会让单测意外激活预筛真调 scodex。
+
+### 8.6 运维
 
 - 生产：`nof-server`（nohup 孤儿进程，无 launchd），日志 `/tmp/nof-server.log`，
   无特殊 env。重启：`kill -TERM $(lsof -ti :8810)` → `cd ncds-opus-studio &&

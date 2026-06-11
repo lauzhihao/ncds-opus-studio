@@ -3,9 +3,11 @@
 P3 起默认是**分段编排**（docs/WOLONG-DESIGN.md §4）：
 - 派单段（无 round_id）：建 round、派鬼谷子选题,然后退出;
 - 续跑段（round_id + resume）：由验收/任务终态事件驱动,消费积压事件推进 round
-  （开产线派柳永、返工/止损、全部落定出战报）;
-- 编排机械是确定性 Python（commands/wolong_rounds.py）,LLM 判断力(rubric/预筛/复盘)
-  P4 注入;mode="retro" 预留给 P4 复盘。
+  （开产线派柳永、预筛、返工/止损、全部落定出战报）;
+- 复盘段（mode="retro",P4）：离线归纳 Leader 验收标注 -> learned rubric
+  （commands/wolong_retro.py,由 server/retro_trigger 每晚低峰投递）;
+- 编排机械是确定性 Python（commands/wolong_rounds.py）,LLM 判断力挂在
+  预筛(commands/prescreen.py)与复盘。
 
 原 opus(sclaude) headless 一把梭保留为 mode="legacy"：脑子在 scripts/wolong_sop.md,
 启动器 scripts/run_wolong.sh,30 分钟 deadline kill。
@@ -59,7 +61,9 @@ def run(
     legacy {count, review_dir, returncode, tail}。
     """
     if mode == "retro":
-        raise NotImplementedError("复盘模式(retro)P4 实装")
+        from ncds_opus_factory.commands import wolong_retro
+
+        return wolong_retro.run_retro(on_progress)
     if mode == "legacy":
         return _run_opus_legacy(count, benchmark_path, avoid, timeout_seconds, on_progress)
 

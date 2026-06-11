@@ -146,6 +146,14 @@ async def review_task(task_id: str, body: ReviewRequest) -> Review:
     """
     if not STORE.exists(task_id):
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    # 预筛防覆盖闸(P4):成稿 completed 后到预筛判定前,任务已在收件箱可见;
+    # 用户抢先验收时,预筛的 wolong review 绝不能覆盖人工标注(一手标签会丢)
+    if body.reviewer == "wolong":
+        existing = STORE.get_review(task_id)
+        if existing is not None and existing.reviewer == "user":
+            raise HTTPException(
+                status_code=409, detail="该任务已有用户决策,预筛让位、不得覆盖"
+            )
     review = Review(
         decision=body.decision,
         note=body.note,

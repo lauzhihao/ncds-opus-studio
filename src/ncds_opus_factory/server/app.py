@@ -298,6 +298,11 @@ async def _startup_log() -> None:
     # 订阅传感器(NOF_SUBSCRIPTIONS=0 停用;无订阅文件时空转)
     if os.environ.get("NOF_SUBSCRIPTIONS", "1") != "0":
         asyncio.create_task(subscription_loop(RUNNER, STORE, subscriptions_path(STATE_DIR)))
+    # 复盘触发器(P4,§8.3):每晚低峰投递 retro 段。NOF_RETRO=0 停用;样本不足时空转
+    if os.environ.get("NOF_RETRO", "1") != "0":
+        from ncds_opus_factory.server.retro_trigger import retro_loop
+
+        asyncio.create_task(retro_loop(RUNNER, STORE))
 
 
 def cli_main() -> None:

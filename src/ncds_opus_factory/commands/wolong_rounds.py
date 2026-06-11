@@ -28,7 +28,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from ncds_opus_factory.common import rubric_store
 from ncds_opus_factory.common.round_store import RoundStore
+from ncds_opus_factory.commands import prescreen
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,9 @@ class Transport(Protocol):
                round_id: str, intent_key: str) -> str: ...
 
     def read_result(self, task_id: str) -> dict[str, Any] | None: ...
+
+    def review(self, task_id: str, decision: str, note: str,
+               reviewer: str = "wolong") -> bool: ...
 
 
 class HttpTransport:
@@ -97,6 +102,22 @@ class HttpTransport:
             return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
+
+    def review(self, task_id: str, decision: str, note: str,
+               reviewer: str = "wolong") -> bool:
+        """预筛拦截的写入路径(§8.3):走 loopback 路由,案卷由路由顺带落,
+        commands 层禁止直访 STORE。409 = 用户已亲自决策,预筛让位,返回 False。"""
+        import requests
+
+        resp = requests.post(
+            f"{self.base}/tasks/{task_id}/review",
+            json={"decision": decision, "note": note, "reviewer": reviewer},
+            timeout=15,
+        )
+        if resp.status_code == 409:
+            return False
+        resp.raise_for_status()
+        return True
 
 
 def discover_benchmark() -> str | None:
@@ -157,6 +178,8 @@ def start_round(
     else:
         round_id = f"round_{datetime.now():%Y%m%d_%H%M%S}_{secrets.token_hex(2)}"
     goal = {"count": max(1, int(count)), "benchmark_path": str(benchmark), "avoid": avoid or ""}
+    # learned rubric 版本进 goal:战报按版本分组对比,复盘据此评估回退(§8.3)
+    goal["rubric_version"] = rubric_store.current_version()
     rounds.create(round_id, goal)
     on_progress(f"卧龙开盘: {round_id} 目标 {goal['count']} 条 (对标: {Path(benchmark).parent.name})")
 
@@ -202,12 +225,25 @@ def resume_round(
     A→B→C 三段式套循环:无法归属的事件(意向还没回填 task_id,见 _handle_event
     的暂缓语义)本轮不消费,回填后下一圈重试;一圈没有任何进展即退出,
     剩余事件由对账协程兜底。
+
+    预筛(P4,§8.3)嵌在套圈里,判定与落盘分两圈走(崩溃安全协议):
+      圈 N   A 收集 prescreen_pending 产线 → B 锁外 LLM 判定 → C 把判定记进
+             line.prescreen(状态不动);
+      圈 N+1 A 把已有判定的产线收进行动队列 → B 锁外写拦截 review(loopback)
+             → C 落盘转移(拦截→返工/止损,通过/探索→进闸1)。
+    任何一步崩掉,line 停在 prescreen_pending + 判定已持久化,对账协程拉起的
+    下一段直接续作,不重判(LLM 不确定性不会让同一稿的判定漂移)。
     """
+    # learned rubric 段首读一次:缺失/degraded → 预筛整体放行(冷启动安全,§8.3)
+    active = rubric_store.active_rubric()
+    rubric_text = active[1] if active else None
     report = None
     consumed_total = 0
-    for _ in range(8):  # 圈数上限只是防御,正常 1-2 圈收敛
-        # ---- A. 锁内:消费可归属事件,计算行动,登记意向 ----
+    for _ in range(8):  # 圈数上限只是防御,正常 1-3 圈收敛
+        # ---- A. 锁内:消费可归属事件,计算行动,登记意向,收集预筛队列 ----
         dispatch_plan: list[tuple[str, str, dict[str, Any]]] = []
+        judge_queue: list[dict[str, Any]] = []   # 待判定(无本稿判定记录)
+        act_queue: list[dict[str, Any]] = []     # 判定已记录,待写 review/落盘转移
         deferred = 0
         with rounds.mutate(round_id) as r:
             if r["status"] != "active":
@@ -221,6 +257,23 @@ def resume_round(
                     consumed_total += 1
                 else:
                     deferred += 1  # 暂缓:回填后重试
+            # 预筛收集:含上一段崩在判定前留下的 prescreen_pending(可重入)
+            for line in r["lines"]:
+                if line.get("status") != "prescreen_pending":
+                    continue
+                if rubric_text is None:
+                    line["status"] = "review"
+                    on_progress(f"产线 {line['slot']} 预筛放行(无可用 rubric),待验收")
+                    continue
+                mark = line.get("prescreen") or {}
+                item = {"slot": line["slot"], "task_id": line["task_id"],
+                        "topic": str((line.get("topic") or {}).get("title") or "")}
+                if mark.get("task_id") == line.get("task_id") and mark.get("prediction"):
+                    act_queue.append({**item, "prediction": mark["prediction"],
+                                      "explore": bool(mark.get("explore")),
+                                      "reason": mark.get("reason") or ""})
+                else:
+                    judge_queue.append(item)  # 含返工换稿后的陈旧判定:按新稿重判
             # 把计划落进 intents(task_id=None),崩溃后下一段能看见未完成的派发
             for key, cmd, params in dispatch_plan:
                 if key not in r["intents"]:
@@ -231,7 +284,7 @@ def resume_round(
                 if intent.get("task_id") is None and all(k != key for k, _, _ in dispatch_plan):
                     dispatch_plan.append((key, intent["cmd"], intent["params"]))
 
-        # ---- B. 锁外:幂等派发(intent_key 查重由调度器兜底;锁内禁 HTTP,防死锁) ----
+        # ---- B. 锁外:幂等派发 + 预筛判定/拦截 review(锁内禁 HTTP/LLM,防死锁) ----
         dispatched: dict[str, str] = {}
         for key, cmd, params in dispatch_plan:
             try:
@@ -242,8 +295,28 @@ def resume_round(
             except Exception as e:  # noqa: BLE001 — 单个派发失败留给对账协程重试
                 logger.exception("[rounds] 派发失败 %s/%s", round_id, key)
                 on_progress(f"派发失败(对账协程会重试) {key}: {type(e).__name__}: {e}")
+        fresh_verdicts: list[dict[str, Any]] = []
+        for item in judge_queue:
+            verdict = prescreen.judge(rubric_text, item["topic"],
+                                      transport.read_result(item["task_id"]))
+            explore = (verdict["prediction"] == "rejected"
+                       and prescreen.is_explore(item["task_id"]))
+            fresh_verdicts.append({**item, **verdict, "explore": explore})
+            on_progress(f"预筛 产线{item['slot']}: 预测 {verdict['prediction']}"
+                        + (" (探索:照常送验收)" if explore else ""))
+        review_ok: dict[str, bool] = {}
+        for item in act_queue:
+            if item["prediction"] == "rejected" and not item["explore"]:
+                try:
+                    review_ok[item["task_id"]] = transport.review(
+                        item["task_id"], "rejected",
+                        item["reason"] or "预筛:预测不过审", reviewer="wolong")
+                except Exception as e:  # noqa: BLE001 — 写不进就不动产线,下段重试
+                    logger.exception("[rounds] 预筛 review 写入失败 %s", item["task_id"])
+                    on_progress(f"预筛 review 写入失败(稍后重试) 产线{item['slot']}: {type(e).__name__}")
+                    review_ok[item["task_id"]] = False
 
-        # ---- C. 锁内:回填 task_id,终局检查 ----
+        # ---- C. 锁内:回填 task_id,预筛判定落盘与转移,终局检查 ----
         with rounds.mutate(round_id) as r:
             for key, tid in dispatched.items():
                 if key in r["intents"]:
@@ -253,10 +326,25 @@ def resume_round(
                         line["task_id"] = tid
                         line["status"] = "drafting"
                         line.pop("pending_intent", None)
+            for v in fresh_verdicts:
+                line = _line_of(r, v["task_id"])
+                if line is None or line.get("status") != "prescreen_pending":
+                    continue
+                line["prescreen"] = {"task_id": v["task_id"], "prediction": v["prediction"],
+                                     "reason": v["reason"], "explore": v["explore"],
+                                     "at": datetime.now().isoformat()}
+            transitions = _apply_prescreen_actions(r, act_queue, review_ok, on_progress)
+            # 是否还有本段内能推进的活(返工意向待派/预筛待落盘)
+            more = any(i.get("task_id") is None for i in r["intents"].values()) or (
+                rubric_text is not None
+                and any(ln.get("status") == "prescreen_pending" for ln in r["lines"])
+            )
             report = _finalize_if_done(r, on_progress)
 
-        progressed = bool(dispatch_plan) or bool(dispatched)
-        if report is not None or (deferred == 0) or not progressed:
+        progressed = bool(dispatch_plan) or bool(dispatched) or bool(fresh_verdicts) or transitions
+        if report is not None or not progressed:
+            break
+        if deferred == 0 and not more:
             break
 
     result: dict[str, Any] = {
@@ -310,8 +398,10 @@ def _handle_event(
             # 状态守卫:decision 先于 terminal 被消费时(API 允许对 running 任务写
             # review),不能把 approved/killed 回退成 review
             if line["status"] in ("dispatching", "drafting"):
-                line["status"] = "review"   # 进闸1,等 Leader 验收
-                on_progress(f"产线 {line['slot']} 成稿完成,待验收")
+                # 闸1 前先过预筛(§8.3):事件照常消费,line 置 prescreen_pending,
+                # 判定在锁外执行;段在判定前被杀,对账协程凭此状态救活
+                line["status"] = "prescreen_pending"
+                on_progress(f"产线 {line['slot']} 成稿完成,进预筛")
         else:  # failed / cancelled = 机器弃单(§4.2)
             _rework_or_kill(r, line, note=f"上一稿{ev['status']}", plan=plan, on_progress=on_progress)
         return True
@@ -408,6 +498,52 @@ def _rework_or_kill(
     on_progress(f"产线 {line['slot']} 返工第 {line['rework']} 次")
 
 
+def _apply_prescreen_actions(
+    r: dict[str, Any],
+    act_queue: list[dict[str, Any]],
+    review_ok: dict[str, bool],
+    on_progress: ProgressFn,
+) -> int:
+    """C 圈:按已持久化的预筛判定推进产线。返回完成的转移数。
+
+    拦截(预测必被拒且非探索) → 前提是 wolong review 已写成(挡出收件箱),
+    然后段内直接驱动返工/止损(计入返工配额,不经 round 事件——它是段内决策);
+    通过/探索 → 进闸1。判定记录在 line.prescreen,本函数幂等可重入。
+    """
+    # 用户在预筛窗口抢先验收(成稿 completed 后任务已在收件箱可见):
+    # 有未消费 decision 的产线预筛让位,交事件消费路径处理
+    decided = {e["task_id"] for e in r["events"]
+               if e["kind"] == "decision" and not e.get("consumed")}
+    plan: list[tuple[str, str, dict[str, Any]]] = []
+    moved = 0
+    for item in act_queue:
+        line = _line_of(r, item["task_id"])
+        if line is None or line.get("status") != "prescreen_pending":
+            continue
+        mark = line.get("prescreen") or {}
+        if mark.get("task_id") != item["task_id"]:
+            continue  # 返工换稿后的陈旧判定,等新稿重判
+        if item["task_id"] in decided:
+            continue
+        if mark.get("prediction") == "rejected" and not mark.get("explore"):
+            if not review_ok.get(item["task_id"]):
+                continue  # review 没写成(失败待重试/用户已决 409):不动产线
+            line["prescreen_intercepts"] = int(line.get("prescreen_intercepts") or 0) + 1
+            _rework_or_kill(r, line, note=f"(预筛) {mark.get('reason') or '预测不过审'}",
+                            plan=plan, on_progress=on_progress)
+        else:
+            line["status"] = "review"
+            on_progress(f"产线 {line['slot']} 预筛"
+                        f"{'探索放行' if mark.get('explore') else '通过'},待验收")
+        moved += 1
+    # 返工意向落 intents(task_id=None),下一圈 A 的遗留补派逻辑负责派出
+    for key, cmd, params in plan:
+        if key not in r["intents"]:
+            r["intents"][key] = {"cmd": cmd, "params": params, "task_id": None,
+                                 "at": datetime.now().isoformat()}
+    return moved
+
+
 def _finalize_if_done(r: dict[str, Any], on_progress: ProgressFn) -> dict[str, Any] | None:
     """全部产线落定 -> 战报 + done。"""
     if r["status"] != "active" or r["stage"] != "scripts" or not r["lines"]:
@@ -421,17 +557,44 @@ def _finalize_if_done(r: dict[str, Any], on_progress: ProgressFn) -> dict[str, A
         *(f"✓ 产线{ln['slot']} {str(ln['topic'].get('title'))[:40]} (返工{ln['rework']})" for ln in approved),
         *(f"✗ 产线{ln['slot']} {str(ln['topic'].get('title'))[:40]} 止损" for ln in killed),
     ]
+    # rubric 回退口径(§8.3):打回率=rejected decision/decision 总数(用户行为,
+    # 预筛拦截不产 decision 事件不计入),返工率=rework_total/产线数
+    decisions = [e for e in r["events"] if e["kind"] == "decision"]
+    rejected_n = sum(1 for e in decisions if e.get("decision") == "rejected")
+    # 探索样本与假阴性(§5.3):只认"最终判定对应的那一稿"的预筛记录
+    explore_lines = [
+        ln for ln in r["lines"]
+        if (ln.get("prescreen") or {}).get("explore")
+        and (ln.get("prescreen") or {}).get("task_id") == ln.get("task_id")
+    ]
+    fn = sum(1 for ln in explore_lines if ln["status"] == "approved")
     report = {
         "approved": len(approved),
         "killed": len(killed),
         "rework_total": sum(ln["rework"] for ln in r["lines"]),
         "approved_tasks": [ln["task_id"] for ln in approved],
+        "rubric_version": r["goal"].get("rubric_version"),
+        "reject_rate": round(rejected_n / len(decisions), 3) if decisions else None,
+        "rework_rate": round(sum(ln["rework"] for ln in r["lines"]) / len(r["lines"]), 3),
+        "prescreen": {
+            "intercepted": sum(int(ln.get("prescreen_intercepts") or 0) for ln in r["lines"]),
+            "explore": len(explore_lines),
+            "false_negatives": fn,
+        },
         "summary_lines": summary,
         "finished_at": datetime.now().isoformat(),
     }
     r["report"] = report
     r["status"] = "done"
     r["stage"] = "done"
+    # 探索战绩回写 current.json 评估降级(假阴性率>30% → 只警告不拦截;失败不挡收盘)
+    if explore_lines and isinstance(r["goal"].get("rubric_version"), int):
+        try:
+            rubric_store.update_fn_stats(
+                r["round_id"], r["goal"]["rubric_version"], len(explore_lines), fn,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("[rounds] fn_stats 回写失败", exc_info=True)
     on_progress("\n".join(summary))
     return report
 

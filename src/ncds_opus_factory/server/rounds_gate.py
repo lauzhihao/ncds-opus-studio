@@ -108,10 +108,13 @@ def _has_inflight_gate(round_id: str) -> bool:
 
 
 def _has_pending_work(r: dict) -> bool:
-    """有未消费事件,或有登记了却没派出去的意向(上一段崩在派发前)。"""
+    """有未消费事件,或有登记了却没派出去的意向(上一段崩在派发前),
+    或有停在预筛的产线(§8.3 崩溃安全:段在判定前被杀,凭此补投段救活)。"""
     if any(not e.get("consumed") for e in r.get("events", [])):
         return True
-    return any(i.get("task_id") is None for i in r.get("intents", {}).values())
+    if any(i.get("task_id") is None for i in r.get("intents", {}).values()):
+        return True
+    return any(ln.get("status") == "prescreen_pending" for ln in r.get("lines", []))
 
 
 async def maybe_resume(round_id: str) -> bool:

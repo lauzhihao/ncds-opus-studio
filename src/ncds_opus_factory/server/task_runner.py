@@ -398,14 +398,15 @@ class TaskRunner:
     def _maybe_auto_archive(self, meta: TaskMeta, result: dict[str, Any] | None) -> None:
         """系统任务不准打扰 Leader（§4.7）：机器自闭环的任务完成/失败即自动归档。
 
-        适用:cron 订阅刷新、round 内的卧龙段(派单/续跑)、round 内无闸阶段任务
-        (鬼谷子选题——闸1 在柳永)。reviewer=system 的 review 让 iOS 现有逻辑直接
-        归档(不进待验收、不点红灯),案卷照写但复盘只学 reviewer=user 的样本。
+        适用:cron 订阅刷新、复盘段(source=retro,每晚自动投递,§8.3)、round 内的
+        卧龙段(派单/续跑)、round 内无闸阶段任务(鬼谷子选题——闸1 在柳永)。
+        reviewer=system 的 review 让 iOS 现有逻辑直接归档(不进待验收、不点红灯),
+        案卷照写但复盘只学 reviewer=user 的样本。
         """
         ungated_round = bool(meta.round_id) and (
             meta.cmd == "wolong" or meta.cmd in _UNGATED_ROUND_CMDS
         )
-        if meta.source != "cron" and not ungated_round:
+        if meta.source not in ("cron", "retro") and not ungated_round:
             return
         review = Review(
             decision="approved",

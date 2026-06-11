@@ -21,6 +21,7 @@ class FakeTransport:
     def __init__(self):
         self.submits: list[dict[str, Any]] = []
         self.results: dict[str, dict[str, Any]] = {}
+        self.reviews: list[dict[str, Any]] = []
         self._n = 0
 
     def submit(self, cmd, params, source, round_id, intent_key):
@@ -36,6 +37,11 @@ class FakeTransport:
 
     def read_result(self, task_id):
         return self.results.get(task_id)
+
+    def review(self, task_id, decision, note, reviewer="wolong"):
+        self.reviews.append({"task_id": task_id, "decision": decision,
+                             "note": note, "reviewer": reviewer})
+        return True
 
 
 @pytest.fixture()
