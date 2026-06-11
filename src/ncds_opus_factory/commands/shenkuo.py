@@ -389,16 +389,15 @@ def run(
         _write_collected(author_dir, [entry])
         on_progress(f"沈括完成: {author_dir}")
         ret: dict[str, Any] = {"author_dir": str(author_dir), "collected": [entry]}
-        # 回传展示标题/副题:任务卡显示作品信息(标题/话题/作者),不显示分享链接
+        # 回传展示标题/副题:任务卡显示作品信息,不显示分享链接。
+        # 标题剥掉内嵌的 #话题(详情页有专门的话题 chips,不重复);副题只留 @作者。
         if entry.get("desc"):
-            ret["task_title"] = entry["desc"]
-        bits = []
-        if entry.get("hashtags"):
-            bits.append(" ".join(f"#{t}" for t in entry["hashtags"][:3]))
+            title = entry["desc"]
+            for t in entry.get("hashtags") or []:
+                title = title.replace(f"#{t}", "")
+            ret["task_title"] = " ".join(title.split()) or entry["desc"]
         if entry.get("author"):
-            bits.append(f"@{entry['author']}")
-        if bits:
-            ret["task_subtitle"] = " · ".join(bits)
+            ret["task_subtitle"] = f"@{entry['author']}"
         return ret
 
     # 作者模式:拉作品列表 -> 写指标层 -> (refresh_only 止步) -> 选高赞 top -> 逐条采集
