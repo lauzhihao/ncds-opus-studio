@@ -158,6 +158,55 @@ def fetch_video_url(aweme_id: str, token: str | None = None) -> str | None:
     return m.group(1) if m else None
 
 
+def fetch_one_video_detail(aweme_id: str, token: str | None = None) -> dict:
+    """fetch_one_video 的完整 aweme_detail(desc/author/statistics/text_extra/video.cover)。"""
+    token = get_token(token)
+    url = f"{ONE_VIDEO_URL}?aweme_id={aweme_id}&need_anchor_info=false"
+    resp = requests.get(url, headers=_headers(token), timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+    resp.raise_for_status()
+    payload = resp.json()
+    d = payload.get("data") if isinstance(payload, dict) else None
+    return (d or {}).get("aweme_detail") or {}
+
+
+def extract_meta(detail: dict) -> dict[str, Any]:
+    """aweme_detail -> 采集 entry 的展示元数据:标题/作者/话题/四项数据/封面 URL。"""
+    st = detail.get("statistics") or {}
+    hashtags = [e.get("hashtag_name") for e in (detail.get("text_extra") or [])
+                if e.get("hashtag_name")]
+    video = detail.get("video") or {}
+    cover_url = ""
+    # cover_original_scale 才是作者设置的封面;origin_cover 是首帧截图,只作兜底。
+    # (实测对比过:7647701061202148009 的 origin_cover=首帧街景,original_scale=真封面)
+    for key in ("cover_original_scale", "cover", "origin_cover"):
+        urls = ((video.get(key) or {}).get("url_list")) or []
+        if urls:
+            cover_url = urls[0]
+            break
+    return {
+        "desc": detail.get("desc") or "",
+        "author": (detail.get("author") or {}).get("nickname") or "",
+        "hashtags": hashtags,
+        "digg": st.get("digg_count", 0),
+        "comment": st.get("comment_count", 0),
+        "share": st.get("share_count", 0),
+        "collect": st.get("collect_count", 0),
+        "cover_url": cover_url,
+    }
+
+
+def download_cover(cover_url: str, output_path: str | Path) -> bool:
+    """下载封面图;失败返回 False,不抛(封面缺了不影响采集主链路)。"""
+    try:
+        resp = requests.get(cover_url, headers={"User-Agent": _UA},
+                            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+        resp.raise_for_status()
+        Path(output_path).write_bytes(resp.content)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def download_video(url: str, output_path: str | Path, max_retries: int = DOWNLOAD_RETRIES) -> str:
     """streaming 下载 + 有限重试。写 .part 临时文件成功后原子替换。"""
     headers = {"User-Agent": _UA, "Referer": "https://www.douyin.com/"}

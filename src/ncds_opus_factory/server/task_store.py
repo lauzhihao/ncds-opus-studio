@@ -198,3 +198,22 @@ class TaskStore:
         if not path.exists():
             return None
         return Review(**json.loads(path.read_text(encoding="utf-8")))
+
+    def delete_review(self, task_id: str) -> bool:
+        """撤销人工决策(已归档拉回待验收)。返回是否真的删了。"""
+        path = self.review_path(task_id)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
+    def set_display(self, task_id: str, title: str | None, subtitle: str | None) -> None:
+        """命令完成后回填展示标题/副题(任务卡显示作品信息,不显示原始链接)。"""
+        meta = self.get_meta(task_id)
+        if not meta:
+            return
+        if title:
+            meta.title = str(title)[:80]
+        if subtitle:
+            meta.subtitle = str(subtitle)[:80]
+        self._write_meta(meta)

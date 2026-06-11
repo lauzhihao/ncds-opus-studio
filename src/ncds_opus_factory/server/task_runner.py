@@ -66,6 +66,9 @@ class TaskRunner:
             self.store.write_result(task_id, result)
             self.store.append_done(task_id, result)
             self.store.update_status(task_id, "completed")
+            # 命令可选回传展示标题/副题(如沈括用作品标题替代任务卡上的分享链接)
+            if isinstance(result, dict) and (result.get("task_title") or result.get("task_subtitle")):
+                self.store.set_display(task_id, result.get("task_title"), result.get("task_subtitle"))
             logger.info("[TaskRunner] task %s (%s) completed", task_id, cmd)
         except BaseException as exc:  # noqa: BLE001 - 任何异常都需要记录
             err_text = f"{type(exc).__name__}: {exc}"

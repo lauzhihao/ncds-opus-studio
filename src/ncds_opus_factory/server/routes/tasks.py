@@ -99,6 +99,19 @@ async def review_task(task_id: str, body: ReviewRequest) -> Review:
     return review
 
 
+@router.delete("/tasks/{task_id}/review")
+async def revoke_review(task_id: str) -> dict:
+    """撤销人工决策:已归档拉回「待验收」(删 review.json)。
+
+    幂等:本来就没有决策也返回 ok(removed=false)。任务不存在 -> 404。
+    """
+    if not STORE.exists(task_id):
+        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    removed = STORE.delete_review(task_id)
+    logger.info("[server] task review revoked: task_id=%s removed=%s", task_id, removed)
+    return {"ok": True, "removed": removed}
+
+
 # SSE polling 周期：500ms 既能近实时推进度，也不会把 CPU 烧穿
 _TAIL_POLL_INTERVAL = 0.5
 

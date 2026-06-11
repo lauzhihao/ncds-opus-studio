@@ -47,6 +47,10 @@ class TaskMeta(BaseModel):
     # 列表态附带的人工决策（approved/rejected/未决=None）。仅 list_tasks 读 review.json
     # 后回填到内存对象，**不写入 meta.json**（_write_meta exclude_none 会丢弃 None）。
     decision: ReviewDecision | None = None
+    # 展示标题/副题:命令完成后由 runner 从 result.task_title/task_subtitle 回填。
+    # 任务卡用它显示作品信息(如沈括的 标题/话题),而不是原始参数里的分享链接。
+    title: str | None = None
+    subtitle: str | None = None
 
 
 class ReviewRequest(BaseModel):

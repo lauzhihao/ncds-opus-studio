@@ -224,6 +224,20 @@ def collect_one(
         "aweme_id": aweme_id, "desc": meta.get("desc", ""), "digg": meta.get("digg", 0),
         "status": {},
     }
+    # 展示元数据(沈括详情页直接渲染:作者/话题/四项数据)
+    if meta.get("author"):
+        entry["author"] = meta["author"]
+    if meta.get("hashtags"):
+        entry["hashtags"] = meta["hashtags"]
+    stats = {k: meta[k] for k in ("digg", "comment", "share", "collect") if meta.get(k) is not None}
+    if stats:
+        entry["stats"] = stats
+    # 封面图:落盘成 <aweme_id>.cover.jpg,App 走 /artifacts/files/ 取
+    cover = author_dir / f"{aweme_id}.cover.jpg"
+    if meta.get("cover_url") and not cover.exists():
+        tikhub_client.download_cover(meta["cover_url"], cover)
+    if cover.exists():
+        entry["cover"] = _rel(cover)
 
     # 1. 下载 mp4
     video = author_dir / f"{aweme_id}.mp4"
@@ -262,6 +276,8 @@ def collect_one(
         entry["paraformer"] = _rel(para)
     if txt.exists():
         entry["txt"] = _rel(txt)
+        # 提取文字直接嵌进 entry,App 不用再拉文件(超长截断,口播稿远到不了这个量)
+        entry["text"] = txt.read_text(encoding="utf-8").strip()[:3000]
 
     # 3. 截帧
     frames_dir = author_dir / aweme_id / "frames"
@@ -307,6 +323,17 @@ def collect_one(
                 entry["status"]["comments"] = f"error:{type(e).__name__}"
         if comments_path.exists():
             entry["comments"] = _rel(comments_path)
+            # 高赞评论直接嵌进 entry(按赞数排好),App 详情页直接渲染,不用再拉文件
+            try:
+                items = json.loads(comments_path.read_text(encoding="utf-8")).get("items", [])
+                items.sort(key=lambda c: c.get("digg", 0), reverse=True)
+                entry["top_comments"] = [
+                    {"nickname": c.get("nickname", ""), "text": c.get("text", ""),
+                     "digg": c.get("digg", 0), "ip": c.get("ip", "")}
+                    for c in items[:top_comments]
+                ]
+            except Exception:  # noqa: BLE001 — 评论嵌入失败不影响 entry 主体
+                pass
     return entry
 
 
@@ -349,11 +376,30 @@ def run(
             raise ValueError(f"解析不出 aweme_id: {aweme}(支持纯数字 id 或抖音分享链接)")
         if aweme_id != aweme.strip():
             on_progress(f"短链解析: -> aweme_id {aweme_id}")
-        entry = collect_one(aweme_id, author_dir, max_frames=max_frames, engine=engine,
+        # 取展示元数据(标题/作者/话题/数据/封面);失败不阻塞主链路
+        meta: dict[str, Any] = {}
+        try:
+            meta = tikhub_client.extract_meta(tikhub_client.fetch_one_video_detail(aweme_id))
+            if meta.get("desc"):
+                on_progress(f"《{meta['desc'][:36]}》 @{meta.get('author', '')} 赞 {meta.get('digg', 0)}")
+        except Exception as e:  # noqa: BLE001
+            on_progress(f"元数据获取失败(不阻塞): {type(e).__name__}: {e}")
+        entry = collect_one(aweme_id, author_dir, meta=meta, max_frames=max_frames, engine=engine,
                             top_comments=top_comments, on_progress=on_progress)
         _write_collected(author_dir, [entry])
         on_progress(f"沈括完成: {author_dir}")
-        return {"author_dir": str(author_dir), "collected": [entry]}
+        ret: dict[str, Any] = {"author_dir": str(author_dir), "collected": [entry]}
+        # 回传展示标题/副题:任务卡显示作品信息(标题/话题/作者),不显示分享链接
+        if entry.get("desc"):
+            ret["task_title"] = entry["desc"]
+        bits = []
+        if entry.get("hashtags"):
+            bits.append(" ".join(f"#{t}" for t in entry["hashtags"][:3]))
+        if entry.get("author"):
+            bits.append(f"@{entry['author']}")
+        if bits:
+            ret["task_subtitle"] = " · ".join(bits)
+        return ret
 
     # 作者模式:拉作品列表 -> 写指标层 -> (refresh_only 止步) -> 选高赞 top -> 逐条采集
     author_dir = BENCH / f"author_{author}"

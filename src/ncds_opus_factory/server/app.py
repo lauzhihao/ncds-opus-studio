@@ -48,7 +48,7 @@ from ncds_opus_factory.server.routes import pipelines as pipelines_routes
 from ncds_opus_factory.server.routes import preview as preview_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
-from ncds_opus_factory.server.state import RUNNER, STATE_DIR
+from ncds_opus_factory.server.state import RUNNER, STATE_DIR, STORE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -126,13 +126,62 @@ async def health_check() -> dict:
     }
 
 
+# ---- 弃用素材定时清除 ----
+# 沈括的决策语义是「通过/弃用」(没有打回重做):弃用=rejected 进已归档,
+# 保留一段时间允许「拉回待验收」,超期由这里的协程整目录清掉(只删任务记录,
+# 不动 state/benchmark 下共享的已下载素材)。
+DISCARD_TTL_HOURS = float(os.environ.get("NOF_DISCARD_TTL_HOURS", "168"))   # 默认保留 7 天
+_DISCARD_SWEEP_INTERVAL_S = 3600
+
+
+def sweep_discarded_once() -> int:
+    """清一轮:沈括 rejected 且超过保留期的任务。返回删除数。"""
+    import shutil
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.now() - timedelta(hours=DISCARD_TTL_HOURS)
+    removed = 0
+    for meta in STORE.list_tasks():
+        if meta.cmd != "shenkuo" or meta.decision != "rejected":
+            continue
+        review = STORE.get_review(meta.task_id)
+        if review is None or not review.reviewed_at:
+            continue
+        try:
+            ts = datetime.fromisoformat(review.reviewed_at)
+        except ValueError:
+            continue
+        if ts < cutoff:
+            shutil.rmtree(STORE.task_dir(meta.task_id), ignore_errors=True)
+            removed += 1
+            logger.info("[sweep] 清除弃用沈括任务 %s (reviewed_at=%s)", meta.task_id, review.reviewed_at)
+    return removed
+
+
+async def _discard_sweeper() -> None:
+    import asyncio
+
+    while True:
+        try:
+            n = sweep_discarded_once()
+            if n:
+                logger.info("[sweep] 本轮清除 %d 条弃用任务", n)
+        except Exception:  # noqa: BLE001 — 清扫失败不影响服务
+            logger.exception("[sweep] discard sweep failed")
+        await asyncio.sleep(_DISCARD_SWEEP_INTERVAL_S)
+
+
 @app.on_event("startup")
 async def _startup_log() -> None:
+    import asyncio
+
     logger.info(
         "[nof-server] ready. state_dir=%s commands=%s",
         STATE_DIR,
         RUNNER.list_commands(),
     )
+    asyncio.create_task(_discard_sweeper())
+    logger.info("[sweep] 弃用清扫已启动: TTL=%.0fh, 间隔=%ds", DISCARD_TTL_HOURS, _DISCARD_SWEEP_INTERVAL_S)
 
 
 def cli_main() -> None:
