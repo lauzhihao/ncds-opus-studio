@@ -18,13 +18,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
-from ncds_opus_factory.common import benchmark_store, tikhub_client
+from ncds_opus_factory.common import benchmark_store, cancel, tikhub_client
 
 ROOT = Path(__file__).resolve().parents[3]
 BENCH = ROOT / "state" / "benchmark"
@@ -60,6 +63,135 @@ def _read_dashscope_key() -> str | None:
             if line.strip().startswith("DASHSCOPE_API_KEY="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
     return None
+
+
+def _run_proc_cancellable(args: list[str], check: cancel.CheckFn,
+                          timeout: float = 1800) -> None:
+    """轮询式子进程:每秒看一次取消标记,取消则 SIGTERM(线程杀不掉,子进程随便杀)。"""
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    t0 = time.time()
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            if rc != 0:
+                raise RuntimeError(f"subprocess failed rc={rc}: {args[0]}")
+            return
+        if check():
+            proc.terminate()
+            try:
+                proc.wait(10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            raise cancel.TaskCancelled("cancelled during subprocess")
+        if time.time() - t0 > timeout:
+            proc.kill()
+            raise RuntimeError(f"subprocess timeout: {args[0]}")
+        time.sleep(1)
+
+
+def _extract_audio(video: Path, audio_dir: Path, on_progress: ProgressFn = _noop,
+                   check: cancel.CheckFn = lambda: False) -> dict[str, str]:
+    """声音素材:抽原声 + Demucs 分离 人声/伴奏(BGM 与次级音效在伴奏轨)。
+
+    幂等(产物在则跳过);Demucs 失败只保留原声,不拖垮采集主链路。
+    分离耗时约 0.5x 实时(CPU),走可取消子进程,取消时 1 秒内 SIGTERM。
+    """
+    import shutil
+
+    out: dict[str, str] = {}
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    ffmpeg = shutil.which("ffmpeg") or "/usr/local/bin/ffmpeg"
+
+    original = audio_dir / "original.mp3"
+    if not original.exists():
+        subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(video),
+                        "-vn", "-codec:a", "libmp3lame", "-b:a", "128k", str(original)],
+                       check=True, timeout=300)
+        on_progress("原声已抽出")
+    out["original"] = _rel(original)
+
+    vocals, bgm = audio_dir / "vocals.mp3", audio_dir / "bgm.mp3"
+    if not (vocals.exists() and bgm.exists()):
+        sep_dir = audio_dir / "_demucs"
+        try:
+            on_progress("Demucs 分离人声/伴奏中(约 0.5x 实时)…")
+            _run_proc_cancellable(
+                [sys.executable, "-m", "demucs.separate", "--two-stems=vocals",
+                 "-n", "htdemucs", "--mp3", "-o", str(sep_dir), str(original)],
+                check)
+            stem = sep_dir / "htdemucs" / original.stem
+            (stem / "vocals.mp3").replace(vocals)
+            (stem / "no_vocals.mp3").replace(bgm)
+            shutil.rmtree(sep_dir, ignore_errors=True)
+            on_progress("声音分离完成: 人声 + 伴奏(BGM/音效)")
+        except cancel.TaskCancelled:
+            shutil.rmtree(sep_dir, ignore_errors=True)   # 半成品清掉,恢复后重跑
+            raise
+        except Exception as e:  # noqa: BLE001 — 分离失败保留原声
+            on_progress(f"声音分离失败(保留原声): {type(e).__name__}")
+    if vocals.exists():
+        out["vocals"] = _rel(vocals)
+    if bgm.exists():
+        out["bgm"] = _rel(bgm)
+    return out
+
+
+def _clean_transcript(raw: str, on_progress: ProgressFn = _noop) -> str | None:
+    """听写稿清洗:首选 qwen(同音错别字/语义断句的长尾规则穷举不了),
+    失败/无 key 时回退本地规则兜底。在转写支线内执行,与 Demucs 等支线并行。"""
+    text = (raw or "").strip()
+    if len(text) < 20:
+        return None
+    cleaned = _clean_with_qwen(text, on_progress)
+    if cleaned:
+        return cleaned
+    return _clean_local(text, on_progress)
+
+
+def _clean_with_qwen(raw: str, on_progress: ProgressFn = _noop) -> str | None:
+    """qwen 清洗校对:纠同音错别字、去口头语、按语义断句加标点;不得增删事实。"""
+    key = _read_dashscope_key()
+    if not key:
+        return None
+    import requests
+
+    prompt = (
+        "下面是一份语音听写稿(ASR 原文)。请清洗校对:纠正同音/近音错别字,"
+        "去除口头语和无意义语气词,按语义断句、补全标点、适当分段。"
+        "不得增删事实,不得改写表达风格,不得编造原文没有的内容。"
+        "直接输出清洗后的正文,不要任何解释或前后缀。\n\n" + raw[:6000]
+    )
+    try:
+        on_progress("听写稿清洗中(qwen)…")
+        resp = requests.post(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": "qwen-plus", "temperature": 0.2,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=(15, 120),
+        )
+        resp.raise_for_status()
+        cleaned = (resp.json()["choices"][0]["message"]["content"] or "").strip()
+        if not cleaned:
+            return None
+        on_progress(f"清洗完成(qwen): {len(raw)} -> {len(cleaned)} 字")
+        return cleaned
+    except Exception as e:  # noqa: BLE001 — qwen 失败交给本地兜底
+        on_progress(f"qwen 清洗失败,本地规则兜底: {type(e).__name__}")
+        return None
+
+
+def _clean_local(raw: str, on_progress: ProgressFn = _noop) -> str | None:
+    """本地规则兜底:去孤立语气词、规整空白与重复标点(无网络/无 key 时至少可读)。"""
+    text = re.sub(r"(?:(?<=^)|(?<=[,，。!！?？、\s]))(呃+|嗯+|哎+|诶+)(?=[,，。!！?？、\s]|$)", "", raw)
+    text = re.sub(r"[ \t]+", "", text)
+    text = re.sub(r"，{2,}", "，", text)
+    text = re.sub(r"。{2,}", "。", text)
+    cleaned = text.strip()
+    if not cleaned or cleaned == raw.strip():
+        return None
+    on_progress(f"本地清洗(兜底): {len(raw)} -> {len(cleaned)} 字")
+    return cleaned
 
 
 def _transcribe(video_path: Path, on_progress: ProgressFn) -> tuple[dict | None, str]:
@@ -213,6 +345,11 @@ def _cutout(frames: list[Path], out_dir: Path, engine: str = "threshold", crop: 
 
 # --------------------------------------------------------------------------- #
 # 采集单条作品(幂等:每步看产物存在跳过)
+#
+# 并行编排(能并行的不串行):
+#   评论 只依赖 aweme_id —— 与下载同时起跑
+#   下载完成后 转写→清洗 / 声音(ffmpeg+Demucs) / 截帧→抠图 三线并行
+# 各支线只写 entry 里互不重叠的键;进度回调用锁串行化,防 events.jsonl 行交错。
 # --------------------------------------------------------------------------- #
 def collect_one(
     aweme_id: str, author_dir: Path, meta: dict | None = None,
@@ -239,101 +376,158 @@ def collect_one(
     if cover.exists():
         entry["cover"] = _rel(cover)
 
-    # 1. 下载 mp4
+    _lock = threading.Lock()
+
+    def report(msg: str) -> None:
+        with _lock:
+            on_progress(msg)
+
+    # 协作式取消:在主线程取 checker(thread-local 不传子线程),闭包给各支线。
+    # 支线在步骤边界 guard();Demucs 子进程内部按秒轮询可被 SIGTERM。
+    _check = cancel.current()
+
+    def guard() -> None:
+        cancel.checkpoint(_check)
+
     video = author_dir / f"{aweme_id}.mp4"
-    if video.exists() and video.stat().st_size > 0:
-        on_progress(f"[{aweme_id}] mp4 已存在,跳过下载")
-        entry["status"]["download"] = "cached"
-    else:
-        url = tikhub_client.fetch_video_url(aweme_id)
-        if not url:
-            entry["status"]["download"] = "no_url"
-            return entry
-        tikhub_client.download_video(url, video)
-        on_progress(f"[{aweme_id}] 下载完成")
-        entry["status"]["download"] = "ok"
-    entry["video"] = _rel(video)
 
-    # 2. 转写文案
-    para = author_dir / f"{aweme_id}.paraformer.json"
-    txt = author_dir / f"{aweme_id}.txt"
-    if para.exists():
-        on_progress(f"[{aweme_id}] 转写已存在,跳过")
-        entry["status"]["transcribe"] = "cached"
-    else:
-        try:
-            result, text = _transcribe(video, on_progress)
-            if result is not None:
-                para.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-                txt.write_text(text, encoding="utf-8")
-                entry["status"]["transcribe"] = "ok"
+    def branch_download() -> bool:
+        if video.exists() and video.stat().st_size > 0:
+            report(f"[{aweme_id}] mp4 已存在,跳过下载")
+            entry["status"]["download"] = "cached"
+        else:
+            url = tikhub_client.fetch_video_url(aweme_id)
+            if not url:
+                entry["status"]["download"] = "no_url"
+                return False
+            tikhub_client.download_video(url, video)
+            report(f"[{aweme_id}] 下载完成")
+            entry["status"]["download"] = "ok"
+        entry["video"] = _rel(video)
+        return True
+
+    def branch_transcribe() -> None:
+        guard()
+        para = author_dir / f"{aweme_id}.paraformer.json"
+        txt = author_dir / f"{aweme_id}.txt"
+        if para.exists():
+            report(f"[{aweme_id}] 转写已存在,跳过")
+            entry["status"]["transcribe"] = "cached"
+        else:
+            try:
+                result, text = _transcribe(video, report)
+                if result is not None:
+                    para.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                    txt.write_text(text, encoding="utf-8")
+                    entry["status"]["transcribe"] = "ok"
+                else:
+                    entry["status"]["transcribe"] = "failed"
+            except cancel.TaskCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001 — 单条转写失败不拖垮整批
+                report(f"[{aweme_id}] 转写异常: {type(e).__name__}: {e}")
+                entry["status"]["transcribe"] = f"error:{type(e).__name__}"
+        if para.exists():
+            entry["paraformer"] = _rel(para)
+        if txt.exists():
+            entry["txt"] = _rel(txt)
+            raw_text = txt.read_text(encoding="utf-8").strip()
+            guard()
+            # 清洗(qwen 优先,本地兜底);原文留 .txt,清洗版存 .clean.txt
+            clean = author_dir / f"{aweme_id}.clean.txt"
+            if not clean.exists() and raw_text:
+                cleaned = _clean_transcript(raw_text, report)
+                if cleaned:
+                    clean.write_text(cleaned, encoding="utf-8")
+            if clean.exists():
+                entry["text"] = clean.read_text(encoding="utf-8").strip()[:3000]
+                entry["text_raw"] = _rel(txt)
             else:
-                entry["status"]["transcribe"] = "failed"
-        except Exception as e:  # noqa: BLE001 — 单条转写失败不拖垮整批
-            on_progress(f"[{aweme_id}] 转写异常: {type(e).__name__}: {e}")
-            entry["status"]["transcribe"] = f"error:{type(e).__name__}"
-    if para.exists():
-        entry["paraformer"] = _rel(para)
-    if txt.exists():
-        entry["txt"] = _rel(txt)
-        # 提取文字直接嵌进 entry,App 不用再拉文件(超长截断,口播稿远到不了这个量)
-        entry["text"] = txt.read_text(encoding="utf-8").strip()[:3000]
+                entry["text"] = raw_text[:3000]
 
-    # 3. 截帧
-    frames_dir = author_dir / aweme_id / "frames"
-    frames = sorted(frames_dir.glob("frame_*.jpg")) if frames_dir.exists() else []
-    if frames:
-        on_progress(f"[{aweme_id}] 截帧已存在 {len(frames)} 张")
-    else:
-        frames = _extract_frames(video, frames_dir, max_frames)
-        on_progress(f"[{aweme_id}] 截帧 {len(frames)} 张")
-    entry["frames"] = [_rel(f) for f in frames]
-
-    # 4. 抠图
-    cut_dir = COLLECTED / aweme_id
-    cutouts = sorted(cut_dir.glob("*.png")) if cut_dir.exists() else []
-    if cutouts:
-        on_progress(f"[{aweme_id}] 抠图已存在 {len(cutouts)} 张")
-    elif frames:
+    def branch_audio() -> None:
+        guard()
         try:
-            cutouts = _cutout(frames, cut_dir, engine=engine)
-            on_progress(f"[{aweme_id}] 抠图 {len(cutouts)} 张(舞台区/{engine})")
-            entry["status"]["cutout"] = "ok"
-        except Exception as e:  # noqa: BLE001
-            on_progress(f"[{aweme_id}] 抠图异常: {type(e).__name__}: {e}")
-            entry["status"]["cutout"] = f"error:{type(e).__name__}"
-    entry["cutouts"] = [_rel(c) for c in cutouts]
+            audio = _extract_audio(video, author_dir / aweme_id / "audio", report, check=_check)
+            if audio:
+                entry["audio"] = audio
+                entry["status"]["audio"] = "ok"
+        except cancel.TaskCancelled:
+            raise
+        except Exception as e:  # noqa: BLE001 — 声音素材失败不拖垮整批
+            report(f"声音素材异常: {type(e).__name__}: {e}")
+            entry["status"]["audio"] = f"error:{type(e).__name__}"
 
-    # 5. 采集 top 赞评论(热门序 + 早停,几次调用即可锁定;评论是受众反馈,喂对标拆解)
-    if top_comments > 0:
+    def branch_frames() -> None:
+        guard()
+        frames_dir = author_dir / aweme_id / "frames"
+        frames = sorted(frames_dir.glob("frame_*.jpg")) if frames_dir.exists() else []
+        if frames:
+            report(f"[{aweme_id}] 截帧已存在 {len(frames)} 张")
+        else:
+            frames = _extract_frames(video, frames_dir, max_frames)
+            report(f"[{aweme_id}] 截帧 {len(frames)} 张")
+        entry["frames"] = [_rel(f) for f in frames]
+        cut_dir = COLLECTED / aweme_id
+        cutouts = sorted(cut_dir.glob("*.png")) if cut_dir.exists() else []
+        if cutouts:
+            report(f"[{aweme_id}] 抠图已存在 {len(cutouts)} 张")
+        elif frames:
+            guard()
+            try:
+                cutouts = _cutout(frames, cut_dir, engine=engine)
+                report(f"[{aweme_id}] 抠图 {len(cutouts)} 张(舞台区/{engine})")
+                entry["status"]["cutout"] = "ok"
+            except cancel.TaskCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001
+                report(f"[{aweme_id}] 抠图异常: {type(e).__name__}: {e}")
+                entry["status"]["cutout"] = f"error:{type(e).__name__}"
+        entry["cutouts"] = [_rel(c) for c in cutouts]
+
+    def branch_comments() -> None:
+        guard()
         comments_path = author_dir / f"{aweme_id}.comments.json"
         if comments_path.exists():
-            on_progress(f"[{aweme_id}] 评论已存在,跳过")
+            report(f"[{aweme_id}] 评论已存在,跳过")
             entry["status"]["comments"] = "cached"
         else:
             try:
-                rows = tikhub_client.fetch_top_comments(aweme_id, top_n=top_comments, on_progress=on_progress)
+                rows = tikhub_client.fetch_top_comments(aweme_id, top_n=top_comments, on_progress=report)
                 comments_path.write_text(json.dumps(
                     {"aweme_id": aweme_id, "generated_at": int(time.time()), "top_n": top_comments, "items": rows},
                     ensure_ascii=False, indent=2), encoding="utf-8")
-                on_progress(f"[{aweme_id}] top {len(rows)} 评论已落盘")
+                report(f"[{aweme_id}] top {len(rows)} 评论已落盘")
                 entry["status"]["comments"] = "ok"
+            except cancel.TaskCancelled:
+                raise
             except Exception as e:  # noqa: BLE001 — 单条评论失败不拖垮整批
-                on_progress(f"[{aweme_id}] 评论采集异常: {type(e).__name__}: {e}")
+                report(f"[{aweme_id}] 评论采集异常: {type(e).__name__}: {e}")
                 entry["status"]["comments"] = f"error:{type(e).__name__}"
         if comments_path.exists():
             entry["comments"] = _rel(comments_path)
-            # 高赞评论直接嵌进 entry(按赞数排好),App 详情页直接渲染,不用再拉文件
+            # 高赞评论嵌进 entry(>10 赞阈值,按赞数排好),App 直接渲染
             try:
                 items = json.loads(comments_path.read_text(encoding="utf-8")).get("items", [])
+                items = [c for c in items if c.get("digg", 0) > 10]
                 items.sort(key=lambda c: c.get("digg", 0), reverse=True)
-                entry["top_comments"] = [
+                top = [
                     {"nickname": c.get("nickname", ""), "text": c.get("text", ""),
                      "digg": c.get("digg", 0), "ip": c.get("ip", "")}
                     for c in items[:top_comments]
                 ]
+                if top:
+                    entry["top_comments"] = top
             except Exception:  # noqa: BLE001 — 评论嵌入失败不影响 entry 主体
                 pass
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_comments = ex.submit(branch_comments) if top_comments > 0 else None
+        if branch_download():
+            for f in [ex.submit(branch_transcribe), ex.submit(branch_audio), ex.submit(branch_frames)]:
+                f.result()
+        if f_comments is not None:
+            f_comments.result()
     return entry
 
 
