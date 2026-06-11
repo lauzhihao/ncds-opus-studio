@@ -51,6 +51,49 @@ async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreate
             status_code=404,
             detail=f"unknown command: {body.cmd}. available: {RUNNER.list_commands()}",
         )
+    # 递归闸(§2):卧龙派单段不能派生卧龙;续跑段走 source=gate(下面单独约束)。
+    # 注意 source 是客户端自报的,这层只是诚实客户端的护栏;真正的失控刹车
+    # 是 task_runner 里 gate/retro 的独立配额桶。
+    if body.source == "wolong" and body.cmd == "wolong":
+        raise HTTPException(
+            status_code=400,
+            detail="递归闸:卧龙派单段不能派生卧龙任务(续跑段应使用 source=gate)",
+        )
+    if body.source == "gate":
+        if not body.round_id:
+            raise HTTPException(status_code=400, detail="续跑段(source=gate)必须携带 round_id")
+        # 同 round 同时只允许一个在途续跑段(§4.4 防续跑风暴)
+        for m in STORE.list_tasks():
+            if (
+                m.round_id == body.round_id
+                and m.source == "gate"
+                and m.status in ("pending", "running")
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"round {body.round_id} 已有在途续跑段 {m.task_id},事件请追加到 round 状态",
+                )
+    # 派生链深度 ≤2,按业务层计(§2):卧龙段(cmd=wolong)是 round 的编排层、不算一层,
+    # 非卧龙祖先 ≥2 即拒——卧龙→干活任务→孙任务封顶
+    if body.parent_task_id:
+        parent = STORE.get_meta(body.parent_task_id)
+        if parent is None:
+            raise HTTPException(
+                status_code=400, detail=f"parent_task_id 不存在: {body.parent_task_id}"
+            )
+        depth, cur, hops = 0, parent, 0
+        while cur is not None and hops < 10:
+            if cur.cmd != "wolong":
+                depth += 1
+            if not cur.parent_task_id:
+                break
+            cur = STORE.get_meta(cur.parent_task_id)
+            hops += 1
+        if depth >= 2:
+            raise HTTPException(
+                status_code=400,
+                detail=f"派生链深度超限(≤2): {body.parent_task_id} 的派生层级已满",
+            )
     task_id = await RUNNER.submit(
         body.cmd,
         body.params,
@@ -146,9 +189,15 @@ async def restore_task(task_id: str) -> dict:
     meta = STORE.get_meta(task_id)
     if meta.status != "cancelled":
         raise HTTPException(status_code=409, detail=f"cannot restore a {meta.status} task")
+    # 执行中取消的任务,工作线程杀不掉还在跑:此时恢复会双线程跑同一任务
+    # (旧线程的事件/结果与新跑交错互踩),必须等旧线程退出
+    if RUNNER.is_inflight(task_id):
+        raise HTTPException(
+            status_code=409, detail="上一次执行尚未退出(取消后台收尾中),请稍后再恢复"
+        )
     STORE.reset_for_requeue(task_id)
     STORE.append_progress(task_id, "已恢复,重新入队")
-    await RUNNER.requeue(task_id, meta.cmd, meta.params)
+    await RUNNER.requeue(task_id, meta.cmd)
     logger.info("[server] task restored: task_id=%s cmd=%s", task_id, meta.cmd)
     return {"ok": True, "status": "pending"}
 

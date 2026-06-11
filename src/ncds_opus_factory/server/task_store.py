@@ -15,12 +15,16 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import secrets
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from ncds_opus_factory.server.schemas import Review, TaskEvent, TaskMeta, TaskStatus
 
@@ -122,7 +126,12 @@ class TaskStore:
         for d in self.base_dir.iterdir():
             if not d.is_dir() or not (d / "meta.json").exists():
                 continue
-            meta = self.get_meta(d.name)
+            # 单条撕裂/非法 meta 跳过,不拖死所有消费方(启动恢复/清扫/收件箱)
+            try:
+                meta = self.get_meta(d.name)
+            except Exception:  # noqa: BLE001
+                logger.warning("[TaskStore] 跳过不可读 meta: %s", d.name)
+                continue
             if meta is not None:
                 # 回填人工决策，供移动端「待验收收件箱」一次拉到，省去逐条查详情。
                 # 只挂在内存对象上，不写回 meta.json（决策真源是 review.json）。
@@ -166,10 +175,15 @@ class TaskStore:
         return meta
 
     def _write_meta(self, meta: TaskMeta) -> None:
-        self.meta_path(meta.task_id).write_text(
+        # tmp + os.replace 原子写:进程被杀在写半截时不能留撕裂 JSON——
+        # meta 是启动恢复/清扫/收件箱的共同数据源,坏一个文件不能换全线故障
+        path = self.meta_path(meta.task_id)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
             meta.model_dump_json(indent=2, exclude_none=True),
             encoding="utf-8",
         )
+        os.replace(tmp, path)
 
     # ------------------------------------------------------------
     # Events (append-only jsonl)

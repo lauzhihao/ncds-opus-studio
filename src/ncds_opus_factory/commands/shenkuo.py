@@ -607,16 +607,26 @@ def run(
 
     # 指标层:写身份 + 追加变化的快照(时间序列)
     ts = int(time.time())
+    sig: dict[str, int] = {}
     conn = benchmark_store.connect(BENCH_DB)
     try:
         stat = benchmark_store.record_refresh(conn, author, posts, ts)
+        on_progress(f"指标层: 作品 {stat['posts']} 条,新增快照 {stat['snapshots']} 条 -> {_rel(BENCH_DB)}")
+        # 信号检测(订阅传感器的产出):新作品/指标飙升 -> events.jsonl 供排产消费。
+        # 失败不阻塞采集主链路。
+        try:
+            from ncds_opus_factory.common import signals
+            sig = signals.emit_signals(conn, author, ts, events_dir=BENCH_DB.parent,
+                                       on_progress=on_progress)
+        except Exception as e:  # noqa: BLE001
+            on_progress(f"信号检测失败(不阻塞): {type(e).__name__}: {e}")
     finally:
         conn.close()
-    on_progress(f"指标层: 作品 {stat['posts']} 条,新增快照 {stat['snapshots']} 条 -> {_rel(BENCH_DB)}")
 
     if refresh_only:
         on_progress("refresh-only: 跳过深采")
-        return {"author_dir": str(author_dir), "all_posts": len(posts), "collected": [], "snapshots": stat["snapshots"]}
+        return {"author_dir": str(author_dir), "all_posts": len(posts), "collected": [],
+                "snapshots": stat["snapshots"], "signals": sig}
 
     posts.sort(key=lambda p: p.get("digg", 0), reverse=True)
     chosen = posts[:top]

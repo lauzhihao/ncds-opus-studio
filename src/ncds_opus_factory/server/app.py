@@ -46,9 +46,11 @@ from ncds_opus_factory.server.routes import jobs as jobs_routes
 from ncds_opus_factory.server.routes import mock as mock_routes
 from ncds_opus_factory.server.routes import pipelines as pipelines_routes
 from ncds_opus_factory.server.routes import preview as preview_routes
+from ncds_opus_factory.server.routes import subscriptions as subscriptions_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
 from ncds_opus_factory.server.state import LABELS, RUNNER, STATE_DIR, STORE
+from ncds_opus_factory.server.subscriptions import subscription_loop, subscriptions_path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,6 +76,7 @@ app.add_middleware(
 
 app.include_router(commands_routes.router)
 app.include_router(tasks_routes.router)
+app.include_router(subscriptions_routes.router)
 app.include_router(templates_routes.router)
 app.include_router(jobs_routes.router)
 app.include_router(artifacts_routes.router)
@@ -131,6 +134,9 @@ async def health_check() -> dict:
 # 保留一段时间允许「拉回待验收」,超期由这里的协程整目录清掉(只删任务记录,
 # 不动 state/benchmark 下共享的已下载素材)。
 DISCARD_TTL_HOURS = float(os.environ.get("NOF_DISCARD_TTL_HOURS", "168"))   # 默认保留 7 天
+# cron 刷新任务独立 TTL:订阅传感器每天产十几条任务记录,自动归档后无人再看,
+# 比人工弃用件清得更快(默认 3 天)。案卷照例先于删除存在。
+CRON_TTL_HOURS = float(os.environ.get("NOF_CRON_TTL_HOURS", "72"))
 _DISCARD_SWEEP_INTERVAL_S = 3600
 
 
@@ -187,6 +193,49 @@ def sweep_discarded_once() -> int:
     return removed
 
 
+def sweep_cron_once() -> int:
+    """清一轮:cron 刷新任务终态后超过 CRON_TTL_HOURS 的记录。返回删除数。
+
+    订阅传感器的任务自动归档(reviewer=system),没有人工价值,只占列表;
+    有决策的照例先确保案卷存在再删(自动归档的 system 案卷复盘本就不学)。
+    """
+    import shutil
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.now() - timedelta(hours=CRON_TTL_HOURS)
+    removed = 0
+    for meta in STORE.list_tasks():
+        # 只清订阅刷新任务:别让将来其他 cron 触发的任务静默继承 72h 删除策略
+        if (
+            meta.source != "cron"
+            or meta.cmd != "shenkuo"
+            or not meta.params.get("refresh_only")
+            or meta.status not in ("completed", "failed", "cancelled")
+        ):
+            continue
+        # 只清纯机器闭环的记录:被用户撤销(review=None,等重审)或人工改判
+        # (reviewer=user)的任务移交人工清扫节奏(sweep_discarded_once 的 168h)
+        review = STORE.get_review(meta.task_id)
+        if review is None or review.reviewer != "system":
+            continue
+        ref = meta.finished_at or meta.created_at
+        try:
+            ts = datetime.fromisoformat(ref)
+        except ValueError:
+            continue
+        if ts >= cutoff:
+            continue
+        try:
+            if not LABELS.exists(meta.task_id):
+                LABELS.write(meta, review, STORE.get_result(meta.task_id))
+        except Exception:  # noqa: BLE001
+            logger.exception("[sweep] cron 案卷补写失败,跳过删除 %s", meta.task_id)
+            continue
+        shutil.rmtree(STORE.task_dir(meta.task_id), ignore_errors=True)
+        removed += 1
+    return removed
+
+
 async def _discard_sweeper() -> None:
     import asyncio
 
@@ -199,6 +248,9 @@ async def _discard_sweeper() -> None:
             n = sweep_discarded_once()
             if n:
                 logger.info("[sweep] 本轮清除 %d 条弃用任务", n)
+            c = sweep_cron_once()
+            if c:
+                logger.info("[sweep] 本轮清除 %d 条 cron 刷新记录", c)
         except Exception:  # noqa: BLE001 — 清扫失败不影响服务
             logger.exception("[sweep] discard sweep failed")
         await asyncio.sleep(_DISCARD_SWEEP_INTERVAL_S)
@@ -213,8 +265,16 @@ async def _startup_log() -> None:
         STATE_DIR,
         RUNNER.list_commands(),
     )
+    # 调度器:恢复积压(重启后队列在内存里已蒸发) + 按 per-cmd 额度拉起 worker
+    recovered = RUNNER.recover_and_start()
+    if recovered:
+        logger.info("[nof-server] 重启恢复: %d 个积压任务重新入队", recovered)
     asyncio.create_task(_discard_sweeper())
-    logger.info("[sweep] 弃用清扫已启动: TTL=%.0fh, 间隔=%ds", DISCARD_TTL_HOURS, _DISCARD_SWEEP_INTERVAL_S)
+    logger.info("[sweep] 弃用清扫已启动: TTL=%.0fh, cron TTL=%.0fh, 间隔=%ds",
+                DISCARD_TTL_HOURS, CRON_TTL_HOURS, _DISCARD_SWEEP_INTERVAL_S)
+    # 订阅传感器(NOF_SUBSCRIPTIONS=0 停用;无订阅文件时空转)
+    if os.environ.get("NOF_SUBSCRIPTIONS", "1") != "0":
+        asyncio.create_task(subscription_loop(RUNNER, STORE, subscriptions_path(STATE_DIR)))
 
 
 def cli_main() -> None:

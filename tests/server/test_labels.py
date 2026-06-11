@@ -133,6 +133,7 @@ def test_sweep_archives_label_before_rmtree(env):
 def test_create_task_carries_provenance(env):
     """POST /tasks 透传溯源三件套 -> meta.json 落盘 + GET /tasks 读回。"""
     client, state, _ = env
+    parent = state.STORE.create("wolong", {}, round_id="round_001")
 
     resp = client.post(
         "/tasks",
@@ -140,7 +141,7 @@ def test_create_task_carries_provenance(env):
             "cmd": "guiguzi",
             "params": {"benchmark_path": "x"},
             "source": "wolong",
-            "parent_task_id": "t_0_parent",
+            "parent_task_id": parent.task_id,
             "round_id": "round_001",
         },
     )
@@ -149,7 +150,7 @@ def test_create_task_carries_provenance(env):
 
     on_disk = json.loads(state.STORE.meta_path(task_id).read_text(encoding="utf-8"))
     assert on_disk["source"] == "wolong"
-    assert on_disk["parent_task_id"] == "t_0_parent"
+    assert on_disk["parent_task_id"] == parent.task_id
     assert on_disk["round_id"] == "round_001"
 
     row = next(r for r in client.get("/tasks").json() if r["task_id"] == task_id)

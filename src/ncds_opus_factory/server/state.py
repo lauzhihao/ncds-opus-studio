@@ -29,5 +29,6 @@ VIDEO_JOBS_DIR: Path = Path(os.environ.get("NOF_VIDEO_JOBS_DIR", _DEFAULT_VIDEO_
 STORE: TaskStore = TaskStore(STATE_DIR)
 LABELS: LabelStore = LabelStore(LABELS_DIR)
 # NOF_MOCK_AGENTS 控制哪些命令走 mock（测试期不真调 codex/opus）
-RUNNER: TaskRunner = TaskRunner(STORE, maybe_mock_registry(COMMAND_REGISTRY))
+# labels 注入:cron 任务完成自动归档时由 runner 直接落案卷
+RUNNER: TaskRunner = TaskRunner(STORE, maybe_mock_registry(COMMAND_REGISTRY), labels=LABELS)
 PIPELINE_RUNNER: PipelineRunner = PipelineRunner(VIDEO_JOBS_DIR)
