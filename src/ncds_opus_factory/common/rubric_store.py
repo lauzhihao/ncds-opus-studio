@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -300,11 +301,33 @@ def update_fn_stats(
 # ---------------------------------------------------------------------------
 _BRIEF_MAX_CHARS = 800
 
+# 「待观察」小节标题行:低置信/矛盾信号只服务复盘与人审,绝不注入生成 brief——
+# 防噪声机制隔离出来的可疑信号,不能在注入环节又被端回去
+_WATCHLIST_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*|\*{2}\s*|【)?\s*待观察")
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
+
+
+def _strip_watchlist(text: str) -> str:
+    """剔除「待观察」小节(从其标题行起,到下一个 markdown 标题或文末)。"""
+    out: list[str] = []
+    skipping = False
+    for line in text.splitlines():
+        if _WATCHLIST_RE.match(line):
+            skipping = True
+            continue
+        if skipping and _HEADING_RE.match(line) and not _WATCHLIST_RE.match(line):
+            skipping = False
+        if not skipping:
+            out.append(line)
+    return "\n".join(out).strip()
+
 
 def injection_brief(max_chars: int = _BRIEF_MAX_CHARS, base_dir: Path | None = None) -> str | None:
     """给柳永 userRequirements 附加的 Leader 口味摘要（≤max_chars,含标头）。
 
     rubric 缺失/degraded → None（不注入,宁缺毋滥——降级版备忘录本身是嫌疑人）。
+    「待观察」小节剔除;超长时按**行边界**截断,只注入完整条目不切半句
+    （复盘 prompt 要求核心标准按支撑样本数排序,所以截掉的是置信度最低的尾部）。
     """
     active = active_rubric(base_dir)
     if active is None:
@@ -312,7 +335,20 @@ def injection_brief(max_chars: int = _BRIEF_MAX_CHARS, base_dir: Path | None = N
     version, text = active
     header = f"【Leader 口味备忘 v{version}（卧龙复盘归纳,按此口味创作）】\n"
     body_budget = max(0, max_chars - len(header))
-    body = text.strip()
-    if len(body) > body_budget:
-        body = body[: max(0, body_budget - 1)] + "…"
+    kept: list[str] = []
+    used = 0
+    body_full = _strip_watchlist(text)
+    for line in body_full.splitlines():
+        cost = len(line) + (1 if kept else 0)
+        if used + cost > body_budget:
+            break
+        kept.append(line)
+        used += cost
+    body = "\n".join(kept).strip()
+    if not body:
+        # 退化盘面(首行就超预算的单行大段):硬切兜底,聊胜于无
+        body = body_full[: max(0, body_budget - 1)].strip()
+        if not body:
+            return None
+        body += "…"
     return header + body

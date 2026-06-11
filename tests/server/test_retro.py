@@ -264,12 +264,37 @@ def test_retro_task_auto_archived(tmp_path):
 # 柳永注入(§8.3 第 3 条:唯一注入点,≤800 字)
 # ---------------------------------------------------------------------------
 
-def test_injection_brief_truncates_to_800():
-    rubric_store.write_version("- 开头要短。\n" * 200)  # 远超 800 字
+def test_injection_brief_truncates_to_800_at_line_boundary():
+    rubric_store.write_version("- 这是一条完整的口味标准条目。\n" * 200)  # 远超 800 字
     brief = rubric_store.injection_brief()
     assert brief.startswith("【Leader 口味备忘 v1")
     assert len(brief) <= 800
-    assert brief.endswith("…")
+    # 行边界截断:只注入完整条目,最后一行不是半句
+    assert brief.splitlines()[-1] == "- 这是一条完整的口味标准条目。"
+
+
+def test_injection_brief_excludes_watchlist():
+    """「待观察」是隔离出来的低置信信号,绝不注入生成 brief。"""
+    rubric_store.write_version(
+        "## 核心标准\n- 开头三句内要有钩子。\n\n## 待观察\n- 证据不足的猜测条目。\n"
+    )
+    brief = rubric_store.injection_brief()
+    assert "钩子" in brief
+    assert "待观察" not in brief and "猜测" not in brief
+
+    # 模型不守纪律把「待观察」写在中间:跳过该节,后续标题恢复收录
+    rubric_store.write_version(
+        "## 待观察\n- 中间的猜测。\n\n## 核心标准\n- 逐字台词要可照搬。\n"
+    )
+    brief = rubric_store.injection_brief()
+    assert "逐字台词" in brief and "猜测" not in brief
+
+
+def test_injection_brief_degenerate_single_long_line():
+    """退化盘面:首行就超预算的单行大段 -> 硬切兜底,不返回 None。"""
+    rubric_store.write_version("口味标准" * 400)  # 单行 1600 字
+    brief = rubric_store.injection_brief()
+    assert brief is not None and len(brief) <= 800 and brief.endswith("…")
 
 
 def test_injection_brief_absent_or_degraded():
