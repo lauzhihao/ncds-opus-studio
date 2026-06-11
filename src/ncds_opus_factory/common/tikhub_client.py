@@ -4,7 +4,8 @@ douyin-downloader skill(`skills/douyin-downloader/scripts/douyin_download.py`)�
 沈括(采集 agent)需要「按作者 sec_user_id 分页拉作品列表」—— 仓库没有,这里补上,
 并把作品列表整理成 `all_posts.json`(鬼谷子 guiguzi 吃的精简格式:aweme_id/desc/digg/comment/share/collect/create)。
 
-token 读 ~/.openclaw/config.json 的 tikhub_api_token(同 douyin_download)。本模块不碰飞书、不依赖项目其它部分。
+token 只在项目内解析:优先环境变量 TIKHUB_API_TOKEN,其次仓库根 .env(已 gitignore,
+模板见 .env.example)——不读 ~/.openclaw 等仓库外配置。本模块不碰飞书、不依赖项目其它部分。
 """
 
 from __future__ import annotations
@@ -34,17 +35,23 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 ProgressFn = Callable[[str], None]
 
+ROOT = Path(__file__).resolve().parents[3]   # 仓库根(src/ncds_opus_factory/common/ 上三级)
+
 
 def get_token(token: str | None = None) -> str:
-    """读 TikHub token。优先入参,其次 ~/.openclaw/config.json。"""
+    """读 TikHub token。优先入参,其次 env TIKHUB_API_TOKEN,最后仓库根 .env。"""
     if token:
         return token
-    cfg = Path(os.path.expanduser("~/.openclaw/config.json"))
-    if cfg.exists():
-        token = json.loads(cfg.read_text(encoding="utf-8")).get("tikhub_api_token")
-    if not token:
-        raise ValueError("缺少 tikhub_api_token(~/.openclaw/config.json)")
-    return token
+    if os.getenv("TIKHUB_API_TOKEN"):
+        return os.environ["TIKHUB_API_TOKEN"]
+    env_file = ROOT / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("TIKHUB_API_TOKEN="):
+                v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if v:
+                    return v
+    raise ValueError("缺少 TIKHUB_API_TOKEN(设环境变量,或写进仓库根 .env,模板见 .env.example)")
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -115,6 +122,31 @@ def fetch_user_posts(
 # --------------------------------------------------------------------------- #
 # 单视频:取播放地址 + 下载(逻辑同 douyin_download,搬到项目内)
 # --------------------------------------------------------------------------- #
+def resolve_aweme_id(aweme: str) -> str | None:
+    """把「纯数字 id / 分享短链 / 整段分享口令」统一解析成 aweme_id。
+
+    App 剪贴板捕获传来的是 v.douyin.com 短链(甚至带文案的口令),跟随重定向
+    到 www.douyin.com/video/<id> 再抠数字;解析不动返回 None,调用方报清楚。
+    """
+    s = (aweme or "").strip()
+    if s.isdigit():
+        return s
+    m = re.search(r"https?://\S+", s)
+    if not m:
+        return None
+    url = m.group(0).rstrip("。，,)）]】\"'")
+    try:
+        resp = requests.get(url, headers={"User-Agent": _UA},
+                            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), allow_redirects=True)
+        final = resp.url
+    except requests.RequestException:
+        final = url
+    m = (re.search(r"(?:video|note|slides)/(\d{8,25})", final)
+         or re.search(r"aweme_id=(\d{8,25})", final)
+         or re.search(r"(\d{15,25})", final))
+    return m.group(1) if m else None
+
+
 def fetch_video_url(aweme_id: str, token: str | None = None) -> str | None:
     """aweme_id -> 无水印播放地址。"""
     token = get_token(token)
@@ -193,17 +225,16 @@ def simplify_comment(c: dict) -> dict[str, Any]:
 def fetch_top_comments(
     aweme_id: str,
     top_n: int = 5,
-    max_pages: int = 5,
+    max_pages: int = 1,
     token: str | None = None,
     on_progress: ProgressFn | None = None,
 ) -> list[dict[str, Any]]:
     """拉点赞 TOP N 评论。
 
-    抖音评论接口默认就是「热门序」(点赞+回复加权),高赞评论天然堆在最前面;
-    所以不必在爆款(可能几十万条)上翻全量 —— 翻几页 + 早停即可锁定 TOP N。
-
-    早停条件:已收集 >= top_n 条,且本页最高赞低于当前 TOP N 门槛 —— 后面的页
-    不可能再翻盘进榜。该策略是启发式(非严格全局排序),对「找高赞评论」足够。
+    抖音评论接口默认就是「热门序」(点赞+回复加权),最高赞评论实测就堆在第一页
+    (某 9818 条评论的视频:第1页最高赞 133,第2页骤降到 3,之后全是 0/1)。
+    所以默认只扫第一页——旧的「翻几页+早停」在长尾全 0 赞的评论区永远停不下来,
+    纯属浪费 API 配额。需要更深覆盖时调大 max_pages 即可。
     """
     token = get_token(token)
     collected: list[dict[str, Any]] = []

@@ -31,7 +31,7 @@ BENCH = ROOT / "state" / "benchmark"
 COLLECTED = ROOT / "state" / "figure_collected"
 BENCH_DB = ROOT / "state" / "shenkuo" / "benchmark.db"  # 指标层 SQLite(时间序列)
 TINGWU_DIR = ROOT / "skills" / "tingwu-asr" / "scripts"
-MAIN_ENV = Path("/root/projects/ncds-opus-studio/.env")  # worktree 无 .env,DASHSCOPE key 在主仓库
+MAIN_ENV = ROOT / ".env"  # 仓库根 .env(已 gitignore,模板见 .env.example);不再写死服务器绝对路径
 
 ProgressFn = Callable[[str], None]
 
@@ -339,12 +339,17 @@ def run(
     if not author and not aweme:
         raise ValueError("需要 --author <sec_uid> 或 --aweme <aweme_id>")
 
-    # 单条模式:验证链路用
+    # 单条模式:验证链路用。aweme 接受 纯数字id/分享短链/整段分享口令
     if aweme:
         author_dir = BENCH / "adhoc"
         author_dir.mkdir(parents=True, exist_ok=True)
         on_progress(f"沈括: 单条采集 {aweme}")
-        entry = collect_one(aweme, author_dir, max_frames=max_frames, engine=engine,
+        aweme_id = tikhub_client.resolve_aweme_id(aweme)
+        if not aweme_id:
+            raise ValueError(f"解析不出 aweme_id: {aweme}(支持纯数字 id 或抖音分享链接)")
+        if aweme_id != aweme.strip():
+            on_progress(f"短链解析: -> aweme_id {aweme_id}")
+        entry = collect_one(aweme_id, author_dir, max_frames=max_frames, engine=engine,
                             top_comments=top_comments, on_progress=on_progress)
         _write_collected(author_dir, [entry])
         on_progress(f"沈括完成: {author_dir}")
