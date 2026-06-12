@@ -140,3 +140,6 @@ class TaskDetailResponse(BaseModel):
     artifacts: list[dict[str, Any]] | None = None
     # 人工决策（移动端点同意/拒绝写入），未决为 None。见 POST /tasks/{id}/review。
     review: Review | None = None
+    # 改判入口(P5):round 内任务的闸门决策是否已定案(decision 被续跑段消费,
+    # 或 round 已终局——改判只影响案卷,不回卷流程)。无 round 的任务恒 False。
+    decision_finalized: bool = False

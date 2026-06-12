@@ -134,6 +134,7 @@ async def get_task(task_id: str) -> TaskDetailResponse:
         result=result,
         artifacts=artifacts,
         review=STORE.get_review(task_id),
+        decision_finalized=rounds_gate.decision_finalized(task_id, meta.round_id),
     )
 
 

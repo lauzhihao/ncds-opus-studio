@@ -140,6 +140,32 @@ async def maybe_resume(round_id: str) -> bool:
     return True
 
 
+def decision_finalized(task_id: str, round_id: str | None) -> bool:
+    """改判入口(§8.4 P5):该任务的闸门决策是否已定案。
+
+    - 无 round / round 文件不存在(或不可读) -> False:普通任务改判随时生效;
+    - round 终局(done/terminated) -> True:append_event 一律拒收,改判已不可能
+      回卷,语义上等同定案(已裁定口径);
+    - round active -> 该任务的 decision 事件已被续跑段消费即定案(§4.3)。
+    """
+    if not round_id:
+        return False
+    try:
+        r = ROUNDS.load(round_id)
+    except ValueError:
+        # 脏 round_id(POST /tasks 自报字段,无字符集校验)会让 path() 抛 ValueError;
+        # 这里在 GET /tasks/{id} 读路径上,按"不可读 -> False"口径,不能 500
+        return False
+    if r is None:
+        return False
+    if r.get("status") != "active":
+        return True
+    return any(
+        e["kind"] == "decision" and e["task_id"] == task_id and e.get("consumed")
+        for e in r.get("events", [])
+    )
+
+
 # ---------------------------------------------------------------------------
 # 清场与孤儿归档
 # ---------------------------------------------------------------------------
