@@ -257,8 +257,10 @@ iOS 的归类是写死的：completed 且无 decision = 待验收桶 + 首页红
 
 仓库 `~/Documents/vooice-projects/ncds-opus-studio`（后端）与 ClaudeTrafficLight（iOS，
 分支 claude/unruffled-germain-e0ce91）。提交序列：27ab75f(设计文档) → 6053d7e(P1) →
-d1a7ed7(P2) → c79e719(P3)；iOS 040db04(P1) → 0510b1b(P3)。每期均经
-多视角对抗复审 + 测试（105 例）+ 真实服务 E2E 冒烟后合入。
+d1a7ed7(P2) → c79e719(P3) → 1f60560(P4) → 2168f4f/1875ca2/cb0e9d2(P5：选题库 v2/
+排产协程/decision_finalized)；iOS 040db04(P1) → 0510b1b(P3) → c8b1766(P5)。每期均经
+多视角对抗复审 + 测试（现 185 例）+ E2E 冒烟（P5：隔离端口全链路含库存直开/
+打回返工/终止两形态战报）后合入。**P5 后生产 :8810 尚未重启加载新代码。**
 
 ### 8.2 已建成的架构（文件地图 + 关键决策）
 
@@ -280,9 +282,11 @@ LLM 判断力（rubric/预筛/复盘）P4 注入。原 opus 一把梭保留为 `
 | `server/subscriptions.py` + `routes/subscriptions.py` | 订阅传感器。`state/shenkuo/subscriptions.json` 热读；tick 三道闸（在途/周期/配额）；GET/PUT /subscriptions + POST /subscriptions/tick |
 | `common/signals.py` + `common/benchmark_store.py` | 信号层。new_post 两道闸（首轮豁免+发布时间闸）；spike 归一化增速、仅本轮快照、24h 冷却；去重在 SQLite（signal_dedup 表）；事件落 `state/shenkuo/events.jsonl`（O_APPEND） |
 | `routes/rounds.py` | GET /rounds、GET /rounds/{id}、POST /rounds/{id}/terminate |
-| `server/mock_agents.py` | NOF_MOCK_AGENTS；mock_guiguzi 产 topics（含 potential）、mock_liuyong 产双稿 |
+| `server/mock_agents.py` | NOF_MOCK_AGENTS；mock_guiguzi 产 topics（含 potential，真实 merge 入库 source=mock）、mock_liuyong 产双稿 |
+| `common/topic_store.py` | P5 选题库 v2。`state/benchmark/topics/topics.json`；旧 list 自动迁移；merge 按 title 去重/expired 复活；`take()`=单锁挑题+预占（consume 落盘是预占、round 落盘是确认，崩溃重放按 consumed_by 回收）；TTL 惰性过期；锁序 round 外/topic 内 |
+| `server/planner.py` | P5 排产协程。事件消费（字节 offset，链文件先于 offset 落盘，先派发后推进）/链推进（轮询 store，不动 on_terminal）/库存补货（低水位+在途防堆积+同对标 24h 冷却）；全 source=cron 派发前配额自查；冷启动静默空转；NOF_STATE_DIR 与生产者口径分叉时启动告警 |
 | `server/schemas.py` | TaskSource=user\|wolong\|gate\|cron\|retro；Reviewer=user\|wolong\|system；NoteOrigin=user\|machine\|inferred；intent_key |
-| `server/app.py` | startup 接线（on_terminal 钩子、recover、订阅循环、对账协程 300s、清扫:弃用 168h/cron 72h/案卷回填） |
+| `server/app.py` | startup 接线（on_terminal 钩子、recover、订阅循环、对账协程 300s、清扫:弃用 168h/cron 72h/案卷回填、排产协程 NOF_PLANNER=0 停用） |
 
 iOS（Factory/）：NofModels（溯源 String? 字段、Lossy 容错列表）、NofClient（review 带
 noteOrigin、全损抛错）、LiuyongTaskDetailView（round 任务打回只写 review 不重投、
@@ -291,7 +295,8 @@ pendingRejectNote 重试、打回语音必填是有意设计）、AgentTaskDetai
 
 关键 env：NOF_STATE_DIR/NOF_MOCK_AGENTS/NOF_CONCURRENCY/NOF_DAILY_QUOTA/
 NOF_CRON_TTL_HOURS/NOF_ROUND_RECONCILE_S/NOF_ROUND_TIMEOUT_HOURS/
-NOF_SPIKE_DIGG_PER_HOUR/NOF_SPIKE_MIN_DELTA/NOF_SUBSCRIPTIONS/NOF_RECOVER_MAX_AGE_HOURS。
+NOF_SPIKE_DIGG_PER_HOUR/NOF_SPIKE_MIN_DELTA/NOF_SUBSCRIPTIONS/NOF_RECOVER_MAX_AGE_HOURS；
+P5 新增 NOF_PLANNER/NOF_PLANNER_INTERVAL_S/NOF_TOPIC_LOW_WATER/NOF_TOPIC_TTL_DAYS。
 
 ### 8.3 P4 执行指引（对 §5.2/§5.3 的落地修正——以下决策已裁定，照此实施）
 
@@ -370,7 +375,7 @@ P3 之后 §5.3 的"注入 run_wolong.sh"已失效（round 段无 prompt）。
    预测 / 假阴性率进 report / 超阈降级只警告 / 无 rubric 冷启动放行 / 段在判定前被杀
    对账能救活 / retro 任务自动归档 / 柳永注入截断。
 
-### 8.4 P5 执行指引（现状指针——以下决策已裁定，照此实施）
+### 8.4 P5 执行指引（已实施——as-built 与已知局限见 §8.7，本节留作裁定依据）
 
 **冷启动注意**：信号/选题的产出**机制**已就绪,但生产环境尚无数据（无订阅配置、
 state/shenkuo/ 与 topics.json 都不存在）。排产协程对"无事件文件/无选题库/无对标数据"
@@ -489,3 +494,41 @@ state/shenkuo/ 与 topics.json 都不存在）。排产协程对"无事件文件
 - 真实使用前提：卧龙 round 需要真实对标数据（先跑一次沈括 author 模式采集，
   或配置订阅）；scripts/run_wolong.sh 的默认 benchmark 路径仍指向不存在文件
   （仅影响 legacy 模式，有任务卡待修）。
+
+### 8.7 P5 实施纪要（as-built，2026-06-12）
+
+提交 2168f4f(选题库 v2+消费方) → 1875ca2(排产协程) → cb0e9d2(decision_finalized)；
+iOS c8b1766。多智能体对抗评审（5 维度+反驳庭）后修复 3 个 major 才合入。
+
+**对 §8.4 的落地修正/补强（已裁定）：**
+
+- **`topic_store.take()` 两阶段写协议**：挑题+标 consumed 收口为单锁原子操作；
+  consume 落盘=预占、round 文件落盘=确认。round 落盘前崩溃，重放按
+  consumed_by==round_id 回收预占题（不泄漏库存、不误判"无新鲜选题"）；
+  并发 round 抢题各拿剩余不撞题。start_round 撞到空壳 round（开盘段崩溃残留：
+  active 且无 lines/intents）重走开盘而非转续跑；库存判定用
+  `count_available(round_id)`（fresh+本 round 预占）。
+- **补货同对标 24h 冷却**：§8.4 的防重裁定推广到补货路径（链推进已有），
+  否则鬼谷子产出撞 avoid 抬不动库存时每 tick 烧一次 LLM 直到 cron 配额耗尽。
+- **decision_finalized 口径比 §8.4 宽**：round 终局(done/terminated)恒 True
+  （append_event 拒收，改判不可能回卷）；脏 round_id（POST /tasks 自报字段）
+  按"不可读→False"，GET /tasks/{id} 读路径不许 500。
+- **mock_guiguzi 溯源记 source=mock**（真实落库是有意设计，E2E 要测库消费链；
+  谎报 guiguzi 会让误混生产库的罐头题无法按 source 清理）。
+
+**已知局限（接受现状，后续跟进）：**
+
+- topics.json 互斥是进程内 threading.Lock：CLI 直跑 wolong round 与 server
+  并发写同一库文件时 load-modify-write 可丢更新。跟进方向：消费收口到 server
+  或写路径加 fcntl.flock。
+- NOF_STATE_DIR 设为非默认值时 planner 读路径与生产者（shenkuo 写死仓库根）
+  分叉，事件链静默空转——启动已告警；生产不设该 env（§8.6），tests 靠它隔离。
+  根治需 shenkuo/discover_benchmark 改走同一 env-aware state_root。
+- events.jsonl 不轮转（§8.4 原 TODO 仍在）；guiguzi 新调用方忘传 category=None
+  会在对标无 growth 分类时 ValueError（planner 两处已显式传 None）。
+
+iOS 侧裁定：30s 前台轮询以 `.task(id: scenePhase)` 重启（闭包内读 scenePhase
+是旧快照）；请求取消(CancellationError/URLError.cancelled)不当故障；轮询失败
+不顶替已加载内容（列表静默保留旧数据，首页连续两次失败才灭灯）；改判 review
+在途时定格意图（防「收起」竞态把改判滑成重投）；订阅保存在途锁整个表单
+（整体覆盖写语义）。
