@@ -15,6 +15,8 @@ import os
 import time
 from typing import Any, Callable
 
+from ncds_opus_factory.common import topic_store
+
 RunFn = Callable[..., dict[str, Any]]
 
 
@@ -85,7 +87,11 @@ def _generic_mock(cmd: str) -> RunFn:
 
 
 def mock_guiguzi(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
-    """逼真 mock：返回带 potential 的选题数组（卧龙 round 续跑段挑题要用）。"""
+    """逼真 mock：返回带 potential 的选题数组（卧龙 round 续跑段挑题要用）。
+
+    与真 run 一样经 topic_store.merge 落库、out 指向真实库文件——卧龙永远真跑
+    round 逻辑,续跑段从**库**里挑题(P5),mock 不落库 E2E 就测不到这条链。
+    """
     on_progress("鬼谷子启动(MOCK): 读对标数据,提炼母题")
     time.sleep(0.4)
     topics = [
@@ -93,8 +99,11 @@ def mock_guiguzi(on_progress: Callable[[str], None] = _noop, **params: Any) -> d
          "source": "mock"}
         for i, kw in enumerate(["钱越省越穷", "老板都爱画饼", "副业先亏后赚", "存款利率一直降", "年轻人不买房了"])
     ]
-    on_progress(f"鬼谷子完成(MOCK): {len(topics)} 个选题")
-    return {"topics": topics, "out": "mock", "raw_len": 0}
+    # 溯源如实记 mock(条目自带 source=mock,相等则不挪 bench_source):
+    # 谎报 guiguzi 会让误开 mock 混入生产库的罐头题事后无法按 source 清理
+    merged = topic_store.merge(topics, source="mock")
+    on_progress(f"鬼谷子完成(MOCK): {len(topics)} 个选题(入库 {merged['added']} 新/{merged['skipped']} 重复)")
+    return {"topics": topics, "out": str(topic_store.default_topics_path()), "raw_len": 0}
 
 
 MOCK_RUNS: dict[str, RunFn] = {

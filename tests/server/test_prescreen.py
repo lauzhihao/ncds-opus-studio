@@ -16,7 +16,7 @@ from ncds_opus_factory.common import rubric_store
 from ncds_opus_factory.common.round_store import RoundStore
 from ncds_opus_factory.commands import prescreen, wolong_rounds
 
-from tests.server.test_rounds import FakeTransport, _topics
+from tests.server.test_rounds import FakeTransport, _stock_topics, _topics
 
 
 RUBRIC_TEXT = "# Leader 审美备忘录\n\n- 开头三句内必须有具体钩子,铺垫超过两句会被打回。\n"
@@ -30,12 +30,16 @@ def bench(tmp_path: Path) -> str:
 
 
 def _seeded_round(tmp_path: Path, bench: str, count: int = 1):
-    """开盘 + 鬼谷子完成 + 产线进入 drafting,返回 (rs, tp, rid)。"""
+    """开盘 + 鬼谷子完成 + 产线进入 drafting,返回 (rs, tp, rid)。
+
+    选题入库放在 start_round 之后:P5 起库存够会跳过鬼谷子,这里要走鬼谷子路径。
+    """
     rs = RoundStore(tmp_path / "rounds")
     tp = FakeTransport()
     out = wolong_rounds.start_round(rs, tp, count=count, benchmark_path=bench, avoid="")
     rid, gz = out["round_id"], out["guiguzi_task"]
     tp.results[gz] = {"topics": _topics()}
+    _stock_topics()
     rs.append_event(rid, "terminal", gz, status="completed")
     wolong_rounds.resume_round(rs, tp, rid)
     return rs, tp, rid

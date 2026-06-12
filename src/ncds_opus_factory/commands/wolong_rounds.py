@@ -15,6 +15,10 @@
 
 流程(P3 范围,§4.6):选题(鬼谷子,无闸自动) → 成稿(柳永,闸1 人工验收) →
 全部产线落定 → 战报。吴道子/伯牙/渲染段留待后续接入。
+
+P5(§8.4):选题统一走 common/topic_store(选题库 v2)——开盘时库存够直接跳过
+鬼谷子开产线;不足才派鬼谷子,其产出 merge 入库后续跑段仍从**库**里挑题消费。
+锁序纪律:round 锁在外、topic 锁在内(topic_store 是纯文件 IO,锁内允许)。
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from ncds_opus_factory.common import rubric_store
+from ncds_opus_factory.common import rubric_store, topic_store
 from ncds_opus_factory.common.round_store import RoundStore
 from ncds_opus_factory.commands import prescreen
 
@@ -131,25 +135,6 @@ def discover_benchmark() -> str | None:
 # ---------------------------------------------------------------------------
 # 派单段
 # ---------------------------------------------------------------------------
-def _recent_round_topics(rounds: RoundStore, limit_files: int = 50) -> list[str]:
-    """近期 round 已开产线的选题标题——跨轮防撞题的廉价兜底(完整选题库改造在 P5)。"""
-    titles: list[str] = []
-    try:
-        files = sorted(rounds.base_dir.glob("round_*.json"), reverse=True)[:limit_files]
-        for f in files:
-            try:
-                r = json.loads(f.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            for line in r.get("lines", []):
-                t = str((line.get("topic") or {}).get("title") or "").strip()
-                if t:
-                    titles.append(t)
-    except Exception:  # noqa: BLE001
-        logger.warning("[rounds] 历史选题扫描失败", exc_info=True)
-    return titles
-
-
 def start_round(
     rounds: RoundStore,
     transport: Transport,
@@ -159,36 +144,85 @@ def start_round(
     dispatch_task_id: str | None = None,
     on_progress: ProgressFn = _noop,
 ) -> dict[str, Any]:
-    """开盘:建 round、派鬼谷子选题,然后退出(后续由事件驱动续跑段推进)。
+    """开盘(§8.4 消费方裁定 a):选题库 fresh 库存够 -> 跳过鬼谷子直开产线;
+    不足 -> 建 round、派鬼谷子选题,后续由事件驱动续跑段推进。
 
     round_id 由派单任务 id 确定化(round_<task_id>):服务重启把崩溃中的派单段
     重新入队再跑一遍时,撞上已存在的 round 文件 -> 转入续跑补派遗留意向,
     绝不建第二个 round(一次手发只能有一轮生产)。CLI 直跑无任务 id 时退回随机。
     """
+    goal_count = max(1, int(count))
+    reopened = False
+    if dispatch_task_id:
+        round_id = f"round_{dispatch_task_id}"
+        existing = rounds.load(round_id)
+        if existing is not None:
+            if existing.get("status") == "active" and not existing.get("lines") \
+                    and not existing.get("intents"):
+                # 空壳残留:开盘段在登记意向/建产线前崩溃。重走开盘——
+                # take() 按 consumed_by 回收崩溃前的预占题,重放幂等不泄漏库存
+                reopened = True
+                on_progress(f"round 空壳残留(开盘段崩溃重放),重走开盘: {round_id}")
+            else:
+                on_progress(f"round 已存在(派单段重跑),转续跑补派: {round_id}")
+                return resume_round(rounds, transport, round_id, on_progress)
+    else:
+        round_id = f"round_{datetime.now():%Y%m%d_%H%M%S}_{secrets.token_hex(2)}"
+
+    # 库存够 -> 跳过鬼谷子:此路径不需要对标数据,goal.benchmark_path 可空串。
+    # 可用 = fresh + 本 round 预占(崩溃重放时不误走鬼谷子路径)
+    skip_guiguzi = topic_store.count_available(round_id) >= goal_count
     benchmark = benchmark_path or discover_benchmark()
-    if not benchmark or not Path(benchmark).is_file():
+    if not skip_guiguzi and (not benchmark or not Path(benchmark).is_file()):
         raise FileNotFoundError(
             "没有可用的对标数据(all_posts.json):先跑一次沈括采集(author 模式),或显式指定 benchmark_path"
         )
-    if dispatch_task_id:
-        round_id = f"round_{dispatch_task_id}"
-        if rounds.load(round_id) is not None:
-            on_progress(f"round 已存在(派单段重跑),转续跑补派: {round_id}")
-            return resume_round(rounds, transport, round_id, on_progress)
-    else:
-        round_id = f"round_{datetime.now():%Y%m%d_%H%M%S}_{secrets.token_hex(2)}"
-    goal = {"count": max(1, int(count)), "benchmark_path": str(benchmark), "avoid": avoid or ""}
+    bench_str = str(benchmark) if benchmark and Path(benchmark).is_file() else ""
+    goal = {"count": goal_count, "benchmark_path": bench_str, "avoid": avoid or ""}
     # learned rubric 版本进 goal:战报按版本分组对比,复盘据此评估回退(§8.3)
     goal["rubric_version"] = rubric_store.current_version()
-    rounds.create(round_id, goal)
-    on_progress(f"卧龙开盘: {round_id} 目标 {goal['count']} 条 (对标: {Path(benchmark).parent.name})")
+    if reopened:
+        with rounds.mutate(round_id) as r:
+            r["goal"] = goal  # 重放以本次口径为准(rubric_version 可能已变)
+    else:
+        rounds.create(round_id, goal)
+    on_progress(f"卧龙开盘: {round_id} 目标 {goal['count']} 条"
+                + (f" (对标: {Path(bench_str).parent.name})" if bench_str else " (库存直开)"))
 
-    # 防撞题 = 用户手填 avoid + 近期 round 已开产线的选题
+    if skip_guiguzi:
+        # 锁内挑题+consume+建产线登记意向(锁序:round 外/topic 内,纯文件 IO);
+        # 实际派发交给 resume_round——A 段把 task_id=None 的意向收进 dispatch_plan,
+        # B 段锁外派发,C 段回填,零新增派发代码。
+        with rounds.mutate(round_id) as r:
+            opened = _open_lines_from_store(r)
+        if opened:
+            on_progress(f"选题库存直开 {opened} 条产线(跳过鬼谷子)")
+            res = resume_round(rounds, transport, round_id, on_progress)
+            return {
+                "round_id": round_id,
+                "stage": "scripts",
+                "skipped_guiguzi": True,
+                "lines": opened,
+                "status": res.get("status"),
+                "task_title": f"卧龙开盘 · 目标 {goal['count']} 条(库存直开)",
+                "task_subtitle": round_id,
+            }
+        # 竞态兜底:count_fresh 检查后库存被并发消费光 -> 退回鬼谷子路径
+        if not bench_str:
+            with rounds.mutate(round_id) as r:
+                _terminate(r, reason="选题库存被并发取空且无对标数据")
+            raise FileNotFoundError(
+                "选题库存被并发取空,且没有可用对标数据(all_posts.json)可派鬼谷子"
+            )
+        on_progress("选题库存被并发取空,退回鬼谷子选题")
+
+    # 防撞题 = 用户手填 avoid + 库内全部非 expired 选题(fresh/consumed;
+    # expired 老题允许被重新提出,见 topic_store)
     avoid_list = [s.strip() for s in (avoid or "").split(",") if s.strip()]
-    avoid_list += [t for t in _recent_round_topics(rounds) if t not in avoid_list]
+    avoid_list += [t for t in topic_store.active_titles() if t not in avoid_list]
 
     key = "guiguzi:0"
-    params = {"benchmark_path": str(benchmark), "avoid": avoid_list}
+    params = {"benchmark_path": bench_str, "avoid": avoid_list}
     with rounds.mutate(round_id) as r:
         r["intents"][key] = {"cmd": "guiguzi", "params": params, "task_id": None,
                              "at": datetime.now().isoformat()}
@@ -377,7 +411,7 @@ def _handle_event(
 
     if ev["kind"] == "terminal" and intent_key and intent_key.startswith("guiguzi"):
         if ev["status"] == "completed":
-            _plan_scripts(r, transport.read_result(task_id), plan, on_progress)
+            _plan_scripts(r, transport.read_result(task_id), on_progress)
         else:  # failed / cancelled
             retry_no = int(intent_key.split(":")[1]) + 1
             if retry_no <= GUIGUZI_RETRY:
@@ -422,26 +456,37 @@ def _has_unfilled_intent(r: dict[str, Any]) -> bool:
 def _plan_scripts(
     r: dict[str, Any],
     guiguzi_result: dict[str, Any] | None,
-    plan: list[tuple[str, str, dict[str, Any]]],
     on_progress: ProgressFn,
 ) -> None:
-    """选题完成:挑 top N 开产线,派柳永成稿。"""
-    raw = (guiguzi_result or {}).get("topics") or []
-    # 先过滤再判空:真实鬼谷子可能产出字符串数组/空 title 等畸形,不能让
-    # stage=scripts + 空 lines 落盘(那是个 48h 僵尸 round)
-    topics = sorted(
-        (t for t in raw if isinstance(t, dict) and str(t.get("title") or "").strip()),
-        key=lambda t: t.get("potential", 0),
-        reverse=True,
-    )
-    if not topics:
-        on_progress("选题结果无有效条目,本轮止损")
-        _terminate(r, reason="鬼谷子产出无有效选题")
+    """选题(鬼谷子)完成:从**库**里挑题开产线(P5,§8.4)。
+
+    真实/mock 鬼谷子的 run 返回前都已 merge 入库,所以这里不读 task result 的
+    topics 当选题来源(guiguzi_result 仅留作日志);库内无 fresh(产出全是重复/
+    畸形被 merge 拒收)-> 止损,不能让 stage=scripts + 空 lines 落盘成 48h 僵尸。
+    """
+    produced = len((guiguzi_result or {}).get("topics") or [])
+    opened = _open_lines_from_store(r)
+    if opened == 0:
+        on_progress("选题库无新鲜选题,本轮止损")
+        _terminate(r, reason="选题库无新鲜选题")
         return
-    n = min(int(r["goal"]["count"]), len(topics))
+    on_progress(f"开 {opened} 条产线(鬼谷子本次产出 {produced} 条,选题取自库)")
+
+
+def _open_lines_from_store(r: dict[str, Any]) -> int:
+    """锁内:从选题库原子取题(topic_store.take:回收本 round 预占+fresh 补足)、
+    建产线+登记意向。
+
+    返回开的产线数(0=库内无可用题,由调用方决定止损/退回鬼谷子)。
+    必须在 RoundStore.mutate 锁内调用(锁序:round 外/topic 内,纯文件 IO 合规);
+    意向只登记 task_id=None,实际派发由续跑段 A->B->C 三段式完成。
+    take 落盘是预占、round 落盘是确认:两次写之间崩溃,重放回收预占题,幂等。
+    """
+    picked = topic_store.take(int(r["goal"]["count"]), r["round_id"])
+    if not picked:
+        return 0
     r["stage"] = "scripts"
-    for slot in range(n):
-        topic = topics[slot]
+    for slot, topic in enumerate(picked):
         key = f"liuyong:{slot}:0"
         params = {"topic": str(topic.get("title")), "user_requirements": _topic_context(topic)}
         r["lines"].append({
@@ -449,9 +494,9 @@ def _plan_scripts(
             "status": "dispatching", "rework": 0, "history": [], "notes": [],
             "pending_intent": key,
         })
-        plan.append((key, "liuyong", params))
-    on_progress(f"开 {n} 条产线(共 {len(topics)} 个候选选题)")
-    _mark_topics_consumed(r["round_id"], [t.get("title") for t in topics[:n]])
+        r["intents"][key] = {"cmd": "liuyong", "params": params, "task_id": None,
+                             "at": datetime.now().isoformat()}
+    return len(picked)
 
 
 def _topic_context(topic: dict[str, Any]) -> str:
@@ -618,26 +663,3 @@ def _line_of(r: dict[str, Any], task_id: str) -> dict[str, Any] | None:
         if line.get("task_id") == task_id:
             return line
     return None
-
-
-def _mark_topics_consumed(round_id: str, titles: list[Any]) -> None:
-    """best-effort 把被挑走的选题在共享选题库里标记 consumed(P5 做完整库改造)。"""
-    path = ROOT / "state" / "benchmark" / "topics" / "topics.json"
-    try:
-        if not path.exists():
-            return
-        topics = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(topics, list):
-            return
-        wanted = {str(t) for t in titles if t}
-        changed = False
-        for t in topics:
-            if isinstance(t, dict) and str(t.get("title")) in wanted:
-                t["consumed_by"] = round_id
-                changed = True
-        if changed:
-            tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(topics, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, path)
-    except Exception:  # noqa: BLE001 — 选题库标记失败不影响 round 推进
-        logger.warning("[rounds] 选题 consumed 标记失败", exc_info=True)

@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from ncds_opus_factory.common import topic_store
 from ncds_opus_factory.common.round_store import RoundStore
 from ncds_opus_factory.commands import wolong_rounds
 
@@ -53,6 +54,12 @@ def bench(tmp_path: Path) -> str:
 
 def _topics(n=5):
     return [{"title": f"选题{i}", "potential": 90 - i} for i in range(n)]
+
+
+def _stock_topics(n=5):
+    """选题入库:P5 起续跑段从库里挑题,真实/mock 鬼谷子 run 返回前都已 merge,
+    测试里 FakeTransport 不跑 run,要手工补这一步(库由 conftest 隔离到 tmp)。"""
+    topic_store.merge(_topics(n), source="guiguzi")
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +125,7 @@ def test_resume_opens_lines_on_topics_done(tmp_path: Path, bench: str):
     rid, gz = out["round_id"], out["guiguzi_task"]
 
     tp.results[gz] = {"topics": _topics()}
+    _stock_topics()
     rs.append_event(rid, "terminal", gz, status="completed")
     wolong_rounds.resume_round(rs, tp, rid)
 
@@ -136,6 +144,7 @@ def test_resume_rework_then_kill(tmp_path: Path, bench: str):
     out = wolong_rounds.start_round(rs, tp, count=1, benchmark_path=bench, avoid="")
     rid, gz = out["round_id"], out["guiguzi_task"]
     tp.results[gz] = {"topics": _topics()}
+    _stock_topics()
     rs.append_event(rid, "terminal", gz, status="completed")
     wolong_rounds.resume_round(rs, tp, rid)
 
@@ -164,6 +173,7 @@ def test_resume_all_approved_makes_report(tmp_path: Path, bench: str):
     out = wolong_rounds.start_round(rs, tp, count=2, benchmark_path=bench, avoid="")
     rid, gz = out["round_id"], out["guiguzi_task"]
     tp.results[gz] = {"topics": _topics()}
+    _stock_topics()
     rs.append_event(rid, "terminal", gz, status="completed")
     wolong_rounds.resume_round(rs, tp, rid)
 
@@ -359,6 +369,7 @@ def test_decision_before_terminal_no_rollback(tmp_path: Path, bench: str):
     out = wolong_rounds.start_round(rs, tp, count=2, benchmark_path=bench, avoid="")
     rid, gz = out["round_id"], out["guiguzi_task"]
     tp.results[gz] = {"topics": _topics()}
+    _stock_topics()
     rs.append_event(rid, "terminal", gz, status="completed")
     wolong_rounds.resume_round(rs, tp, rid)
 
@@ -394,12 +405,15 @@ def test_dispatch_task_id_makes_round_deterministic(tmp_path: Path, bench: str):
 
 
 def test_garbage_topics_terminates_not_zombie(tmp_path: Path, bench: str):
-    """鬼谷子产出畸形(字符串数组/空 title)->止损,不留 48h 僵尸。"""
+    """鬼谷子产出畸形(字符串数组/空 title,merge 全拒收->库内无 fresh)->止损,
+    不留 stage=scripts + 空 lines 的 48h 僵尸。"""
     rs = RoundStore(tmp_path / "rounds")
     tp = FakeTransport()
     out = wolong_rounds.start_round(rs, tp, count=1, benchmark_path=bench, avoid="")
     rid, gz = out["round_id"], out["guiguzi_task"]
-    tp.results[gz] = {"topics": ["裸字符串", {"potential": 9}, {"title": "  "}]}
+    garbage = ["裸字符串", {"potential": 9}, {"title": "  "}]
+    tp.results[gz] = {"topics": garbage}
+    assert topic_store.merge(garbage, source="guiguzi") == {"added": 0, "skipped": 3}
     rs.append_event(rid, "terminal", gz, status="completed")
     wolong_rounds.resume_round(rs, tp, rid)
     assert rs.load(rid)["status"] == "terminated"
@@ -412,6 +426,7 @@ def test_rework_carries_all_notes(tmp_path: Path, bench: str):
     out = wolong_rounds.start_round(rs, tp, count=1, benchmark_path=bench, avoid="")
     rid, gz = out["round_id"], out["guiguzi_task"]
     tp.results[gz] = {"topics": _topics()}
+    _stock_topics()
     rs.append_event(rid, "terminal", gz, status="completed")
     wolong_rounds.resume_round(rs, tp, rid)
 

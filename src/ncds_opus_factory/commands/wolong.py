@@ -57,7 +57,9 @@ def run(
 
     _dispatch_task_id 由 task_runner 注入(派单段确定化 round_id 用,重启重跑收敛
     到同一个 round);CLI 直跑没有它,退回随机 round_id。
-    返回:派单段 {round_id, stage, guiguzi_task};续跑段 {round_id, consumed, status[, report]};
+    返回:派单段 {round_id, stage, guiguzi_task},库存直开形态(跳过鬼谷子,§8.4 裁定 a)
+    则为 {round_id, stage:"scripts", skipped_guiguzi, lines, status};
+    续跑段 {round_id, consumed, status[, report]};
     legacy {count, review_dir, returncode, tail}。
     """
     if mode == "retro":

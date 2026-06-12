@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from ncds_opus_factory.common import topic_store
+
 ROOT = Path(__file__).resolve().parents[3]
 SHIM = ROOT / "scripts" / "codex_scodex_shim.sh"
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("NOF_SCOUT_TIMEOUT", "900"))
@@ -112,6 +114,7 @@ def run(
         "必须避开这些已经做过的选题(母题相同也算撞,要换角度):" + avoid_text + "\n\n"
         "输出严格的 JSON 数组,每项字段固定:\n"
         '{"title":"新选题(一句话,带钩子感,像爆款标题)","motif":"母题(困境+反常识点)",'
+        '"angle":"切入角度(一句话,这题从哪个口子讲)",'
         '"source":"对标来源标题","why":"为什么可能爆(1句,落地型/反击感/反常识)","potential":7}\n'
         "potential 是 1-10 的爆款潜力分。产出 " + str(top_n) + " 条,按 potential 从高到低排。\n"
         "只输出 JSON 数组,不要解释、不要 markdown 代码块。\n\n"
@@ -125,11 +128,12 @@ def run(
     topics.sort(key=lambda t: t.get("potential", 0), reverse=True)
     on_progress(f"鬼谷子: 产出 {len(topics)} 条选题")
 
-    out_dir = ROOT / "state" / "benchmark" / "topics"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_json = out_dir / "topics.json"
-    out_json.write_text(json.dumps(topics, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"topics": topics, "out": str(out_json), "raw_len": len(raw)}
+    # 选题库 v2(P5):合并写入,按 title 精确去重——整体覆盖写会冲掉别人补的货。
+    # result["topics"] 保持本次解析的原始列表(label_store._digest 与 iOS GuiguziResult 依赖);
+    # result["out"] 仍是库文件绝对路径(artifacts 层靠它出 URL)。
+    merged = topic_store.merge(topics, source="guiguzi")
+    on_progress(f"鬼谷子: 入库 {merged['added']} 条新选题,跳过 {merged['skipped']} 条重复")
+    return {"topics": topics, "out": str(topic_store.default_topics_path()), "raw_len": len(raw)}
 
 
 def _cli(argv: list[str] | None = None) -> int:
