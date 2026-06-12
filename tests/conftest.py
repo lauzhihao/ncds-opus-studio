@@ -16,3 +16,8 @@ def _isolated_state_dir(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("NOF_LABELS_DIR", raising=False)
     monkeypatch.delenv("NOF_RETRO_FAKE_LLM", raising=False)
     monkeypatch.delenv("NOF_PRESCREEN_FAKE_JUDGE", raising=False)
+    # 排产协程不随 server 集成测试的 app startup 拉起:它的补货路径经
+    # discover_benchmark() 读仓库根 state/benchmark(有意越过 NOF_STATE_DIR 隔离),
+    # 开发机一旦有真实对标数据,TestClient 里的 tick 会派真 cron 任务污染测试 store。
+    # planner 行为由 tests/server/test_planner.py 直接驱动 planner_tick 覆盖。
+    monkeypatch.setenv("NOF_PLANNER", "0")

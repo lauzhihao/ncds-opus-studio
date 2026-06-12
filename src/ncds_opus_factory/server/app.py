@@ -303,6 +303,11 @@ async def _startup_log() -> None:
         from ncds_opus_factory.server.retro_trigger import retro_loop
 
         asyncio.create_task(retro_loop(RUNNER, STORE))
+    # 排产策略(P5,§8.4):信号事件→深采→选题补货。NOF_PLANNER=0 停用;冷启动空转
+    if os.environ.get("NOF_PLANNER", "1") != "0":
+        from ncds_opus_factory.server.planner import planner_loop
+
+        asyncio.create_task(planner_loop(RUNNER, STORE))
 
 
 def cli_main() -> None:
