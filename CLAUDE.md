@@ -1,5 +1,6 @@
 # Role & Objective
 You are a **Senior Engineer**, responsible for maintaining and extending **ncds-opus-factory** —— 一个内容生产引擎：5 个 CLI 命令（文生图 / 图生图 / 视频生成 / 多链路转写 / 双模型改写）+ server 侧 tts / render 命令，通过 FastAPI server（:8810）暴露为异步任务，带 `/studio` Web 前端和多套可复用视频模板。
+**当前方向（2026-06）**：正把 web（作品/内容视角）+ app（agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（旧"core/studio/factory 三包对等拆分"已作废）。**接手先读 `docs/README.md` → `docs/PRODUCTION-ENGINE-DESIGN.md`（权威设计）**。已落地：P1 抽 core（`packages/core`，6 primitive + `build_full_registry()`）+ E0 引擎骨架（`src/ncds_opus_factory/server/engine/`）；护城网：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
 **CORE CONSTRAINT**: 按 Part 2 执行协议分级处理 —— 大改先对齐，小改直做，不自作主张扩大范围。
 
 # Part 0: Communication Protocol (CRITICAL)
@@ -8,9 +9,15 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 - **Code Comments**: Use Chinese for explaining *why* a change was made.
 - **Communication Efficiency**: 注意沟通效率，抓重点，不要总是在重复正确的废话。
 
+## Token-Saver 纪律（CRITICAL）
+- **别一进会话就读整文件**。先读 `docs/README.md`（接手索引）+ `.project_map`（结构地图）建立全局认知，
+  只 `read` 当前任务必需的文件/片段（按 file:line 定向读），不要预读"可能用到"的源码。
+- `.project_map` 由看门狗自动维护（见 Part 1 §8），覆盖命令入口 / Node runtime / skills / 目录树，
+  绝大多数仓库内导航不需要再开 subagent。⚠️ 但其生成器仍是旧单包布局，`packages/` 下结构未必全（见 §8）。
+
 ## Agent / Task 委派规则
-- 进入会话后**先读 `.project_map`**（由看门狗自动维护，见 Part 1 §8）。这份地图覆盖了命令入口、Node runtime、skills、目录树，绝大多数仓库内导航不需要再开 subagent。
 - 只有外部研究型任务才值得派 subagent：飞书开放平台多页文档、`lark-cli` 子命令或权限语义、DashScope / OpenAI / Whisper / Tingwu 等第三方接口差异整理、`codex` CLI 行为差异。
+- **子任务按复杂度匹配模型**（成本优化）：简单文件操作/明确命令/格式化 → haiku；代码分析/调试/需要推理 → sonnet；架构设计/深度推理/对抗审查 → opus。默认继承主线程模型，仅在确信更低/更高 tier 更合适时显式覆盖。
 - 涉及 secrets、用户确认、真实权限变更、批量写操作、删除操作的判断不委派；结论必须由主线程复核后再执行。
 
 # Part 1: Engineering Standards (Non-Negotiable)
@@ -32,18 +39,20 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 
 | 层级 | 位置 | 职责 |
 |---|---|---|
-| 统一 CLI 入口 | `src/ncds_opus_factory/cli.py`, `__main__.py` | `python -m ncds_opus_factory {wst\|tst\|vid\|asr\|rw}` 分发到子命令 |
-| 命令实现 | `src/ncds_opus_factory/commands/{wst,tst,vid,asr,rw,tts,render,render_015}.py` | 每个文件是一个 Python 薄包装：解析参数 + 调下游。前 5 个走 CLI 分发；`tts` / `render*` 仅通过 server 暴露 |
+| **core 包（唯一独立包）** | `packages/core/src/ncds_opus_core/` | 两端复用纯能力：`commands/{wst,tst,vid,tts,render,render_015}` + `PRIMITIVE_REGISTRY`(registry.py) + `gpt_image/` + `pipelines/`(DAG 类型) + `templates/paper_card_talk_015` + `runners/`(rewrite 引擎 .mjs) + 中性 `common/`(`paths.repo_root()` 等)。**core 绝不 import factory/agent** |
+| 生产引擎（E0，新） | `src/ncds_opus_factory/server/engine/` | `InstanceStore`/`InstanceRunner`/`Recipe`/步骤状态机/分层 SSE；经 `build_full_registry()` 晚绑定派发，统一"生产实例+步骤"运行时（取代 PipelineRunner+TaskRunner 双轨，见 PRODUCTION-ENGINE-DESIGN §10）|
+| 统一 CLI 入口 | `packages/core/.../cli.py`(`nof-core`：wst/tst/vid) + `src/ncds_opus_factory/cli.py`(`nof`：asr/rw + agents) | primitive 与 agent 子命令二分（P1.x）|
+| 命令实现（factory） | `src/ncds_opus_factory/commands/` | asr/rw（factory 专属，含飞书/COS/skills 编排）+ 6 个 agent（guiguzi/liuyong/wudaozi/boya/shenkuo/wolong…）+ `AGENT_REGISTRY` + `build_full_registry()`。⚠️ wst/tst/vid/tts/render/render_015 这里只剩**转发 shim**，真身在 core |
 | HTTP server | `src/ncds_opus_factory/server/` | FastAPI（:8810，`nof-server`）：commands 暴露为异步任务 + SSE；jobs / pipelines / preview / mock 路由；挂载 `/studio` SPA（见 Part 1 §9） |
 | Studio 前端 | `web/` | React + Vite SPA；dev 走 vite :5173 反代，prod 构建产物 `web/dist` 由 server 挂到 `/studio` |
 | 公共工具 | `src/ncds_opus_factory/common/` | `public_upload.py`（媒体上公网）/ `lark_cli.py`（lark-cli 子进程封装） |
 | 视频模板 | `src/ncds_opus_factory/templates/` | `paper_card_talk`（009 风格 beats.js 驱动 + AI 管线）/ `figure_talk` / `stickman`（`paper_card_talk_015` 已迁 core） |
-| Node runners | `scripts/*.mjs` | `/asr` `/rw` 由 Python 命令 spawn 出来的 Node runner（如 `asr_command_runner.mjs`, `rewrite_command_runner.mjs`, `video_job_worker.mjs`） |
-| gpt-image 网关 | `gpt_image/generate.py`, `generate_edit.py` | `/wst` `/tst` 的底层 OpenAI gpt-image-2 调用 |
-| Pipelines | `pipelines/douyin_processing/` | 抖音下载 + ASR pipeline（被 `/asr` 调用） |
-| Skills 说明 | `skills/*/SKILL.md` | 各 skill 的 frontmatter；不是可执行 entry point，只是文档 |
+| Node runners（factory） | `scripts/*.mjs` | `/asr` `/rw` 由 Python 命令 spawn 出来的 Node runner（`asr_command_runner.mjs`, `rewrite_command_runner.mjs`, `video_job_worker.mjs`）。⚠️ rewrite 引擎 4 个 .mjs 已迁 `packages/core/.../runners/` |
+| gpt-image 网关 | `packages/core/.../gpt_image/{generate,generate_edit}.py` | `/wst` `/tst` 的底层 gpt-image-2 调用（P1 已从 repo 根迁入 core）|
+| Skills 说明 | `skills/*/SKILL.md` | 各 skill 的 frontmatter；不是可执行 entry point，只是文档。`skills/` 留 repo 根、不进任何包，env `NOF_VIDEO_PIPELINE_SCRIPT` 兜底 |
 | 配置示例 | `configs/openclaw-examples/` | `openclaw.example.json` 等示例（不进 runtime） |
-| 文档 | `docs/MIGRATION.md`, `docs/FEISHU-REFACTOR.md` | 迁移进度 / 飞书重构计划 |
+| 文档 | `docs/README.md`(索引) → `docs/PRODUCTION-ENGINE-DESIGN.md`(权威设计) / `docs/WOLONG-DESIGN.md`(卧龙/agents)；旧设计在 `docs/archive/` | 接手从 README 进；archive 是历史不当现状读 |
+| 删除候选 | repo 根 `pipelines/douyin_processing/` | 零消费者（DAG 类型已迁 core）；`packages/studio/`（旧拆分空骨架）—— 评估删除 |
 | 产物（gitignored） | `state/`, `video-jobs/` | 任务产物、视频任务数据 |
 
 **边界规则**：
@@ -104,6 +113,9 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 
 ## 8. 项目地图与看门狗
 - **`.project_map`**：项目根的结构地图（commands / runtime / skills / 目录树），是 agent 进入会话后的第一手 navigator。**不要手改**，由脚本生成。
+- ⚠️ **生成器仍是旧单包布局**：`map_project.py` 的命令/目录扫描以 `src/ncds_opus_factory/` 为主，
+  对 `packages/core/`、`server/engine/` 等新结构覆盖不全——导航表可能偏旧、漏新模块。需要权威结构时
+  以 `docs/PRODUCTION-ENGINE-DESIGN.md` + 本 §2 表为准；map 生成器适配新布局是一项待办。
 - 生成器：`scripts/map_project.py`，可手动跑 `python3 scripts/map_project.py`。
 - 看门狗：`scripts/map_project_watchdog.py` —— long-running 进程，轮询 `src/` `scripts/` `pipelines/` `gpt_image/` `skills/` `docs/` `configs/` 下相关文件的 mtime，发现变化（去抖 1.5s）后自动重生成 `.project_map`。
 - 注册为 launchd 自启动（macOS）：
