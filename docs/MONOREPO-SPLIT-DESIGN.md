@@ -193,9 +193,13 @@ core/studio editable 装入 venv、`nof-server` 入口完好。测试 **298 pass
 + 运行时 env-first。P1–P3 迁包逐条照它核对。
 
 ### 9.2 清单暴露的两个边界遗漏（补进规划）
-- **`skills/`（repo 根）**：ASR 节点 spawn `skills/video-pipeline/scripts/video_pipeline.py`，
-  柳永/沈括链碰 `skills/tingwu-asr/`——§1 包边界**漏了 `skills/`**。倾向：asr 两端都用 → `skills`
-  随 **core**，或留 repo 根 + `NOF_VIDEO_PIPELINE_SCRIPT`/`NOF_SKILLS_DIR` env。**P1.7 定**。
+- **`skills/`（repo 根）**：✅ **已定（2026-06-13，用户裁定）**——`skills/` 是含 SKILL.md 的
+  混合大杂烩（10 子目录），**不是包形状，留 repo 根、谁都不搬**。`skills/video-pipeline` 被
+  studio（`pipeline_runner._execute_asr`）与 factory（`video_job_worker.mjs`/沈括）共用。
+  P1.7 = 把 `parents[N]/skills/...` 改 `repo_root()/"skills"/...` + `NOF_VIDEO_PIPELINE_SCRIPT`
+  env 兜底（主要 `pipeline_runner.py:1207`）。**注**：§9.2 早先"asr 两端都用 → skills 随 core"的
+  理由已被 §9.4 推翻（asr 命令归 factory）；现按"repo 级共享资源、env 引用"处置，与归属无关。
+  执行细节见 [MONOREPO-SPLIT-HANDOFF.md](MONOREPO-SPLIT-HANDOFF.md) §2 P1.7。
 - **`.mjs` 的 `node_modules` 锚点**：✅ **已定（D2 配套，2026-06-13）**——只有 `render_runner.mjs`
   需第三方包（puppeteer-core/puppeteer-screen-recorder）；asr/rw 的 `.mjs` 全是 `node:` 内置、
   不需 node_modules。**core 自带 `packages/core/package.json` + `node_modules`**（根 package.json
