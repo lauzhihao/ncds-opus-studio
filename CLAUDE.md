@@ -37,7 +37,7 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 | HTTP server | `src/ncds_opus_factory/server/` | FastAPI（:8810，`nof-server`）：commands 暴露为异步任务 + SSE；jobs / pipelines / preview / mock 路由；挂载 `/studio` SPA（见 Part 1 §9） |
 | Studio 前端 | `web/` | React + Vite SPA；dev 走 vite :5173 反代，prod 构建产物 `web/dist` 由 server 挂到 `/studio` |
 | 公共工具 | `src/ncds_opus_factory/common/` | `public_upload.py`（媒体上公网）/ `lark_cli.py`（lark-cli 子进程封装） |
-| 视频模板 | `src/ncds_opus_factory/templates/` | `paper_card_talk`（009 风格 beats.js 驱动 + AI 管线）/ `paper_card_talk_015`（当前主用）/ `reading_confidence` |
+| 视频模板 | `src/ncds_opus_factory/templates/` | `paper_card_talk`（009 风格 beats.js 驱动 + AI 管线）/ `figure_talk` / `stickman`（`paper_card_talk_015` 已迁 core） |
 | Node runners | `scripts/*.mjs` | `/asr` `/rw` 由 Python 命令 spawn 出来的 Node runner（如 `asr_command_runner.mjs`, `rewrite_command_runner.mjs`, `video_job_worker.mjs`） |
 | gpt-image 网关 | `gpt_image/generate.py`, `generate_edit.py` | `/wst` `/tst` 的底层 OpenAI gpt-image-2 调用 |
 | Pipelines | `pipelines/douyin_processing/` | 抖音下载 + ASR pipeline（被 `/asr` 调用） |
