@@ -8,6 +8,7 @@
     GET  /health
     commands : GET /commands, GET /commands/{cmd}/schema
     tasks    : GET/POST /tasks, GET /tasks/{id}, GET /tasks/{id}/events(SSE), POST /tasks/{id}/review
+    instances: GET/POST /instances, GET /instances/{id}(+/runnable/events SSE), POST .../steps/{sid}/{run,approve,reset}, POST .../finalize
     jobs     : /jobs 及 nodes/* 节点操作（routes/pipelines.py + routes/jobs.py），SSE /jobs/{id}/events
     pipelines: GET /pipelines, GET /pipelines/{id}, GET /pipelines/{id}/cover
     templates: GET /templates, GET /templates/{name}/episode.json
@@ -42,6 +43,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ncds_opus_factory.server.routes import artifacts as artifacts_routes
 from ncds_opus_factory.server.routes import commands as commands_routes
+from ncds_opus_factory.server.routes import instances as instances_routes
 from ncds_opus_factory.server.routes import jobs as jobs_routes
 from ncds_opus_factory.server.routes import mock as mock_routes
 from ncds_opus_factory.server.routes import pipelines as pipelines_routes
@@ -78,6 +80,7 @@ app.add_middleware(
 
 app.include_router(commands_routes.router)
 app.include_router(tasks_routes.router)
+app.include_router(instances_routes.router)
 app.include_router(subscriptions_routes.router)
 app.include_router(rounds_routes.router)
 app.include_router(templates_routes.router)

@@ -3,7 +3,7 @@
 > 状态：**v1 DESIGN（2026-06-13）。用户已拍板方向、范围、首步路径，本文档是权威设计。**
 > **取代**已归档的三包拆分系列（[archive/](archive/)：MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS} +
 > CONVERGENCE-DESIGN）——三包对等拆分作废、转历史；**P1 抽 core 的成果全部保留**。
-> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 312 → E1-a driver API 后 **336 passed**）。
+> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 312 → E1-a driver API 后 336 → E1-b1 /instances 路由后 **359 passed**）。
 
 ---
 
@@ -306,10 +306,18 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 3. **config 不再 splat 进 performer**（major）：见上 `run_step` 条。
 4. **直通步真正推进时才翻 meta running + 记 config**（minor×2）：消除"首步后 meta 滞留 pending"与"passthrough 漏记 config"两处不一致。
 
-**E1 仍待补**（路径 C 高风险段，下一步）：
-- `GET /instances/{id}/events?level=…` SSE 路由 + `GET /instances` 列表（store 已有 `owner_id` 过滤，补 `status/recipe_id`）。
+**E1-b1 /instances HTTP 路由已落地**（纯增量，不动 /jobs /tasks /pipelines；全量 **359 passed**，含 21 条 /instances 路由单测）：
+- `state.py` 接 `INSTANCE_STORE`/`INSTANCE_RUNNER` 单例（与 TaskRunner 同款 mock 门 + 内置 RECIPE_REGISTRY）。
+- `routes/instances.py`：`GET/POST /instances`、`GET /instances/{id}`(+`/runnable`)、`POST .../steps/{sid}/{run,approve,reset}`、`POST .../finalize`、`GET /instances/{id}/events?level=` SSE（订内存总线、分层）。
+- 错误映射：404=实例/步/recipe 不存在；409=状态机不允许（非法重跑/非 awaiting/运行中重置）；400=坏 recipe；引擎把 performer 异常收成 step.failed → HTTP 200 + `status=failed`。
+- 经对抗审查加固 5 条：runnable 漏 KeyError→500、SSE 断连漏 unsubscribe（snapshot yield 挪进 try）、approve 未经 recipe 预检裸调 store、body-less `/run` 422、store 读入口补 iid/step_id 白名单。
+
+**E1-b1 范围取舍（b2 补）**：`/run` 同步 await（贵步骤后台派发待 b2）；SSE 只推 meta/step（detail/progress 走 jsonl、tail-merge 待 b2）。
+
+**E1-b2 仍待补**（路径 C 高风险段，下一步）：
+- web `PipelineRunner._execute_*` 七步迁成引擎步骤执行者 + `routes/{jobs,pipelines,preview}` 重指引擎 + 前端走新 instance API（画布=内容视角）。
+- 贵步骤后台派发 + detail 级 SSE（jsonl tail-merge，给 web 画布逐字进度）。
 - 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
-- web `PipelineRunner._execute_*` 七步迁成引擎步骤执行者 + `routes/{jobs,pipelines,preview}` 重指引擎 + 前端走新 instance API。
 - 保留：SSE 满队列丢事件（与现 PipelineRunner 同款取舍，客户端 GET 全量重同步）。
 
 ---
@@ -334,7 +342,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 
 - **P1（抽 core，6 primitive + runners + pipelines(DAG 类型) + 模板015 + registry/cli 二分）全部保留**——core 在本架构里是最底层能力，且 `build_full_registry()` 直接成为引擎的晚绑定派发表。
 - **MONOREPO-SPLIT 三包对等拆分作废**（P2+ 不做）；那三份文档转历史，本文档接任权威设计。
-- **基线随实施推进（E1-a driver API 后 336 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
+- **基线随实施推进（E1-b1 /instances 路由后 359 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
 - **操作安全网**：`main` 有 web 旧画布可跑副本；本 branch `claude/gallant-hellman-27de2a` 做重做，**不并 main**。
 
 ---

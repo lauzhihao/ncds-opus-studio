@@ -45,6 +45,11 @@ def _valid_instance_id(instance_id: str) -> bool:
     return bool(_INSTANCE_ID_RE.match(instance_id))
 
 
+def _valid_step_id(step_id: str) -> bool:
+    # step_id 同样进路径拼接（steps/{step_id}/），同白名单挡 ../ 穿越
+    return bool(_INSTANCE_ID_RE.match(step_id))
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -139,12 +144,16 @@ class InstanceStore:
         return InstanceMeta(**json.loads(self.meta_path(iid).read_text(encoding="utf-8")))
 
     def get_inputs(self, iid: str) -> dict[str, Any]:
+        if not _valid_instance_id(iid):
+            return {}
         p = self.inputs_path(iid)
         if not p.exists():
             return {}
         return json.loads(p.read_text(encoding="utf-8"))
 
     def get_step_state(self, iid: str, step_id: str) -> StepState | None:
+        if not _valid_instance_id(iid) or not _valid_step_id(step_id):
+            return None
         p = self.step_state_path(iid, step_id)
         if not p.exists():
             return None

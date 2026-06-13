@@ -274,6 +274,11 @@ class InstanceRunner:
         两路都写 ``review``（喂 label_store / retro）并发 ``decision`` 事件。
         """
         async with self._lock_for(instance_id):
+            # 先经 recipe 校验 iid（缺→FileNotFoundError）+ step_id（与 run_step/reset_step 对齐，
+            # 不让 URL 来的 sid 裸奔进 store.get_step_state 做路径拼接）
+            recipe = self._recipe_for(instance_id)
+            if step_id not in recipe.step_ids():
+                raise FileNotFoundError(f"step not found: {instance_id}/{step_id}")
             state = self.store.get_step_state(instance_id, step_id)
             if state is None:
                 raise FileNotFoundError(f"step not found: {instance_id}/{step_id}")

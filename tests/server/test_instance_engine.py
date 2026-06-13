@@ -262,6 +262,14 @@ def test_recipe_validate_rejects_bad_recipes():
         dup.validate()
 
 
+def test_store_rejects_path_traversal_ids(tmp_path: Path):
+    # store 的读入口对 iid/step_id 做白名单（docstring 承诺挡穿越）：含 ../ 的 id 不拼路径、返回空
+    store = InstanceStore(tmp_path / "instances")
+    assert store.get_step_state("../evil", "x") is None
+    assert store.get_step_state("ok_id", "../evil") is None
+    assert store.get_inputs("../evil") == {}
+
+
 def test_create_instance_validates_recipe(tmp_path: Path):
     bad = Recipe(recipe_id="bad", name="x",
                  steps=[RecipeStep(step_id="a", deps=["ghost"])])
@@ -420,6 +428,14 @@ def test_approve_step_wrong_state_raises(tmp_path: Path):
     iid = runner.create_instance("t").meta.instance_id
     with pytest.raises(ValueError, match="awaiting_review"):
         asyncio.run(runner.approve_step(iid, "work", "approved"))  # work 还是 idle
+
+
+def test_approve_step_unknown_step_raises(tmp_path: Path):
+    # approve 经 recipe 预检 step_id（与 run/reset 对齐），不在 recipe 的 step → FileNotFoundError
+    runner = _runner(tmp_path)
+    iid = runner.create_instance("t").meta.instance_id
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(runner.approve_step(iid, "ghost", "approved"))
 
 
 # --------------------------------------------------------------------------- #
