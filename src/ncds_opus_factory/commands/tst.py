@@ -15,8 +15,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-ROOT = Path(__file__).resolve().parents[3]
-IMAGE_EDIT_GATEWAY = ROOT / "gpt_image" / "generate_edit.py"
+from ncds_opus_core.gpt_image import script_path as _gpt_image_script
+
+# gpt_image 网关已迁入 ncds_opus_core（P1.2）；按包内位置定位，不再 parents[3]
+IMAGE_EDIT_GATEWAY = _gpt_image_script("generate_edit.py")
 
 DEFAULT_TIMEOUT = int(os.getenv("NOF_TST_TIMEOUT", "600"))
 DEFAULT_PROMPT = "基于参考图生成一版高质量变体，保留主体和核心构图，优化细节、光影和整体质感。"

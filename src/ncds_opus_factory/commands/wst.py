@@ -14,8 +14,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-ROOT = Path(__file__).resolve().parents[3]
-IMAGE_GATEWAY = ROOT / "gpt_image" / "generate.py"
+from ncds_opus_core.gpt_image import script_path as _gpt_image_script
+
+# gpt_image 网关已迁入 ncds_opus_core（P1.2）；按包内位置定位，不再 parents[3]
+IMAGE_GATEWAY = _gpt_image_script("generate.py")
 
 DEFAULT_TIMEOUT = int(os.getenv("NOF_WST_TIMEOUT", "600"))
 

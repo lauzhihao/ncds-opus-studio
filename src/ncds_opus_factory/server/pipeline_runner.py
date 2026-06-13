@@ -2362,9 +2362,10 @@ def _generate_scene_image(
     复刻 ~/projects/ncds-materials/.014-draft-assets/pic_gen.py 的 generate_one()
     逻辑。在 to_thread 里被调，整个函数纯同步、纯 IO。
     """
-    # gpt_image_gen.py 路径：repo_root/gpt_image/gpt_image_gen.py
-    # pipeline_runner.py 在 src/ncds_opus_factory/server/，向上 3 层到 repo_root
-    gen_script = Path(__file__).resolve().parents[3] / "gpt_image" / "gpt_image_gen.py"
+    # gpt_image 已迁入 ncds_opus_core（P1.2）；按包内位置定位，不再 parents[3]
+    from ncds_opus_core.gpt_image import script_path as _gpt_image_script
+
+    gen_script = _gpt_image_script("gpt_image_gen.py")
     if not gen_script.is_file():
         raise RuntimeError(f"gpt_image_gen.py not found at {gen_script}")
 
