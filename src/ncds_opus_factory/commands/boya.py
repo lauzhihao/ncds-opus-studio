@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import subprocess
@@ -71,6 +72,23 @@ def _ffmpeg(args: list[str]) -> None:
                           text=True, capture_output=True)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg 失败: {proc.stderr[-600:]}")
+
+
+@functools.lru_cache(maxsize=1)
+def _amix_supports_normalize() -> bool:
+    """本机 ffmpeg 的 amix 是否支持 normalize 选项（4.4+ 才加入）。
+
+    老 ffmpeg（如 4.1）的 amix 没有 normalize、且强制做 1/N 归一；带上该选项会
+    'Option normalize not found' 直接报错。检测一次缓存，给 _mix_audio 选滤镜写法。
+    """
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-h", "filter=amix"],
+            text=True, capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "normalize" in (out.stdout + out.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -310,8 +328,13 @@ def mix_master(
         # 只有人声:直接转码输出,不走 amix
         _ffmpeg([*inputs, "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", str(out)])
         return
-    filt = ";".join(fil) + ";" + "".join(mix_labels) + \
-        f"amix=inputs={n_in}:normalize=0:duration=first[a]"
+    # normalize=0 保留各路真实电平(已在各路 volume 里调好,不让 amix 再均衡掉人声)。
+    # 老 ffmpeg(4.1)的 amix 无此选项、强制做 1/N 归一 -> 用 ,volume=N 抵消还原成等价"求和"。
+    if _amix_supports_normalize():
+        mix = f"amix=inputs={n_in}:normalize=0:duration=first[a]"
+    else:
+        mix = f"amix=inputs={n_in}:duration=first,volume={n_in}[a]"
+    filt = ";".join(fil) + ";" + "".join(mix_labels) + mix
     _ffmpeg([*inputs, "-filter_complex", filt, "-map", "[a]",
              "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "44100", str(out)])
 
