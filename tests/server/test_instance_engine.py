@@ -15,6 +15,7 @@ import pytest
 from ncds_opus_factory.commands import build_full_registry
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
+from ncds_opus_factory.server.engine.pipeline_performers_015 import PERFORMERS_015
 from ncds_opus_factory.server.engine.recipes import PAPER_CARD_TALK_015
 from ncds_opus_factory.server.engine.types import Recipe, RecipeStep, can_transition
 
@@ -42,12 +43,14 @@ def test_step_state_machine_legal_and_illegal():
 # 2) 真实 015 配方的晚绑定 wiring：每个 performer 都能在 registry 里解析
 # --------------------------------------------------------------------------- #
 def test_recipe_015_performers_resolve_in_registry():
-    reg = build_full_registry()
+    # 引擎用的合并 registry = bare command ∪ 015 orchestration performer（见 server/state.py）
+    reg = {**build_full_registry(), **PERFORMERS_015}
     for step in PAPER_CARD_TALK_015.steps:
         if step.performer is not None:
             assert step.performer in reg, f"{step.step_id} 的 performer {step.performer} 不在 registry"
-    # E0 目标步：render 经 core 的 render_015 派发
-    assert "render_015" in reg
+    # E1-b2：各执行步绑到 pct015_* orchestration performer（render 经 run_render_step → render_015.run）
+    assert PAPER_CARD_TALK_015.step("render").performer == "pct015_render"
+    assert "pct015_render" in reg and "render_015" in build_full_registry()  # bare 命令仍在
     order = PAPER_CARD_TALK_015.topological_order()
     assert order[0] == "input" and order[-1] == "download"
 
@@ -226,12 +229,15 @@ def test_run_step_registry_miss_fails(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 def test_default_runner_real_015_create_and_passthrough(tmp_path: Path):
     store = InstanceStore(tmp_path / "instances")
-    runner = InstanceRunner(store)  # 默认：build_full_registry() + RECIPE_REGISTRY
+    # 生产同款合并 registry（bare command ∪ 015 performer），与 server/state.py 一致
+    runner = InstanceRunner(store, registry={**build_full_registry(), **PERFORMERS_015})
     state = runner.create_instance("paper_card_talk_015", inputs={"urls": ["x"]})
     iid = state.meta.instance_id
     assert set(state.steps) == set(PAPER_CARD_TALK_015.step_ids())
-    # render 步的 performer 在真实 registry 里可解析（晚绑定 wiring 成立）
-    assert runner.registry.get(PAPER_CARD_TALK_015.step("render").performer) is not None
+    # 每个执行步的 performer 都能在合并 registry 里解析（晚绑定 wiring 成立）
+    for step in PAPER_CARD_TALK_015.steps:
+        if step.performer is not None:
+            assert runner.registry.get(step.performer) is not None, step.step_id
     # 跑直通 input 步：create→run→落 store 全链通
     st = asyncio.run(runner.run_step(iid, "input"))
     assert st.status == "done"
@@ -575,15 +581,17 @@ def test_performerless_decision_only_step_awaits_review(tmp_path: Path):
     assert st.draft == {}
 
 
-def test_real_015_performerless_content_edit_steps_gate(tmp_path: Path):
-    # 真实 015 配方：lines/storyboard/preview 都是无 cmd 的 content_edit 步，必须停在闸门
+def test_real_015_preview_is_performerless_content_edit_gate(tmp_path: Path):
+    # E1-b2 rebind 后：015 的 lines/storyboard 已绑 pct015_* performer；preview 仍是无 performer 的
+    # content_edit 人工闸（iframe 改 episode）。验证无 performer + intervention → 停 awaiting_review。
     store = InstanceStore(tmp_path / "instances")
-    runner = InstanceRunner(store)   # 真实 build_full_registry + RECIPE_REGISTRY
+    runner = InstanceRunner(store, registry={**build_full_registry(), **PERFORMERS_015})
     iid = runner.create_instance("paper_card_talk_015", inputs={"urls": ["x"]}).meta.instance_id
-    for sid in ("lines", "storyboard", "preview"):
-        st = asyncio.run(runner.run_step(iid, sid, step_inputs={"k": sid}))
-        assert st.status == "awaiting_review", f"{sid} 应停在闸门，实为 {st.status}"
-        assert st.draft == {"k": sid}
+    assert PAPER_CARD_TALK_015.step("preview").performer is None        # 无 performer
+    assert PAPER_CARD_TALK_015.step("lines").performer == "pct015_lines"  # 已绑 performer
+    st = asyncio.run(runner.run_step(iid, "preview", step_inputs={"k": "preview"}))
+    assert st.status == "awaiting_review"          # 无 performer 的 content_edit 步停闸门
+    assert st.draft == {"k": "preview"}
 
 
 # --------------------------------------------------------------------------- #

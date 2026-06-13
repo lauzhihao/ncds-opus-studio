@@ -324,8 +324,12 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 - **模型差异**：web 的 mid-run 增量进度（`_push_outputs_patch` item_progress / model_progress / 增量 drafts）暂不复刻——引擎当前只在步末设 outputs，信息经 on_progress 文本透出；引擎加增量 outputs 后再补。asr 跨 job 下载缓存、rw 4 模型 async 并发（同步 performer 内 `asyncio.run` 跑原 `gather`）忠实保留。
 - 单测：每步覆盖正常 + 失败/边界（image 异常/全失败、render picture_dir 转发、asr polish-fallback/缓存命中+MISS 迁移/stamp 变更/单条失败/全失败、rw 部分成功/全失败/profile/code-fence）。经 3 轮 fidelity+coverage 对抗审查加固。
 
+**E1-b2 全局 015 recipe 绑定已落地**：`recipes.py` 的 PAPER_CARD_TALK_015 各执行步 cmd 已从 bare command
+重绑到 `pct015_*` orchestration performer；`server/state.py` 的 `INSTANCE_RUNNER` registry =
+`build_full_registry()`(含 mock 门) ∪ `PERFORMERS_015`。`preview` 仍是无 performer 的 content_edit 人工闸。
+带生产 wiring 守护测试（015 每个执行步的 performer 必须在生产 registry 解析）。
+
 **E1-b2 仍待补**（路径 C 高风险段，下一步）：
-- 全局 015 recipe 的 lines/storyboard 绑 cmd 到新 performer（slice-1 用注入 registry 验证、未动全局 recipe）。
 - web `routes/{jobs,pipelines,preview}` 重指引擎 + 前端走新 instance API（画布=内容视角）+ 贵步骤后台派发 + detail 级 SSE（jsonl tail-merge，给 web 画布逐字进度）。
 - 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
 - 保留：SSE 满队列丢事件（与现 PipelineRunner 同款取舍，客户端 GET 全量重同步）。

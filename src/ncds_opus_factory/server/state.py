@@ -14,6 +14,7 @@ from pathlib import Path
 from ncds_opus_factory.commands import build_full_registry
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
+from ncds_opus_factory.server.engine.pipeline_performers_015 import PERFORMERS_015
 from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.mock_agents import maybe_mock_registry
 from ncds_opus_factory.server.pipeline_runner import PipelineRunner
@@ -37,8 +38,11 @@ LABELS: LabelStore = LabelStore(LABELS_DIR)
 # labels 注入:cron 任务完成自动归档时由 runner 直接落案卷
 RUNNER: TaskRunner = TaskRunner(STORE, maybe_mock_registry(build_full_registry()), labels=LABELS)
 PIPELINE_RUNNER: PipelineRunner = PipelineRunner(VIDEO_JOBS_DIR)
-# 生产引擎（E1）：与 TaskRunner 同款晚绑定派发表（含 mock 门），recipes 取内置 RECIPE_REGISTRY。
+# 生产引擎（E1）：派发表 = bare command（含 mock 门）∪ 015 orchestration performer（pct015_*）。
+# 015 recipe 各步的 cmd 指向 pct015_*（见 recipes.py），故引擎须能在合并表里解析它们。
+# PERFORMERS_015 是真实编排（不过 mock 门；其内部 helper 自行处理外部依赖）。
 INSTANCE_STORE: InstanceStore = InstanceStore(INSTANCES_DIR)
 INSTANCE_RUNNER: InstanceRunner = InstanceRunner(
-    INSTANCE_STORE, maybe_mock_registry(build_full_registry())
+    INSTANCE_STORE,
+    {**maybe_mock_registry(build_full_registry()), **PERFORMERS_015},
 )

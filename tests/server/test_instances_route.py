@@ -235,6 +235,18 @@ def test_finalize_missing_404(client: TestClient):
 # --------------------------------------------------------------------------- #
 # SSE
 # --------------------------------------------------------------------------- #
+def test_production_engine_registry_resolves_015_performers():
+    # 生产单例（state.py 的 INSTANCE_RUNNER）的合并 registry 必须能解析 015 recipe 每个执行步的
+    # performer（pct015_*）——守 state.py 漏并 PERFORMERS_015 的回归。不走 client fixture（看真 registry）。
+    from ncds_opus_factory.server.engine.recipes import PAPER_CARD_TALK_015
+    from ncds_opus_factory.server.routes import instances as inst_mod
+
+    reg = inst_mod.INSTANCE_RUNNER.registry
+    for step in PAPER_CARD_TALK_015.steps:
+        if step.performer is not None:
+            assert step.performer in reg, f"{step.step_id}:{step.performer} 不在生产 registry"
+
+
 def test_sse_missing_instance_404(client: TestClient):
     with client.stream("GET", "/instances/i_nope/events") as r:
         assert r.status_code == 404

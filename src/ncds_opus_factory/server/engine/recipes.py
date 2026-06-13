@@ -1,12 +1,13 @@
 """配方注册表（RECIPE_REGISTRY）。
 
-E0：把现有 015 DAG（ncds_opus_core.pipelines.paper_card_talk_015）表达成一条 Recipe，
-作为引擎的第一条配方。步骤的 ``cmd`` 是 build_full_registry() 的 key（引擎晚绑定派发）；
-``input``/``process``(无 cmd)/``output`` 步无执行体（由 driver 或 UI 处理）。
+把现有 015 DAG（ncds_opus_core.pipelines.paper_card_talk_015）表达成一条 Recipe，
+作为引擎的第一条配方。步骤的 ``cmd`` 是派发 registry 的 key（引擎晚绑定派发）。
 
-注：E0 暂沿用 015 现有 cmd 绑定（asr/rw/tts/wst/render_015）；统一设计里
-asr→沈括、rw→柳永 等 agent 重绑定在后续 E 期做（见设计 §3/§8），不影响骨架。
-figure_talk 等更多配方在 E3 入册。
+E1-b2：各执行步的 ``cmd`` 已绑到 015 orchestration performer（``pct015_*``，见
+``pipeline_performers_015.PERFORMERS_015``），引擎在合并 registry（build_full_registry ∪
+PERFORMERS_015，见 ``server/state.py``）里查表派发——即真实复刻 web 各 ``_execute_*`` 编排。
+``input``/``download``（无 cmd）与 ``preview``（content_edit 人工闸、无 performer）无执行体。
+统一设计里 asr→沈括、rw→柳永 等 agent 重绑定在后续 E 期做（见设计 §3/§8）；figure_talk 等更多配方在 E3 入册。
 """
 
 from __future__ import annotations
@@ -22,20 +23,20 @@ PAPER_CARD_TALK_015 = Recipe(
     template_renderer="paper_card_talk_015",
     steps=[
         RecipeStep(step_id="input", label="START", kind="input", deps=[]),
-        RecipeStep(step_id="asr", label="ASR", cmd="asr", deps=["input"]),
-        RecipeStep(step_id="rw", label="RW", cmd="rw", deps=["asr"],
+        RecipeStep(step_id="asr", label="ASR", cmd="pct015_asr", deps=["input"]),
+        RecipeStep(step_id="rw", label="RW", cmd="pct015_rw", deps=["asr"],
                    intervention="content_edit"),
-        RecipeStep(step_id="lines", label="BEATS", deps=["rw"],
+        RecipeStep(step_id="lines", label="BEATS", cmd="pct015_lines", deps=["rw"],
                    intervention="content_edit"),
-        RecipeStep(step_id="storyboard", label="STORYBOARD", deps=["lines"],
+        RecipeStep(step_id="storyboard", label="STORYBOARD", cmd="pct015_storyboard", deps=["lines"],
                    intervention="content_edit"),
-        RecipeStep(step_id="tts", label="TTS", cmd="tts", deps=["storyboard"],
+        RecipeStep(step_id="tts", label="TTS", cmd="pct015_tts", deps=["storyboard"],
                    expensive=True),
-        RecipeStep(step_id="image", label="IMAGE", cmd="wst", deps=["tts"],
+        RecipeStep(step_id="image", label="IMAGE", cmd="pct015_image", deps=["tts"],
                    expensive=True, material_source="generated"),
         RecipeStep(step_id="preview", label="PREVIEW", deps=["image"],
                    intervention="content_edit"),
-        RecipeStep(step_id="render", label="RENDER", cmd="render_015", deps=["preview"],
+        RecipeStep(step_id="render", label="RENDER", cmd="pct015_render", deps=["preview"],
                    expensive=True),
         RecipeStep(step_id="download", label="DOWNLOAD", kind="output", deps=["render"]),
     ],

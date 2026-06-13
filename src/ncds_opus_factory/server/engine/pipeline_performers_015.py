@@ -694,12 +694,15 @@ def run_render_step(on_progress: Callable[[str], None], *, job_dir: str, **_: An
     }
 
 
+# 015 recipe 各步 cmd → orchestration performer。键带 ``pct015_`` 前缀，与 build_full_registry
+# 的 bare command（asr/rw/tts/wst/render_015）区分；引擎按 recipe 步骤的 cmd 字符串在合并 registry
+# （build_full_registry ∪ PERFORMERS_015，见 server/state.py）里查表派发。
 PERFORMERS_015: dict[str, Callable[..., dict[str, Any]]] = {
-    "asr": run_asr_step,
-    "rw": run_rw_step,
-    "lines": run_lines_step,
-    "storyboard": run_storyboard_step,
-    "tts": run_tts_step,
-    "image": run_image_step,
-    "render": run_render_step,
+    "pct015_asr": run_asr_step,
+    "pct015_rw": run_rw_step,
+    "pct015_lines": run_lines_step,
+    "pct015_storyboard": run_storyboard_step,
+    "pct015_tts": run_tts_step,
+    "pct015_image": run_image_step,
+    "pct015_render": run_render_step,
 }
