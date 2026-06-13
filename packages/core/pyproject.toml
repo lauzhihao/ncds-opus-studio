@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# ncds-opus-core —— 两端复用的纯能力库（primitives 命令 + 模板 + DAG 类型 + gpt-image 网关 +
+# 中性 common）。无 server、不依赖任何产品层。P0 仅建空骨架，代码在 P1 迁入。
+name = "ncds-opus-core"
+version = "0.1.0"
+description = "Shared capability core for ncds-opus: primitives, templates, DAG types, gpt-image gateway. No server, no product orchestration."
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
