@@ -3,7 +3,7 @@
 > 状态：**v1 DESIGN（2026-06-13）。用户已拍板方向、范围、首步路径，本文档是权威设计。**
 > **取代**已归档的三包拆分系列（[archive/](archive/)：MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS} +
 > CONVERGENCE-DESIGN）——三包对等拆分作废、转历史；**P1 抽 core 的成果全部保留**。
-> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 **312 passed**）。
+> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 312 → E1-a driver API 后 **336 passed**）。
 
 ---
 
@@ -288,19 +288,28 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 | **E4 retro 学习闭环** | 补 `retro_trigger`→`label_store`→opus rubric→注入 liuyong/prescreen 实链（去桩） | 标注样本攒够→夜间复盘出新 rubric→下一轮注入可观测；闭环跑通 |
 | **E5 收口** | 删 `JobState`/`PipelineRunner` 残留 + 旧 `/jobs` 双线 + `video-jobs` 迁 `state/instances`；更新 `.project_map` + 文档 | 全仓单运行时；两视图同源；冷启动 OK；pytest 全绿 |
 
-### E0 as-built + E1 引擎 API 待补（E0 评审确认）
-**E0 已落地**（commit `b2e66e3` + 评审加固）：`server/engine/{types,recipes,instance_store,instance_runner}.py`
-+ 12 单测；按实例 `asyncio.Lock` 串行化、配方自检（悬空 deps/环/重复）；全量 **312 passed**。
-E0 评审（3 lens + 对抗复核）确认两条已修（并发 run_step 竞态→加锁；配方校验），其余按 E0 范围
-（"不接 driver"）属**预期缺口**，是 **E1 必补的引擎 driver API**：
+### E0 as-built + E1 driver API as-built（评审加固后）
+**E0 已落地**（commit `b2e66e3` + 评审加固）：`server/engine/{types,recipes,instance_store,instance_runner}.py`；
+按实例 `asyncio.Lock` 串行化、配方自检（悬空 deps/环/重复）。
 
-- `approve_step(iid, step_id, decision, edited_draft=None, note=None)`：`awaiting_review`→定稿/打回（content_edit/decision_only 的出口，否则 awaiting_review 死锁）。
-- `get_step_output(iid, step_id)` + `get_runnable_steps(iid)`：driver 据 deps 找下一可跑步、装配上游产物→下游 `step_inputs`。
-- `reset_step(iid, step_id)`：重跑某步**级联 reset 下游**为 idle（改稿后下游失效）。
-- `finalize_instance(iid)`：据各步终态把 `meta.status` 置 `completed/failed`（现 E0 停在 `running`）。
-- `run_step(..., config=...)` + 落 `StepState.config`：承接运行期选择（如 rw 选模型）。
+**E1-a 引擎 driver API 已落地**（纯增量、零接视图；全量 **336 passed**，24 新单测）。原"待补"项均已实现：
+
+- ✅ `approve_step(iid, step_id, decision, *, edited_draft=None, note=None, reviewer="user")`：`awaiting_review` 出口——approved→定稿（`outputs`=最终草稿、`done`）、rejected→`rejected`（rework/skip 留给 driver 后续 `reset_step`/略过）；两路都写 `Review` + 发 `decision` 事件。
+- ✅ `get_runnable_steps(iid)` + `get_step_output(iid, step_id)`：拓扑序返回 idle 且 deps 全 done/skipped 的步；取定稿 `outputs` 供 driver 装配下游 `step_inputs`。
+- ✅ `reset_step(iid, step_id)`：硬重置该步 **及全部传递下游** 为 idle（保 `config`、清运行态），running 步拒绝；重置后重算 meta（已结算实例被重激活为 running）。
+- ✅ `finalize_instance(iid)`：据各步终态置 meta——任一 failed→failed / 全 done·skipped→completed / 全 idle→pending / 否则 running；发 meta 事件。
+- ✅ `run_step(..., config=...)`：config 作**溯源**落 `StepState.config`（步骤真正启动时）。⚠️ **不** splat 进 performer——真实命令闭合签名（rw 的 model 在 `payload` 里、非顶层 kwarg），driver 负责把选择折进 `step_inputs`（与 TaskRunner "调用方建好 params" 契约一致）。
+
+**E1-a 评审加固**（2 轮对抗审查 + 逐条对抗复核）——抓出并修掉 6 条 E0 遗留/本期引入的真缺陷：
+1. **闸门判据从 `performer` 改回 `intervention`**（blocker）：原 `_run_step` 的 `performer is None→done` 早返回在 intervention 判定之前，致 015 的 `lines/storyboard/preview`（content_edit 但无 cmd）被静默直通、强制闸门失效。现无 performer 但有 intervention 的步也停 `awaiting_review`，以上游 `step_inputs` 作初始草稿。
+2. **守门提到副作用之前**（major×2）：抽 `_start_running` 先校验 `idle/queued→running` 合法、再翻 meta running / 落 config——非法重跑（对终态步）是干净的 no-op 失败，不再把已结算实例 meta 永久翻 running、也不脏写 config。
+3. **config 不再 splat 进 performer**（major）：见上 `run_step` 条。
+4. **直通步真正推进时才翻 meta running + 记 config**（minor×2）：消除"首步后 meta 滞留 pending"与"passthrough 漏记 config"两处不一致。
+
+**E1 仍待补**（路径 C 高风险段，下一步）：
 - `GET /instances/{id}/events?level=…` SSE 路由 + `GET /instances` 列表（store 已有 `owner_id` 过滤，补 `status/recipe_id`）。
 - 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
+- web `PipelineRunner._execute_*` 七步迁成引擎步骤执行者 + `routes/{jobs,pipelines,preview}` 重指引擎 + 前端走新 instance API。
 - 保留：SSE 满队列丢事件（与现 PipelineRunner 同款取舍，客户端 GET 全量重同步）。
 
 ---
@@ -325,7 +334,7 @@ E0 评审（3 lens + 对抗复核）确认两条已修（并发 run_step 竞态�
 
 - **P1（抽 core，6 primitive + runners + pipelines(DAG 类型) + 模板015 + registry/cli 二分）全部保留**——core 在本架构里是最底层能力，且 `build_full_registry()` 直接成为引擎的晚绑定派发表。
 - **MONOREPO-SPLIT 三包对等拆分作废**（P2+ 不做）；那三份文档转历史，本文档接任权威设计。
-- **基线 300 passed / 0 failed**；每个 E-期退出标准含"不掉绿"。
+- **基线随实施推进（E1-a driver API 后 336 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
 - **操作安全网**：`main` 有 web 旧画布可跑副本；本 branch `claude/gallant-hellman-27de2a` 做重做，**不并 main**。
 
 ---

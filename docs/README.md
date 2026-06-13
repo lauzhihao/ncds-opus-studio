@@ -8,8 +8,9 @@
 （agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（取代早先的"core/studio/factory 三包对等拆分"）。
 
 进度：**P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）；
-**E0 生产引擎骨架已落地**（`src/ncds_opus_factory/server/engine/`，312 passed）；**下一步 E1**=web 整条 pipeline
-迁上引擎（见设计 §10）。⚠️ 护城河：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
+**E0 引擎骨架 + E1-a driver API 已落地**（`src/ncds_opus_factory/server/engine/`，approve/reset/runnable/output/finalize/run(config=)
+全套 driver 原语 + 评审加固，336 passed）；**下一步 E1-b**=SSE 路由 + 兼容层 + web 整条 pipeline 迁上引擎（见设计 §10）。
+⚠️ 护城河：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
 
 ## 活文档（current）
 | 文档 | 作用 |

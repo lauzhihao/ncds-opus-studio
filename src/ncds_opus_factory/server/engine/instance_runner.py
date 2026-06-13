@@ -22,12 +22,15 @@ from ncds_opus_factory.server.engine.instance_store import InstanceStore
 from ncds_opus_factory.server.engine.recipes import RECIPE_REGISTRY
 from ncds_opus_factory.server.engine.types import (
     InstanceEvent,
+    InstanceMeta,
     InstanceState,
+    InstanceStatus,
     Recipe,
     StepState,
     StepStatus,
     can_transition,
 )
+from ncds_opus_factory.server.schemas import Review
 
 logger = logging.getLogger(__name__)
 
@@ -129,22 +132,33 @@ class InstanceRunner:
         instance_id: str,
         step_id: str,
         step_inputs: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
     ) -> StepState:
-        """执行单步（**按实例串行化**，防并发步骤竞态）；执行细节见 _run_step。"""
+        """执行单步（**按实例串行化**，防并发步骤竞态）；执行细节见 _run_step。
+
+        ``config`` = 运行期选择（模型/质量/profile 等）：步骤真正(重)启动时合并落 ``StepState.config``
+        作**溯源记录**（终态步非法重跑直接抛、不记，避免记下没真跑的参数）。
+        ⚠️ config **不** splat 进 performer——真实命令是闭合签名（rw 的 model 在 ``payload`` 里、
+        不是顶层 kwarg），盲传必 ``TypeError``。driver 负责把选择折进 ``step_inputs``（与 TaskRunner
+        "调用方建好 params" 的契约一致）；引擎只把 config 记成"这步用了哪个模型/参数"。
+        """
         async with self._lock_for(instance_id):
-            return await self._run_step(instance_id, step_id, step_inputs)
+            return await self._run_step(instance_id, step_id, step_inputs, config)
 
     async def _run_step(
         self,
         instance_id: str,
         step_id: str,
         step_inputs: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
     ) -> StepState:
         """执行单步：派发 → 状态机推进 → 事件/落盘。返回该步终态 StepState。
 
-        - 无执行体的步（input/output/无 cmd 的 process）：直通标 done。
-        - 有 intervention 的步：跑出草稿后停在 ``awaiting_review``（等 driver/人继续）。
-        - 否则：跑完直接 ``done``。
+        闸门判据是 ``intervention`` 而非 ``performer``（design §4）：
+        - 有 intervention 的步（含**无执行体的人工编辑步**，如 015 的 lines/storyboard/preview）：
+          出草稿后停在 ``awaiting_review``，等 driver/人介入——绝不静默直通。
+        - 真·无介入的直通步（input/output/纯 process）：直接标 done。
+        - 其余有执行体步：跑完直接 done。
         """
         recipe = self._recipe_for(instance_id)
         step = recipe.step(step_id)
@@ -154,8 +168,23 @@ class InstanceRunner:
 
         performer = step.performer
         if performer is None:
-            # 无执行体：直通完成（driver/UI 负责其语义）
-            self._transition(instance_id, state, "done", finished_at=_now_iso())
+            if step.intervention is not None:
+                # 无执行体的人工编辑/决策步：以上游装配的 step_inputs 作初始草稿，停在
+                # awaiting_review 等人介入。闸门 key 在 intervention，不在 performer——
+                # 否则 lines/storyboard/preview 这类纯人工步会被静默直通 done，绕过强制闸门。
+                self._start_running(instance_id, state, config)
+                state.draft = dict(step_inputs or {})
+                state.draft_source = "agent"
+                self._transition(instance_id, state, "draft_ready")
+                self._transition(instance_id, state, "awaiting_review", decision="pending")
+            else:
+                # 真·直通步（input/output/纯 process 无介入）：直接定稿。
+                # 真正推进时（idle/queued）才记 config + 翻 meta running；
+                # done 步重跑是 no-op，不记 config、不发假 running。
+                if state.status in ("idle", "queued"):
+                    self._merge_config(state, config)
+                    self._publish_meta_status(instance_id, "running")
+                self._transition(instance_id, state, "done", finished_at=_now_iso())
             return state
 
         run_fn = self.registry.get(performer)
@@ -163,9 +192,7 @@ class InstanceRunner:
             self._fail(instance_id, state, f"no performer in registry: {performer!r}")
             return state
 
-        # running
-        self.store.update_meta_status(instance_id, "running")
-        self._transition(instance_id, state, "running", started_at=_now_iso())
+        self._start_running(instance_id, state, config)
 
         def on_progress(text: str) -> None:
             # 从工作线程调：只 append 步级 detail 事件（jsonl 线程安全）+ 更新内存 progress；
@@ -177,6 +204,7 @@ class InstanceRunner:
                               type="progress", step_id=step_id, payload={"text": text}),
             )
 
+        # config 是溯源记录、不进 performer 参数（闭合签名会 TypeError）；driver 已把选择折进 step_inputs
         params = dict(step_inputs or {})
         try:
             result = await asyncio.to_thread(_invoke, run_fn, params, on_progress)
@@ -197,6 +225,115 @@ class InstanceRunner:
             self._transition(instance_id, state, "done", finished_at=_now_iso())
         return state
 
+    # ============================================================ driver API
+    # driver（web 手动 / 卧龙）据这些原语推进 DAG：找下一可跑步、装配上游产物、
+    # 过人工闸门、改稿级联失效、结算实例终态。引擎只提供机械，不决定"下一步跑什么"。
+
+    def get_runnable_steps(self, instance_id: str) -> list[str]:
+        """返回当前可跑的步（``idle`` 且全部 deps 已 ``done``/``skipped``），按拓扑序。"""
+        state = self.store.get_state(instance_id)
+        if state is None:
+            raise FileNotFoundError(f"instance not found: {instance_id}")
+        recipe = self._recipe(state.meta.recipe_id)
+        runnable: list[str] = []
+        for sid in recipe.topological_order():
+            st = state.steps.get(sid)
+            if st is None or st.status != "idle":
+                continue
+            deps = recipe.step(sid).deps
+            if all(
+                (dep_st := state.steps.get(d)) is not None and dep_st.status in ("done", "skipped")
+                for d in deps
+            ):
+                runnable.append(sid)
+        return runnable
+
+    def get_step_output(self, instance_id: str, step_id: str) -> dict[str, Any]:
+        """该步的定稿产物（driver 据此装配下游 ``step_inputs``）；未定稿则空 dict。"""
+        st = self.store.get_step_state(instance_id, step_id)
+        if st is None:
+            raise FileNotFoundError(f"step not found: {instance_id}/{step_id}")
+        return dict(st.outputs)
+
+    async def approve_step(
+        self,
+        instance_id: str,
+        step_id: str,
+        decision: Literal["approved", "rejected"],
+        *,
+        edited_draft: dict[str, Any] | None = None,
+        note: str | None = None,
+        reviewer: Literal["user", "wolong", "system"] = "user",
+    ) -> StepState:
+        """``awaiting_review`` 的出口（否则该步死锁）。**按实例串行化**。
+
+        - ``approved``：定稿。``content_edit`` 传 ``edited_draft`` 则以编辑稿为准
+          （``draft_source="user"``）；产物 = 最终草稿，落 ``outputs`` 并置 ``done``。
+        - ``rejected``：置 ``rejected``（rework/skip 由 driver 后续 ``reset_step``/略过决定）。
+
+        两路都写 ``review``（喂 label_store / retro）并发 ``decision`` 事件。
+        """
+        async with self._lock_for(instance_id):
+            state = self.store.get_step_state(instance_id, step_id)
+            if state is None:
+                raise FileNotFoundError(f"step not found: {instance_id}/{step_id}")
+            if state.status != "awaiting_review":
+                raise ValueError(
+                    f"approve_step 需 awaiting_review，实为 {state.status!r} ({step_id})"
+                )
+            state.review = Review(
+                decision=decision, note=note, reviewed_at=_now_iso(), reviewer=reviewer
+            )
+            if decision == "approved":
+                if edited_draft is not None:
+                    state.draft = edited_draft
+                    state.draft_source = "user"
+                self._transition(instance_id, state, "approved", decision="approved")
+                state.outputs = dict(state.draft or {})
+                self._transition(instance_id, state, "done", finished_at=_now_iso())
+            else:
+                self._transition(instance_id, state, "rejected", decision="rejected")
+            self._emit_decision(instance_id, step_id, decision, note)
+            return state
+
+    async def reset_step(self, instance_id: str, step_id: str) -> list[str]:
+        """硬重置该步 **及全部传递下游** 为 ``idle``（改稿后下游失效，design §10）。
+
+        保留 ``config``（运行参数复用），清运行态（draft/outputs/decision/review/error/时间戳）。
+        ``running`` 步不可重置（拒绝，防扯掉在跑的工作线程）。重置后重算 ``meta`` 状态
+        （completed/failed 实例被重激活为 running）。返回被重置的 step_id（拓扑序）。
+        """
+        async with self._lock_for(instance_id):
+            recipe = self._recipe_for(instance_id)
+            if step_id not in recipe.step_ids():
+                raise FileNotFoundError(f"step not found: {instance_id}/{step_id}")
+            targets = self._with_descendants(recipe, step_id)
+            running = [
+                sid for sid in targets
+                if (st := self.store.get_step_state(instance_id, sid)) is not None
+                and st.status == "running"
+            ]
+            if running:
+                raise ValueError(f"无法重置运行中的步: {running} ({instance_id})")
+            reset_ids = [sid for sid in recipe.topological_order() if sid in targets]
+            for sid in reset_ids:
+                old = self.store.get_step_state(instance_id, sid)
+                fresh = StepState(step_id=sid, config=dict(old.config) if old else {})
+                self.store.write_step_state(instance_id, fresh)
+                ev = InstanceEvent(
+                    instance_id=instance_id, ts=_now_ms(), level="step", type="status",
+                    step_id=sid, payload={"status": "idle", "reset": True},
+                )
+                self.store.append_step_event(instance_id, sid, ev)
+                self.bus.publish(ev)
+            self._finalize(instance_id)  # 终态实例被重激活；其余无副作用
+            return reset_ids
+
+    async def finalize_instance(self, instance_id: str) -> InstanceMeta:
+        """据各步终态结算 ``meta.status``（driver 在推进后调，把 E0 停在 ``running`` 收口）。"""
+        async with self._lock_for(instance_id):
+            return self._finalize(instance_id)
+
     # ------------------------------------------------------------ internals
     def _recipe(self, recipe_id: str) -> Recipe:
         if recipe_id not in self.recipes:
@@ -208,6 +345,95 @@ class InstanceRunner:
         if meta is None:
             raise FileNotFoundError(f"instance not found: {instance_id}")
         return self._recipe(meta.recipe_id)
+
+    @staticmethod
+    def _with_descendants(recipe: Recipe, step_id: str) -> set[str]:
+        """``step_id`` 及其全部传递下游（直接/间接依赖它的步）。"""
+        dependents: dict[str, set[str]] = {s.step_id: set() for s in recipe.steps}
+        for s in recipe.steps:
+            for dep in s.deps:
+                if dep in dependents:
+                    dependents[dep].add(s.step_id)
+        out: set[str] = set()
+        stack = [step_id]
+        while stack:
+            cur = stack.pop()
+            if cur in out:
+                continue
+            out.add(cur)
+            stack.extend(dependents.get(cur, ()))
+        return out
+
+    @staticmethod
+    def _compute_meta_status(steps: dict[str, StepState]) -> InstanceStatus:
+        """据各步状态推实例状态：任一 failed→failed；全 done/skipped→completed；
+        全 idle→pending；否则 running。"""
+        statuses = [s.status for s in steps.values()]
+        if any(st == "failed" for st in statuses):
+            return "failed"
+        if statuses and all(st in ("done", "skipped") for st in statuses):
+            return "completed"
+        if statuses and all(st == "idle" for st in statuses):
+            return "pending"
+        return "running"
+
+    def _finalize(self, instance_id: str) -> InstanceMeta:
+        """（须在实例锁内）算 meta 状态并发 meta 事件。"""
+        state = self.store.get_state(instance_id)
+        if state is None:
+            raise FileNotFoundError(f"instance not found: {instance_id}")
+        return self._publish_meta_status(instance_id, self._compute_meta_status(state.steps))
+
+    def _publish_meta_status(self, instance_id: str, status: InstanceStatus) -> InstanceMeta:
+        """更新 meta 状态；**仅状态变化时**发 meta 级事件（app 视图订 level=meta）。"""
+        meta = self.store.get_meta(instance_id)
+        if meta is None:
+            raise FileNotFoundError(f"instance not found: {instance_id}")
+        if meta.status == status:
+            return meta
+        meta = self.store.update_meta_status(instance_id, status)
+        ev = InstanceEvent(
+            instance_id=instance_id, ts=_now_ms(), level="meta",
+            type="status", payload={"status": status},
+        )
+        self.store.append_instance_event(instance_id, ev)
+        self.bus.publish(ev)
+        return meta
+
+    def _emit_decision(
+        self, instance_id: str, step_id: str, decision: str, note: str | None
+    ) -> None:
+        ev = InstanceEvent(
+            instance_id=instance_id, ts=_now_ms(), level="step", type="decision",
+            step_id=step_id, payload={"decision": decision, "note": note},
+        )
+        self.store.append_step_event(instance_id, step_id, ev)
+        self.bus.publish(ev)
+
+    @staticmethod
+    def _merge_config(state: StepState, config: dict[str, Any] | None) -> None:
+        """把运行期 config 合并进 ``StepState.config``（溯源："这步用了哪个模型/参数"）。
+        仅在步骤真正(重)启动时调——终态步非法重跑不记 config（避免记下没真跑的参数）。"""
+        if config:
+            state.config = {**state.config, **config}
+
+    def _start_running(
+        self, instance_id: str, state: StepState, config: dict[str, Any] | None
+    ) -> None:
+        """把步骤推进到 ``running``：**守门在任何副作用之前**。
+
+        先校验 ``idle/queued → running`` 合法（对 done/failed/awaiting_review 等终态重跑直接抛、
+        不污染 meta/config）；过关后才落 config（溯源）、翻 meta running、步进 running。
+        这样非法重跑是干净的 no-op 失败，不会把已结算实例的 meta 永久翻成 running，也不脏写 config。
+        """
+        if not can_transition(state.status, "running"):
+            raise ValueError(
+                f"step not runnable: {state.status!r} -> running ({state.step_id})；"
+                f"重跑请先 reset_step"
+            )
+        self._merge_config(state, config)
+        self._publish_meta_status(instance_id, "running")
+        self._transition(instance_id, state, "running", started_at=_now_iso())
 
     def _transition(
         self,
