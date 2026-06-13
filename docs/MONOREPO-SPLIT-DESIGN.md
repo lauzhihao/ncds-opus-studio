@@ -195,7 +195,17 @@ core/studio editable 装入 venv、`nof-server` 入口完好。测试 **298 pass
 ### 9.2 清单暴露的两个边界遗漏（补进规划）
 - **`skills/`（repo 根）**：ASR 节点 spawn `skills/video-pipeline/scripts/video_pipeline.py`，
   柳永/沈括链碰 `skills/tingwu-asr/`——§1 包边界**漏了 `skills/`**。倾向：asr 两端都用 → `skills`
-  随 **core**，或留 repo 根 + `NOF_VIDEO_PIPELINE_SCRIPT`/`NOF_SKILLS_DIR` env。P1 定。
-- **`.mjs` 的 `node_modules` 锚点**：`render_runner.mjs` 等靠 repo 根 `node_modules` symlink 供
-  ESM 向上找。`.mjs` 整体进 core（D2）后，node_modules 落点 + npm 安装方式要随之定（npm/pnpm
-  workspace 或包内 `node_modules`）。
+  随 **core**，或留 repo 根 + `NOF_VIDEO_PIPELINE_SCRIPT`/`NOF_SKILLS_DIR` env。**P1.7 定**。
+- **`.mjs` 的 `node_modules` 锚点**：✅ **已定（D2 配套，2026-06-13）**——只有 `render_runner.mjs`
+  需第三方包（puppeteer-core/puppeteer-screen-recorder）；asr/rw 的 `.mjs` 全是 `node:` 内置、
+  不需 node_modules。**core 自带 `packages/core/package.json` + `node_modules`**（根 package.json
+  的 puppeteer 部分挪进 core，`npm install` 落 core），render_runner.mjs 从 core/commands 向上找；
+  `NOF_RENDER_NODE_PATH` env 保留兜底。
+
+### 9.3 feishu 尾的处置（D2 落地裁定，2026-06-13）
+`feishu_sdk_adapter.mjs` **已是 lark-cli 包装层**（FEISHU-REFACTOR 完成，不直调 OpenAPI），被
+`rewrite_command_runner.mjs`（rw 链冒泡改写稿到飞书）与 `video_job_worker.mjs`（老视频任务流）import。
+✅ **裁定**：P1.6 从 `rewrite_command_runner.mjs` **删掉飞书冒泡**（去 `feishu_sdk_adapter` import +
+建文档/发消息调用），只留改写逻辑 + stdout JSON（符合 AGENTS.md"命令不发飞书、只 on_progress"）。
+`feishu_sdk_adapter.mjs` / `lark_cli.mjs` / `video_job_worker.mjs` 等飞书 IO / 老 bot 流**不进 core**，
+留 factory（或 repo 根 legacy）。
