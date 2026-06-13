@@ -15,8 +15,12 @@ slice-1 范围（最小后端验证）：
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,19 +28,35 @@ from ncds_opus_core.templates import template_dir as _template_dir
 from ncds_opus_factory.commands import render_015
 from ncds_opus_factory.server import storyboard_director
 from ncds_opus_factory.server.pipeline_runner import (
+    DEFAULT_RW_PROFILE,
+    MODEL_CANDIDATES,
+    _ModelUnavailable,
     _build_lines_prompt,
+    _build_rw_prompt,
     _call_opus_for_rw,
     _generate_scene_image,
+    _invoke_rw_candidate,
     _load_template_episode,
+    _asr_stage_label,
+    _polish_transcript_with_opus,
     _read_episode,
     _rebuild_tts_items_015,
     _run_tts_gen_015,
+    _run_video_pipeline,
 )
 
 # 外部副作用调用的 seam（subprocess / node / gpt-image）：默认走真实 helper，测试 monkeypatch。
 _run_tts_gen = _run_tts_gen_015
 _gen_scene_image = _generate_scene_image
 _render_run = render_015.run
+
+# asr seam：默认指向真实 helper，测试 monkeypatch 替换。
+# 命名风格仿照上面的 _run_tts_gen / _gen_scene_image。
+_run_video_pipeline_fn = _run_video_pipeline
+_polish_transcript = _polish_transcript_with_opus
+
+# rw seam：async 调用候选模型的间接层。
+_invoke_rw = _invoke_rw_candidate
 
 
 def _opus_structure(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-7") -> str:
@@ -56,6 +76,313 @@ def _parse_opus_json(raw: str) -> Any:
 
 def _episode_path(job_dir: Path) -> Path:
     return job_dir / "02_rw" / "episode.json"
+
+
+# ---------------------------------------------------------------------------
+# ASR performer：串行跑每条 URL → video_pipeline.py 转写 + opus polish 成文章。
+# 忠实复刻 PipelineRunner._execute_asr，做了以下替换：
+#   - state.inputs["urls"] → 参数 urls
+#   - self.video_jobs_dir/job_id → Path(job_dir)
+#   - 跨 job 下载缓存从 self.video_jobs_dir/"_downloads" → Path(job_dir).parent/"_downloads"
+#   - self._push_progress → on_progress
+#   - 删掉 push_items()/push_outputs_patch 增量 mid-run 进度（引擎暂不支持增量 outputs）；
+#     改成关键状态通过 on_progress 文本透出。
+# ---------------------------------------------------------------------------
+def run_asr_step(
+    on_progress: Callable[[str], None],
+    *,
+    job_dir: str,
+    urls: list[str],
+    shares: list[dict[str, Any]] | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """ASR：串行处理每条媒体 URL，产出 transcript + opus 整理稿 article.md。
+
+    产物布局（与 PipelineRunner._execute_asr 完全对齐）：
+      01_asr/{idx}/deliverables/result.json    — video_pipeline.py 产出
+      01_asr/{idx}/article.md                  — opus polish 后的文章（或 fallback 到 transcript）
+    """
+    jd = Path(job_dir)
+    if not urls:
+        raise ValueError("urls is empty; need at least one media URL")
+
+    asr_root = jd / "01_asr"
+    asr_root.mkdir(parents=True, exist_ok=True)
+
+    # 定位 video_pipeline.py：复用 core 的 repo_root() + NOF_VIDEO_PIPELINE_SCRIPT 兜底。
+    from ncds_opus_core.common.paths import repo_root as _repo_root
+
+    env_script = os.getenv("NOF_VIDEO_PIPELINE_SCRIPT")
+    pipeline_script = (
+        Path(env_script)
+        if env_script
+        else _repo_root() / "skills" / "video-pipeline" / "scripts" / "video_pipeline.py"
+    )
+    if not pipeline_script.is_file():
+        raise RuntimeError(f"video_pipeline.py not found at {pipeline_script}")
+
+    # shares：InputPanel 解析出的标题/作者，按 URL 对齐（可选）。
+    shares_by_url: dict[str, dict[str, Any]] = {}
+    for s in (shares or []):
+        if isinstance(s, dict) and isinstance(s.get("url"), str):
+            shares_by_url[s["url"]] = s
+
+    # 跨 job 下载缓存：parent = video-jobs/，_downloads 与各 job 目录平级。
+    downloads_cache = jd.parent / "_downloads"
+    downloads_cache.mkdir(parents=True, exist_ok=True)
+
+    items: list[dict[str, Any]] = []
+    for idx, url in enumerate(urls, start=1):
+        on_progress(f"[{idx}/{len(urls)}] 准备中")
+        try:
+            item_dir = asr_root / str(idx)
+            item_dir.mkdir(parents=True, exist_ok=True)
+
+            url_md5 = hashlib.md5(url.encode("utf-8")).hexdigest()
+            url_md5_short = url_md5[:12]
+            cache_dir = downloads_cache / url_md5
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            # 幂等 stamp：URL 变了（用户在 INPUT 节点改了链接）→ 清掉旧产物重新链入缓存。
+            stamp_path = item_dir / ".url-stamp"
+            existing_stamp = (
+                stamp_path.read_text(encoding="utf-8").strip()
+                if stamp_path.is_file() else ""
+            )
+            if existing_stamp and existing_stamp != url_md5_short:
+                on_progress(f"[{idx}/{len(urls)}] URL 已变更，清掉旧产物")
+                shutil.rmtree(item_dir)
+                item_dir.mkdir(parents=True, exist_ok=True)
+            stamp_path.write_text(url_md5_short, encoding="utf-8")
+
+            # 缓存→raw/ symlink：若全局缓存里已有此 URL 对应的 mp4，链进 item_dir/raw/。
+            # video_pipeline.py 的 download_video fast-path 看到 raw/ 已有 mp4 就跳过下载。
+            raw_dir = item_dir / "raw"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            cached_mp4s = sorted(cache_dir.glob("*.mp4"))
+            if cached_mp4s:
+                on_progress(
+                    f"[{idx}/{len(urls)}] 命中下载缓存，复用 {cached_mp4s[0].name}（跳过下载）"
+                )
+                for mp4 in cached_mp4s:
+                    link = raw_dir / mp4.name
+                    if not link.exists():
+                        link.symlink_to(mp4.resolve())
+
+            on_progress(f"[{idx}/{len(urls)}] 启动 video_pipeline.py")
+
+            # on_line 闭包：把 video_pipeline.py 的 stdout 行转成阶段进度文本透出。
+            def on_line(line: str, i: int = idx, total: int = len(urls)) -> None:
+                lbl = _asr_stage_label(line)
+                if lbl:
+                    on_progress(f"[{i}/{total}] 阶段：{lbl}")
+                on_progress(f"[{i}/{total}] {line}")
+
+            _run_video_pipeline_fn(
+                pipeline_script=pipeline_script,
+                url=url,
+                output_dir=item_dir,
+                on_line=on_line,
+            )
+
+            # 下载完成后，把 raw/ 里新产出的真 mp4 迁移到全局缓存，原位留 symlink。
+            # 下次同 URL（含其他 job）的 cache_dir.glob("*.mp4") 就能命中。
+            for mp4 in raw_dir.glob("*.mp4"):
+                if mp4.is_symlink():
+                    continue
+                cache_target = cache_dir / mp4.name
+                if not cache_target.exists():
+                    shutil.move(str(mp4), str(cache_target))
+                else:
+                    mp4.unlink()
+                mp4.symlink_to(cache_target.resolve())
+
+            result_json = item_dir / "deliverables" / "result.json"
+            if not result_json.is_file():
+                raise RuntimeError(f"video_pipeline 未产出 result.json: {result_json}")
+            result = json.loads(result_json.read_text(encoding="utf-8"))
+
+            transcript_abs = result.get("rawTranscriptPath") or result.get("transcript")
+            if not transcript_abs or not Path(transcript_abs).is_file():
+                raise RuntimeError(f"transcript 缺失或不存在: {transcript_abs}")
+
+            # 文章整理：调本机 opus polish 原始 transcript 成 markdown 文章。
+            # 同 PipelineRunner._execute_asr，失败时 fallback 到 transcript 路径。
+            on_progress(f"[{idx}/{len(urls)}] 调 opus 整理成文章")
+            article_path = item_dir / "article.md"
+            share = shares_by_url.get(url) or {}
+            try:
+                _polish_transcript(
+                    transcript_path=Path(transcript_abs),
+                    output_path=article_path,
+                    title_hint=str(share.get("title") or share.get("author") or ""),
+                )
+                article_abs = str(article_path)
+            except Exception as exc:
+                on_progress(
+                    f"[{idx}/{len(urls)}] opus polish 失败：{exc}；fallback 到原始 transcript"
+                )
+                article_abs = transcript_abs
+
+            items.append({
+                "index": idx,
+                "url": url,
+                "title": str(share.get("title") or ""),
+                "author": str(share.get("author") or ""),
+                "transcript_relpath": str(Path(transcript_abs).resolve().relative_to(jd)),
+                "article_relpath": str(Path(article_abs).resolve().relative_to(jd)),
+                "error": None,
+            })
+            on_progress(f"[{idx}/{len(urls)}] 完成")
+
+        except Exception as exc:
+            msg = str(exc)
+            first_line = msg.splitlines()[0] if msg.splitlines() else "未知错误"
+            on_progress(f"[{idx}/{len(urls)}] 失败：{first_line}")
+            sh = shares_by_url.get(url) or {}
+            items.append({
+                "index": idx,
+                "url": url,
+                "title": str(sh.get("title") or ""),
+                "author": str(sh.get("author") or ""),
+                "transcript_relpath": "",
+                "article_relpath": "",
+                "error": msg,
+            })
+            continue
+
+    succeeded = [it for it in items if not it.get("error")]
+    if not succeeded:
+        raise RuntimeError(f"全部 {len(urls)} 个作品处理失败，详见各作品状态")
+
+    return {"items": items, "asr_dir": str(asr_root)}
+
+
+# ---------------------------------------------------------------------------
+# RW performer：4 模型并行改写，同步包装 asyncio 并发。
+# 忠实复刻 PipelineRunner._execute_rw，做了以下替换：
+#   - state.nodes["asr"].outputs.items → 参数 asr_items
+#   - state.node_configs["rw"]["profile"] → 参数 profile（缺省 DEFAULT_RW_PROFILE）
+#   - self.video_jobs_dir/job_id → Path(job_dir)
+#   - self._push_progress → on_progress
+#   - 删掉 push_model_progress/push_outputs_patch 增量进度，on_status 给 no-op；
+#     关键进度经 on_progress 文本透出。
+# 同步函数（引擎在 to_thread 里跑）：内部用 asyncio.run() 跑 gather 并发，
+# 不改成串行，保留原版 4 模型真并发语义。
+# ---------------------------------------------------------------------------
+def run_rw_step(
+    on_progress: Callable[[str], None],
+    *,
+    job_dir: str,
+    asr_items: list[dict[str, Any]],
+    profile: str | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """RW：4 模型并行改写，产出 02_rw/{model_id}/draft.md。
+
+    产物布局（与 PipelineRunner._execute_rw 完全对齐）：
+      02_rw/{model_id}/draft.md     — 各模型 markdown 改写稿（仅 success）
+    """
+    jd = Path(job_dir)
+    if not asr_items:
+        raise ValueError("asr_items is empty; nothing to rewrite")
+
+    rw_root = jd / "02_rw"
+    rw_root.mkdir(parents=True, exist_ok=True)
+
+    # 拼 sourceText：asr 各条 article（opus 整理后的文章）拼起来。
+    sections: list[str] = []
+    for it in asr_items:
+        relpath = it.get("article_relpath") or it.get("transcript_relpath")
+        if not relpath:
+            continue
+        p = jd / relpath
+        if not p.is_file():
+            continue
+        sections.append(
+            f"## 来源 {it.get('index')} - {it.get('title') or ''}\n\n"
+            f"{p.read_text(encoding='utf-8').strip()}"
+        )
+    source_text = "\n\n---\n\n".join(sections).strip()
+    if not source_text:
+        raise RuntimeError("asr 文章稿全部为空，无法 rw")
+
+    effective_profile = profile if profile is not None else DEFAULT_RW_PROFILE
+    system_prompt, user_prompt = _build_rw_prompt(effective_profile, source_text)
+
+    on_progress(f"4 模型并行启动；source={len(source_text)} 字")
+
+    # make_draft：把单模型结果（成功文本 / 异常）转成 draft dict，成功时写盘。
+    # 内部实现与原版 _execute_rw 的 make_draft 闭包完全对齐。
+    def make_draft(cand: dict[str, str], res: Any) -> dict[str, Any]:
+        mid, label = cand["id"], cand["label"]
+        if isinstance(res, _ModelUnavailable):
+            return {
+                "model_id": mid, "label": label, "status": "failed",
+                "reason": f"模型不可用：{res}", "draft_relpath": None, "episode_relpath": None,
+            }
+        if isinstance(res, BaseException):
+            return {
+                "model_id": mid, "label": label, "status": "failed",
+                "reason": str(res), "draft_relpath": None, "episode_relpath": None,
+            }
+        raw_text = (res or "").strip()
+        # 去掉 ```json / ``` 包裹（与原版一致）。
+        if raw_text.startswith("```"):
+            inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", raw_text)
+            if inner:
+                raw_text = inner.group(1).strip()
+        if not raw_text:
+            return {
+                "model_id": mid, "label": label, "status": "failed",
+                "reason": "模型输出为空", "draft_relpath": None, "episode_relpath": None,
+            }
+        model_dir = rw_root / mid
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "draft.md").write_text(raw_text + "\n", encoding="utf-8")
+        on_progress(f"模型 {mid} draft 写盘完成（{len(raw_text)} 字）")
+        return {
+            "model_id": mid, "label": label, "status": "success", "reason": None,
+            "draft_relpath": f"02_rw/{mid}/draft.md", "episode_relpath": None,
+        }
+
+    # 内部 async 函数：复用原版 asyncio.gather 并发语义，调 _invoke_rw seam。
+    # on_status 给 no-op，performer 不需要模型级增量状态（引擎暂不支持）。
+    async def _run() -> list[dict[str, Any]]:
+        _noop_status: Callable[[str, str], None] = lambda *a: None  # noqa: E731
+
+        async def run_one(cand: dict[str, str]) -> dict[str, Any]:
+            try:
+                res: Any = await _invoke_rw(
+                    cand, user_prompt, system_prompt, on_progress, _noop_status
+                )
+            except BaseException as exc:  # noqa: BLE001
+                res = exc
+            return make_draft(cand, res)
+
+        return list(await asyncio.gather(*[run_one(c) for c in MODEL_CANDIDATES]))
+
+    # 同步包装：performer 在引擎的 to_thread 里跑，直接 asyncio.run() 启动事件循环。
+    drafts_out = asyncio.run(_run())
+
+    # 保持与原版 ordered_drafts() 相同的顺序（按 MODEL_CANDIDATES 顺序）。
+    id_order = {c["id"]: i for i, c in enumerate(MODEL_CANDIDATES)}
+    drafts_out.sort(key=lambda d: id_order.get(d["model_id"], 999))
+
+    success_count = sum(1 for d in drafts_out if d.get("status") == "success")
+    if success_count == 0:
+        reasons = "; ".join(f"{d['model_id']}={d.get('reason')}" for d in drafts_out)
+        raise RuntimeError(f"4 个模型全部失败：{reasons}")
+
+    on_progress(f"完成：{success_count}/{len(MODEL_CANDIDATES)} 成功")
+
+    return {
+        "drafts": drafts_out,
+        "selected_model_id": None,
+        "candidate_count": len(drafts_out),
+        "success_count": success_count,
+        "profile": effective_profile,
+    }
 
 
 def run_lines_step(
@@ -367,8 +694,9 @@ def run_render_step(on_progress: Callable[[str], None], *, job_dir: str, **_: An
     }
 
 
-# 已真实复用的 015 performer。asr/rw（inputs.urls / profile / 4 模型 async）待下一 slice。
 PERFORMERS_015: dict[str, Callable[..., dict[str, Any]]] = {
+    "asr": run_asr_step,
+    "rw": run_rw_step,
     "lines": run_lines_step,
     "storyboard": run_storyboard_step,
     "tts": run_tts_step,

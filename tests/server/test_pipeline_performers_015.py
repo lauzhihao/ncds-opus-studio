@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -337,3 +338,370 @@ def test_run_image_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.Mo
                         lambda **k: (_ for _ in ()).throw(RuntimeError("boom")))
     with pytest.raises(RuntimeError, match="all .* scene image generations failed"):
         perf.run_image_step(_noop, job_dir=str(jd))
+
+
+# --------------------------------------------------------------------------- #
+# D) run_asr_step：hermetic，stub _run_video_pipeline_fn + _polish_transcript
+# --------------------------------------------------------------------------- #
+
+def _make_asr_seams(tmp_path: Path):
+    """返回 (stub_pipeline_fn, stub_polish_fn)，会自动在 item_dir 写 result.json + transcript。
+
+    stub_pipeline_fn 的行为：
+      - 在 output_dir/deliverables/result.json 写 rawTranscriptPath 指向真实 transcript 文件。
+      - 对 on_line 推一行伪进度（测试 _asr_stage_label 走通）。
+    stub_polish_fn 的行为：
+      - 把 output_path 写成 "# 整理文章\n\n来源：{transcript_path}"。
+    """
+    def stub_pipeline(*, pipeline_script, url, output_dir, on_line):
+        output_dir = Path(output_dir)
+        deliverables = output_dir / "deliverables"
+        deliverables.mkdir(parents=True, exist_ok=True)
+        raw_dir = output_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        # 写伪 transcript
+        transcript_file = deliverables / "transcript.txt"
+        transcript_file.write_text(f"转写稿 url={url}", encoding="utf-8")
+        result = {"rawTranscriptPath": str(transcript_file)}
+        (deliverables / "result.json").write_text(
+            json.dumps(result, ensure_ascii=False), encoding="utf-8"
+        )
+        # 推一行"下载"进度，覆盖 _asr_stage_label 的"下载视频"分支
+        on_line("download video starting")
+
+    def stub_polish(*, transcript_path, output_path, title_hint=""):
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            f"# 整理文章\n\n来源：{transcript_path}", encoding="utf-8"
+        )
+
+    return stub_pipeline, stub_polish
+
+
+def test_run_asr_step_normal_two_urls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """正常 2 条 URL → items 齐，article_relpath 指向 article.md（polish 成功路径）。"""
+    jd = tmp_path / "video-jobs" / "job1"
+    stub_pipeline, stub_polish = _make_asr_seams(tmp_path)
+    monkeypatch.setattr(perf, "_run_video_pipeline_fn", stub_pipeline)
+    monkeypatch.setattr(perf, "_polish_transcript", stub_polish)
+    # NOF_VIDEO_PIPELINE_SCRIPT 让 performer 不去找真实 video_pipeline.py
+    monkeypatch.setenv("NOF_VIDEO_PIPELINE_SCRIPT", __file__)  # 任意已存在的文件
+
+    urls = ["https://example.com/a", "https://example.com/b"]
+    out = perf.run_asr_step(_noop, job_dir=str(jd), urls=urls)
+
+    assert len(out["items"]) == 2
+    assert out["asr_dir"].endswith("01_asr")
+
+    for item in out["items"]:
+        assert item["error"] is None
+        # article_relpath 应指向 polish 写出的 article.md
+        assert item["article_relpath"].endswith("article.md")
+        # transcript_relpath 指向 deliverables/transcript.txt（相对 job_dir）
+        assert "transcript.txt" in item["transcript_relpath"]
+        # 对应文件真实存在
+        assert (jd / item["article_relpath"]).is_file()
+        assert (jd / item["transcript_relpath"]).is_file()
+
+
+def test_run_asr_step_download_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """下载缓存命中：预先在 _downloads/<md5>/ 放 mp4 → raw/ 里出现 symlink，
+    video_pipeline stub 仍被调（fast-path 由 video_pipeline 自己判断，performer 不跳过调用）。"""
+    import hashlib as _hashlib
+
+    jd = tmp_path / "video-jobs" / "job1"
+    url = "https://example.com/cached"
+    url_md5 = _hashlib.md5(url.encode()).hexdigest()
+    # 预先在 _downloads/<md5>/ 放一个假 mp4
+    cache_dir = tmp_path / "video-jobs" / "_downloads" / url_md5
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "video.mp4").write_bytes(b"fake-mp4-content")
+
+    pipeline_called = []
+
+    def stub_pipeline(*, pipeline_script, url, output_dir, on_line):
+        pipeline_called.append(url)
+        output_dir = Path(output_dir)
+        deliverables = output_dir / "deliverables"
+        deliverables.mkdir(parents=True, exist_ok=True)
+        t = deliverables / "transcript.txt"
+        t.write_text("t", encoding="utf-8")
+        (deliverables / "result.json").write_text(
+            json.dumps({"rawTranscriptPath": str(t)}), encoding="utf-8"
+        )
+
+    stub_pipeline2, stub_polish = _make_asr_seams(tmp_path)
+    monkeypatch.setattr(perf, "_run_video_pipeline_fn", stub_pipeline)
+    monkeypatch.setattr(perf, "_polish_transcript", stub_polish)
+    monkeypatch.setenv("NOF_VIDEO_PIPELINE_SCRIPT", __file__)
+
+    out = perf.run_asr_step(_noop, job_dir=str(jd), urls=[url])
+
+    # video_pipeline stub 必须被调用（performer 不跳过，只是提前 symlink）
+    assert pipeline_called == [url]
+    # raw/ 里应该有对 cache 的 symlink（performer 在调 pipeline 前就 link 进去了）
+    raw_dir = jd / "01_asr" / "1" / "raw"
+    symlinks = list(raw_dir.glob("*.mp4"))
+    assert len(symlinks) == 1
+    assert symlinks[0].is_symlink()
+    # item 成功
+    assert out["items"][0]["error"] is None
+
+
+def test_run_asr_step_url_stamp_changes_clears_old(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """URL stamp 变更：item_dir 里已有旧 stamp → 清掉旧产物，重新处理。"""
+    import hashlib as _hashlib
+
+    jd = tmp_path / "video-jobs" / "job1"
+    stub_pipeline, stub_polish = _make_asr_seams(tmp_path)
+    monkeypatch.setattr(perf, "_run_video_pipeline_fn", stub_pipeline)
+    monkeypatch.setattr(perf, "_polish_transcript", stub_polish)
+    monkeypatch.setenv("NOF_VIDEO_PIPELINE_SCRIPT", __file__)
+
+    url = "https://example.com/new-url"
+    # 预先写 item_dir，放一个旧 stamp（不同 URL 的 md5 短码）
+    item_dir = jd / "01_asr" / "1"
+    item_dir.mkdir(parents=True)
+    stale_marker = item_dir / "stale-marker.txt"
+    stale_marker.write_text("should-be-deleted", encoding="utf-8")
+    (item_dir / ".url-stamp").write_text("000000000000", encoding="utf-8")  # 与新 URL 不同
+
+    progress_msgs: list[str] = []
+    out = perf.run_asr_step(progress_msgs.append, job_dir=str(jd), urls=[url])
+
+    # 旧产物（stale-marker.txt）应被删掉（shutil.rmtree + mkdir）
+    assert not stale_marker.is_file()
+    # 仍正常完成
+    assert out["items"][0]["error"] is None
+    # 进度消息中应有"URL 已变更"
+    assert any("URL 已变更" in m for m in progress_msgs)
+
+
+def test_run_asr_step_single_item_failure_captured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """单条 URL 失败（pipeline 抛异常）→ item.error 被捕获，其余成功仍返回。"""
+    jd = tmp_path / "video-jobs" / "job1"
+    _, stub_polish = _make_asr_seams(tmp_path)
+    call_count = [0]
+
+    def stub_pipeline(*, pipeline_script, url, output_dir, on_line):
+        call_count[0] += 1
+        output_dir = Path(output_dir)
+        if "bad" in url:
+            raise RuntimeError("bad url boom")
+        deliverables = output_dir / "deliverables"
+        deliverables.mkdir(parents=True, exist_ok=True)
+        t = deliverables / "transcript.txt"
+        t.write_text("ok transcript", encoding="utf-8")
+        (deliverables / "result.json").write_text(
+            json.dumps({"rawTranscriptPath": str(t)}), encoding="utf-8"
+        )
+
+    monkeypatch.setattr(perf, "_run_video_pipeline_fn", stub_pipeline)
+    monkeypatch.setattr(perf, "_polish_transcript", stub_polish)
+    monkeypatch.setenv("NOF_VIDEO_PIPELINE_SCRIPT", __file__)
+
+    urls = ["https://example.com/ok", "https://example.com/bad"]
+    out = perf.run_asr_step(_noop, job_dir=str(jd), urls=urls)
+
+    # 两条都处理（call_count 仅 bad 那条 pipeline 失败但 ok 那条成功）
+    ok_items = [it for it in out["items"] if not it["error"]]
+    fail_items = [it for it in out["items"] if it["error"]]
+    assert len(ok_items) == 1 and ok_items[0]["url"] == "https://example.com/ok"
+    assert len(fail_items) == 1 and "boom" in fail_items[0]["error"]
+    # 全量函数仍返回（没有 raise），因为有 1 条成功
+    assert out["asr_dir"].endswith("01_asr")
+
+
+def test_run_asr_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """全部 URL 失败 → raise RuntimeError（包含失败数）。"""
+    jd = tmp_path / "video-jobs" / "job1"
+    monkeypatch.setattr(
+        perf, "_run_video_pipeline_fn",
+        lambda *, pipeline_script, url, output_dir, on_line: (_ for _ in ()).throw(RuntimeError("always fail"))
+    )
+    monkeypatch.setenv("NOF_VIDEO_PIPELINE_SCRIPT", __file__)
+
+    with pytest.raises(RuntimeError, match="全部"):
+        perf.run_asr_step(_noop, job_dir=str(jd), urls=["https://example.com/x"])
+
+
+def test_run_asr_step_polish_failure_falls_back_to_transcript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """opus polish 失败 → fallback：article_relpath 指向 transcript（非 article.md），item 仍成功。"""
+    jd = tmp_path / "video-jobs" / "job1"
+    stub_pipeline, _ = _make_asr_seams(tmp_path)
+
+    def boom_polish(*, transcript_path, output_path, title_hint=""):
+        raise RuntimeError("opus down")
+
+    monkeypatch.setattr(perf, "_run_video_pipeline_fn", stub_pipeline)
+    monkeypatch.setattr(perf, "_polish_transcript", boom_polish)
+    monkeypatch.setenv("NOF_VIDEO_PIPELINE_SCRIPT", __file__)
+
+    progress: list[str] = []
+    out = perf.run_asr_step(progress.append, job_dir=str(jd), urls=["https://example.com/a"])
+    item = out["items"][0]
+    assert item["error"] is None                                   # fallback 仍算成功
+    assert item["article_relpath"].endswith("transcript.txt")      # 指向 transcript 而非 article.md
+    assert not (jd / "01_asr" / "1" / "article.md").is_file()      # article.md 没写出
+    assert any("fallback" in m for m in progress)
+
+
+def test_run_asr_step_cache_miss_populates_downloads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """缓存 MISS：pipeline 在 raw/ 产出真 mp4 → 迁移到 _downloads/<md5>/ + 原位留 symlink（喂下个 job）。"""
+    import hashlib as _hashlib
+
+    jd = tmp_path / "video-jobs" / "job1"
+    url = "https://example.com/fresh"
+    url_md5 = _hashlib.md5(url.encode()).hexdigest()
+    _, stub_polish = _make_asr_seams(tmp_path)
+
+    def stub_pipeline(*, pipeline_script, url, output_dir, on_line):
+        out = Path(output_dir)
+        deliverables = out / "deliverables"
+        deliverables.mkdir(parents=True, exist_ok=True)
+        t = deliverables / "transcript.txt"
+        t.write_text("t", encoding="utf-8")
+        (deliverables / "result.json").write_text(
+            json.dumps({"rawTranscriptPath": str(t)}), encoding="utf-8"
+        )
+        raw = out / "raw"
+        raw.mkdir(parents=True, exist_ok=True)
+        (raw / "video.mp4").write_bytes(b"fresh-mp4")     # 真 mp4（非 symlink）
+
+    monkeypatch.setattr(perf, "_run_video_pipeline_fn", stub_pipeline)
+    monkeypatch.setattr(perf, "_polish_transcript", stub_polish)
+    monkeypatch.setenv("NOF_VIDEO_PIPELINE_SCRIPT", __file__)
+
+    out = perf.run_asr_step(_noop, job_dir=str(jd), urls=[url])
+    assert out["items"][0]["error"] is None
+    cached = tmp_path / "video-jobs" / "_downloads" / url_md5 / "video.mp4"
+    assert cached.is_file() and not cached.is_symlink() and cached.read_bytes() == b"fresh-mp4"
+    raw_link = jd / "01_asr" / "1" / "raw" / "video.mp4"
+    assert raw_link.is_symlink() and raw_link.resolve() == cached.resolve()
+
+
+# --------------------------------------------------------------------------- #
+# E) run_rw_step：hermetic，stub _invoke_rw（async）
+# --------------------------------------------------------------------------- #
+
+def _seed_asr_items(jd: Path, items_data: list[dict]) -> list[dict[str, Any]]:
+    """在 job_dir 下写 article 文件，返回 asr_items 列表（含 article_relpath）。"""
+    asr_dir = jd / "01_asr"
+    items = []
+    for i, d in enumerate(items_data, start=1):
+        item_dir = asr_dir / str(i)
+        item_dir.mkdir(parents=True, exist_ok=True)
+        article = item_dir / "article.md"
+        article.write_text(d.get("content", f"文章内容 {i}"), encoding="utf-8")
+        items.append({
+            "index": i,
+            "url": d.get("url", f"https://example.com/{i}"),
+            "title": d.get("title", f"标题{i}"),
+            "author": "",
+            "transcript_relpath": f"01_asr/{i}/transcript.txt",
+            "article_relpath": f"01_asr/{i}/article.md",
+            "error": None,
+        })
+    return items
+
+
+def test_run_rw_step_partial_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """部分成功：opus 成功、gpt5/_ModelUnavailable、gemini_local/_ModelUnavailable、deepseek 普通异常。
+
+    验证：drafts 状态对、draft.md 写盘、success_count 准确。
+    """
+    jd = tmp_path / "job1"
+    asr_items = _seed_asr_items(jd, [{"content": "测试素材文章。"}])
+
+    # stub_invoke 按模型 id 返回不同结果
+    async def stub_invoke(cand, user_prompt, system_prompt, on_progress, on_status=None):
+        mid = cand["id"]
+        if mid == "opus":
+            return "# 改写稿 A\n\n正文内容。"
+        if mid == "gpt5":
+            from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
+            raise MU("本机未安装 scodex")
+        if mid == "gemini_local":
+            from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
+            raise MU("~/.gemini/g.sh 未安装")
+        # deepseek → 普通异常（非 _ModelUnavailable）
+        raise RuntimeError("deepseek API timeout")
+
+    monkeypatch.setattr(perf, "_invoke_rw", stub_invoke)
+
+    out = perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items)
+
+    assert out["success_count"] == 1
+    assert out["candidate_count"] == 4
+    assert out["profile"] == "freestyle"        # DEFAULT_RW_PROFILE 的具体值，非同义反复
+
+    drafts = {d["model_id"]: d for d in out["drafts"]}
+    # opus 成功，draft.md 写盘
+    assert drafts["opus"]["status"] == "success"
+    assert drafts["opus"]["draft_relpath"] == "02_rw/opus/draft.md"
+    assert (jd / "02_rw" / "opus" / "draft.md").is_file()
+    assert "改写稿 A" in (jd / "02_rw" / "opus" / "draft.md").read_text(encoding="utf-8")
+
+    # gpt5 / gemini_local → failed（_ModelUnavailable 包成 failed，不算普通 failed）
+    assert drafts["gpt5"]["status"] == "failed"
+    assert "不可用" in drafts["gpt5"]["reason"]
+    assert drafts["gemini_local"]["status"] == "failed"
+
+    # deepseek 普通异常 → failed
+    assert drafts["deepseek"]["status"] == "failed"
+    assert "timeout" in drafts["deepseek"]["reason"]
+
+
+def test_run_rw_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """全部模型失败 → raise RuntimeError 包含失败详情。"""
+    jd = tmp_path / "job2"
+    asr_items = _seed_asr_items(jd, [{"content": "素材。"}])
+
+    async def stub_all_fail(cand, user_prompt, system_prompt, on_progress, on_status=None):
+        raise RuntimeError(f"模型 {cand['id']} 全挂")
+
+    monkeypatch.setattr(perf, "_invoke_rw", stub_all_fail)
+
+    with pytest.raises(RuntimeError, match="全部失败"):
+        perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items)
+
+
+def test_run_rw_step_profile_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """profile 参数透传到返回值 + 影响 _build_rw_prompt（不验证 prompt 内容，只验证返回字段）。"""
+    jd = tmp_path / "job3"
+    asr_items = _seed_asr_items(jd, [{"content": "内容。"}])
+
+    async def stub_one_ok(cand, user_prompt, system_prompt, on_progress, on_status=None):
+        if cand["id"] == "opus":
+            return "# 仅 opus 成功\n\n正文。"
+        from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
+        raise MU("跳过")
+
+    monkeypatch.setattr(perf, "_invoke_rw", stub_one_ok)
+
+    out = perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items, profile="paper_card_talk")
+    assert out["profile"] == "paper_card_talk"
+
+
+def test_run_rw_step_codeblock_stripped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """模型输出带 ```json ... ``` 包裹 → 去壳后写盘（与原版 make_draft 对齐）。"""
+    jd = tmp_path / "job4"
+    asr_items = _seed_asr_items(jd, [{"content": "内容。"}])
+
+    raw_with_fence = "```json\n# 被包裹的改写稿\n\n正文。\n```"
+
+    async def stub_fence(cand, user_prompt, system_prompt, on_progress, on_status=None):
+        if cand["id"] == "opus":
+            return raw_with_fence
+        from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
+        raise MU("skip")
+
+    monkeypatch.setattr(perf, "_invoke_rw", stub_fence)
+
+    out = perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items)
+    assert out["success_count"] == 1
+    draft_content = (jd / "02_rw" / "opus" / "draft.md").read_text(encoding="utf-8")
+    # ``` 包裹应被去掉
+    assert "```" not in draft_content
+    assert "被包裹的改写稿" in draft_content

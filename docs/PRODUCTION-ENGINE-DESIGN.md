@@ -3,7 +3,7 @@
 > 状态：**v1 DESIGN（2026-06-13）。用户已拍板方向、范围、首步路径，本文档是权威设计。**
 > **取代**已归档的三包拆分系列（[archive/](archive/)：MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS} +
 > CONVERGENCE-DESIGN）——三包对等拆分作废、转历史；**P1 抽 core 的成果全部保留**。
-> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 312 → E1-a 后 336 → E1-b1 /instances 路由后 359 → E1-b2 lines/storyboard 后 363 → tts/image/render 后 **371 passed**）。
+> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 312 → E1-a 后 336 → E1-b1 路由后 359 → E1-b2 全 7 步 performer 后 **382 passed**）。
 
 ---
 
@@ -319,13 +319,12 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 - 集成测试 `test_pipeline_performers_015.py`：引擎按真实 015 拓扑（rw/lines/storyboard/preview 四道 `content_edit` 闸门经 `approve_step` 放行）驱动 lines/storyboard 真实 performer + asr/rw/tts/image/render 桩，经共享 episode.json **端到端出 mp4**——证明引擎能编排真实 015 链 + 文件系统耦合 + 闸门，不依赖真 opus/node/ffmpeg/015 样例素材。
 - 评审加固：补回 storyboard `groups_count`（与 web `StoryboardOutputs` 契约对齐）；e2e 闸门断言改 load-bearing（断真正 fire 的 content_edit 步 == recipe 声明集，删任一 intervention 即变红）。
 
-**E1-b2 重步骤 performer 续：tts/image/render 已真实包装**（全量 **371 passed**）：
-- `run_tts_step`/`run_image_step`/`run_render_step`：忠实复刻 `_execute_tts/image/render` 编排，复用模块级 helper（`_run_tts_gen_015`/`_generate_scene_image`/`_rebuild_tts_items_015`/`render_015.run`），外部副作用经 `_run_tts_gen`/`_gen_scene_image`/`_render_run` seam（测试注桩）。job_dir 经 step_inputs 传入、保留 video-jobs 布局；pipeline_runner 未动（编排暂双份，/jobs 退役时去重）。
-- 单测覆盖：tts item 重建、image 编排（出场序去重/跳 ch*/空 prompt fail/简笔画/幂等跳过/单 scene 异常捕获/全失败兜底 raise）、render 调用契约（picture_dir 存在转发 vs 缺省 None、缺音频 raise）。
-- 评审加固：补 image 异常分支 + 全失败 raise + render picture_dir 转发的回归用例（堵 copied 逻辑漂移）。
+**E1-b2 全部 7 步 performer 已真实包装**（lines/storyboard/tts/image/render/asr/rw；全量 **382 passed**）：
+- `run_*_step`（`pipeline_performers_015.py`）：忠实复刻 `_execute_*` 编排，复用模块级 helper（tts_gen / generate_scene_image / rebuild_tts_items / render_015.run / run_video_pipeline / polish_transcript / invoke_rw_candidate / MODEL_CANDIDATES），外部副作用经 seam（`_run_tts_gen`/`_gen_scene_image`/`_render_run`/`_run_video_pipeline_fn`/`_polish_transcript`/`_invoke_rw`）注桩。job_dir/urls/asr_items/profile 经 step_inputs 传入、保留 video-jobs 布局；pipeline_runner 未动（编排暂双份，/jobs 退役时去重）。
+- **模型差异**：web 的 mid-run 增量进度（`_push_outputs_patch` item_progress / model_progress / 增量 drafts）暂不复刻——引擎当前只在步末设 outputs，信息经 on_progress 文本透出；引擎加增量 outputs 后再补。asr 跨 job 下载缓存、rw 4 模型 async 并发（同步 performer 内 `asyncio.run` 跑原 `gather`）忠实保留。
+- 单测：每步覆盖正常 + 失败/边界（image 异常/全失败、render picture_dir 转发、asr polish-fallback/缓存命中+MISS 迁移/stamp 变更/单条失败/全失败、rw 部分成功/全失败/profile/code-fence）。经 3 轮 fidelity+coverage 对抗审查加固。
 
 **E1-b2 仍待补**（路径 C 高风险段，下一步）：
-- asr/rw 真实算法包装（asr=video_pipeline.py 子进程 + 下载缓存 + opus 整理；rw=4 模型 async 并发 + 体裁 profile）—— 比 tts/image/render 重，需 inputs.urls/profile/上游产物。
 - 全局 015 recipe 的 lines/storyboard 绑 cmd 到新 performer（slice-1 用注入 registry 验证、未动全局 recipe）。
 - web `routes/{jobs,pipelines,preview}` 重指引擎 + 前端走新 instance API（画布=内容视角）+ 贵步骤后台派发 + detail 级 SSE（jsonl tail-merge，给 web 画布逐字进度）。
 - 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
@@ -353,7 +352,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 
 - **P1（抽 core，6 primitive + runners + pipelines(DAG 类型) + 模板015 + registry/cli 二分）全部保留**——core 在本架构里是最底层能力，且 `build_full_registry()` 直接成为引擎的晚绑定派发表。
 - **MONOREPO-SPLIT 三包对等拆分作废**（P2+ 不做）；那三份文档转历史，本文档接任权威设计。
-- **基线随实施推进（E1-b2 tts/image/render performer 后 371 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
+- **基线随实施推进（E1-b2 全 7 步 performer 后 382 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
 - **操作安全网**：`main` 有 web 旧画布可跑副本；本 branch `claude/gallant-hellman-27de2a` 做重做，**不并 main**。
 
 ---
