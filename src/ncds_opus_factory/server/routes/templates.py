@@ -21,9 +21,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_TEMPLATES_ROOT = (
-    Path(__file__).resolve().parents[2] / "templates"  # ncds_opus_factory/templates
+_FACTORY_TEMPLATES_ROOT = (
+    Path(__file__).resolve().parents[2] / "templates"  # ncds_opus_factory/templates（009 等）
 )
+# paper_card_talk_015 已迁入 core（P1.3）；模板现分散两包，列表/解析需扫两个根
+from ncds_opus_core.templates import templates_root as _core_templates_root
+
+
+def _template_roots() -> list[Path]:
+    return [_FACTORY_TEMPLATES_ROOT, _core_templates_root()]
+
+
+def _resolve_template_dir(name: str) -> Path | None:
+    for root in _template_roots():
+        d = root / name
+        if d.is_dir() and (d / "template.json").exists():
+            return d
+    return None
 
 
 # ============================================================
@@ -63,7 +77,10 @@ def _template_fonts(template_id: str) -> list[dict[str, Any]]:
     """
     if template_id != "paper_card_talk_015":
         return []
-    tpl_ep = _TEMPLATES_ROOT / template_id / ".015-draft-assets" / "episode.json"
+    d = _resolve_template_dir(template_id)
+    if d is None:
+        return []
+    tpl_ep = d / ".015-draft-assets" / "episode.json"
     try:
         ep = json.loads(tpl_ep.read_text(encoding="utf-8"))
         fonts = ep.get("fonts")
@@ -131,12 +148,15 @@ def make_starter_episode(template_id: str, title: str) -> dict[str, Any]:
 # ============================================================
 
 def _list_template_dirs() -> list[Path]:
-    if not _TEMPLATES_ROOT.exists():
-        return []
-    return sorted(
-        p for p in _TEMPLATES_ROOT.iterdir()
-        if p.is_dir() and (p / "template.json").exists()
-    )
+    dirs: list[Path] = []
+    for root in _template_roots():
+        if not root.exists():
+            continue
+        dirs.extend(
+            p for p in root.iterdir()
+            if p.is_dir() and (p / "template.json").exists()
+        )
+    return sorted(dirs, key=lambda p: p.name)
 
 
 def _read_template_meta(template_dir: Path) -> dict[str, Any]:
@@ -166,8 +186,8 @@ async def list_templates() -> dict[str, Any]:
 @router.get("/templates/{name}/episode.json")
 async def get_template_episode(name: str) -> dict[str, Any]:
     """返回某模板的 starter episode.json。"""
-    template_dir = _TEMPLATES_ROOT / name
-    if not template_dir.is_dir() or not (template_dir / "template.json").exists():
+    template_dir = _resolve_template_dir(name)
+    if template_dir is None:
         raise HTTPException(404, f"template not found: {name}")
     meta = _read_template_meta(template_dir)
     template_id = meta.get("id") or name

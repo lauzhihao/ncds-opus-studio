@@ -24,11 +24,10 @@ from typing import Any, Callable
 
 ProgressFn = Callable[[str], None]
 
-HERE = Path(__file__).resolve().parent
-_REPO_ROOT = HERE.parents[2]
-DEFAULT_TEMPLATE_DIR = (
-    _REPO_ROOT / "src" / "ncds_opus_factory" / "templates" / "paper_card_talk_015"
-)
+from ncds_opus_core.templates import template_dir as _template_dir
+
+# 015 模板已迁入 ncds_opus_core（P1.3）；render_015 复制它到 workdir
+DEFAULT_TEMPLATE_DIR = _template_dir("paper_card_talk_015")
 ASSETS_SUBDIR = ".015-draft-assets"
 HTML_FILENAME = "015-draft.html"
 RENDER_MJS = "render.mjs"

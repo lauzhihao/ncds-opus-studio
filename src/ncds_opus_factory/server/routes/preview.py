@@ -58,7 +58,10 @@ router = APIRouter()
 # preview.py 路径：routes/preview.py
 # parents[0]=routes, [1]=server, [2]=ncds_opus_factory, [3]=src, [4]=repo root
 _PACKAGE_DIR = Path(__file__).resolve().parents[2]  # ncds_opus_factory/
-_TEMPLATE_DIR = _PACKAGE_DIR / "templates" / "paper_card_talk_015"
+# paper_card_talk_015 已迁入 core（P1.3）
+from ncds_opus_core.templates import template_dir as _core_template_dir
+
+_TEMPLATE_DIR = _core_template_dir("paper_card_talk_015")
 _ASSETS_DIR_NAME = ".015-draft-assets"
 _ASSETS_PREFIX = _ASSETS_DIR_NAME + "/"
 _HTML_FILE = "015-draft.html"

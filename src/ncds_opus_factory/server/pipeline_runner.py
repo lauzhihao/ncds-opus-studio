@@ -34,6 +34,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from ncds_opus_core.templates import template_dir as _template_dir
 from ncds_opus_factory.pipelines import PIPELINE_REGISTRY, PipelineDef, get_pipeline
 from ncds_opus_factory.server import storyboard_director
 
@@ -788,11 +789,7 @@ class PipelineRunner:
         if not any((b.get("scene") == scene_id) for b in (ep.get("beats") or [])):
             raise ValueError(f"unknown scene: {scene_id}")
 
-        repo_root = Path(__file__).resolve().parents[3]
-        tts_gen = (
-            repo_root / "src" / "ncds_opus_factory" / "templates"
-            / "paper_card_talk_015" / ".015-draft-assets" / "tts_gen.py"
-        )
+        tts_gen = _template_dir("paper_card_talk_015") / ".015-draft-assets" / "tts_gen.py"
         audio_dir = job_dir / "04_tts"
 
         def on_progress(text: str) -> None:
@@ -1015,11 +1012,7 @@ class PipelineRunner:
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "tts", text)
 
-        repo_root = Path(__file__).resolve().parents[3]
-        tts_gen = (
-            repo_root / "src" / "ncds_opus_factory" / "templates"
-            / "paper_card_talk_015" / ".015-draft-assets" / "tts_gen.py"
-        )
+        tts_gen = _template_dir("paper_card_talk_015") / ".015-draft-assets" / "tts_gen.py"
         if not tts_gen.is_file():
             raise RuntimeError(f"tts_gen.py not found: {tts_gen}")
         ep_path = job_dir / "02_rw" / "episode.json"
@@ -2324,8 +2317,7 @@ def _load_template_episode(pipeline_id: str = "paper_card_talk_015") -> dict[str
     playback/fonts/image 等渲染配置，只覆盖 meta/beats）。pipeline_id 参数保留
     供未来多模板扩展，当前只有 015。"""
     tpl = (
-        Path(__file__).resolve().parents[1]
-        / "templates" / "paper_card_talk_015"
+        _template_dir("paper_card_talk_015")
         / ".015-draft-assets" / "episode.json"
     )
     return json.loads(tpl.read_text(encoding="utf-8"))
@@ -2421,8 +2413,7 @@ def _load_template_fonts() -> list[dict[str, Any]]:
     单一真理源 = templates/paper_card_talk_015/.015-draft-assets/episode.json#fonts。
     """
     tpl_ep = (
-        Path(__file__).resolve().parents[1]
-        / "templates" / "paper_card_talk_015"
+        _template_dir("paper_card_talk_015")
         / ".015-draft-assets" / "episode.json"
     )
     try:
