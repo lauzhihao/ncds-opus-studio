@@ -106,7 +106,66 @@ import 与 `COMMAND_REGISTRY` 不变、照常工作（P5 才清 shim）。
 - `command_schemas.py` 按 group 二分（PRIMITIVE→core / AGENT→factory）；`cli.py` 同理。
 - 详见 [MONOREPO-SPLIT-DESIGN.md](MONOREPO-SPLIT-DESIGN.md) §2 bridge 表。
 
-## 3. 容易踩的坑
+## 3. P2 执行交底（拆 factory · 给接手 agent）
+
+> 决策已定，见 [设计 §9.6](MONOREPO-SPLIT-DESIGN.md)：**全拆 + shim**、`reading_confidence` 已删、
+> `AGENT_REGISTRY/SCHEMAS` 已在 P1.x 建好（只随包搬）。下面是落地细节与必须先定的机制点。
+
+### 3.0 ⚠️ 先定机制：同名包跨两目录的冲突（P2 第一步，别照搬 P1 shim）
+P1 的 shim 能用，是因为模块**迁到了另一个包名**（`ncds_opus_core`），老位置 `ncds_opus_factory.X`
+转发到 `ncds_opus_core.X`。**P2 不一样**：factory-only 模块迁后**仍叫 `ncds_opus_factory.*`**，
+而 studio/bridge 还留在 `src/ncds_opus_factory/`——**同一个 import 名 `ncds_opus_factory` 会同时存在于
+`src/` 和 `packages/factory/src/` 两处**。两个 editable 包同名会在 site-packages 互相覆盖，**不能裸装**。
+三选一（**建议 A**）：
+- **A（推荐）PEP 420 namespace**：把 `ncds_opus_factory` 改成 namespace 包（删顶层
+  `src/ncds_opus_factory/__init__.py` 或声明 namespace），两个目录都进 `sys.path`，子模块按目录合并解析——
+  `ncds_opus_factory.commands`(packages/factory) 与 `ncds_opus_factory.server.pipeline_runner`(src/) 共存。
+  渐进拆分天然支持；P5 studio/bridge 也迁走后回收 namespace。**先 spike 验证 import 解析再铺开**。
+- **B 一次性全挪**：P2 把**整棵** `src/ncds_opus_factory/`（含 studio/bridge）挪进 `packages/factory/src/`，
+  P3 再把 studio 从 packages/factory **抽出**到 packages/studio。单一位置、无同名冲突，但 P2 动的文件面更大。
+- **C 暂不物理拆**：P2 只做逻辑归位（已在 P1.x 完成），物理移动推迟到 P3/P4 一次做。最稳但 P2 近乎空转。
+
+> ⚠️ 这一步没定之前别 `git mv`。它决定了后面所有「迁往」路径是否成立。
+
+### 3.1 模块归期分配表（P2 只搬 factory-only；studio→P3、bridge→P4 不碰）
+`src/ncds_opus_factory/server/` 一棵树混了三类，**P2 只动 factory-only**：
+
+| 模块 | 端 | 期 | 依赖单例 | P2 动作 |
+|---|---|---|---|---|
+| `task_runner` `task_store` `rounds_gate` `label_store` `planner` `retro_trigger` `subscriptions` `mock_agents` `schemas` | factory | **P2** | RUNNER/STORE/LABELS | 迁 `packages/factory/.../server/` |
+| `command_schemas.py` | factory | 已 P1.x | — | 已 import core PRIMITIVE_SCHEMAS，随包搬 |
+| `pipeline_runner` `storyboard_director` `mock` `dev_proxy` | studio | P3 | PIPELINE_RUNNER | **不碰** |
+| `app.py` `state.py` `artifacts.py` | **bridge** | P4 | both | **不碰**（`state.py:16,34` 仍 import pipeline_runner、建 PIPELINE_RUNNER——这正是 P2 退出标准只核「包内」的原因）|
+
+`routes/`（12 个）：
+
+| route | 端 | 期 | 依赖单例 |
+|---|---|---|---|
+| `commands` `tasks` `rounds` `subscriptions` | factory | **P2** | RUNNER/STORE/LABELS |
+| `jobs` `pipelines` `preview` `templates` `mock` | studio | P3 | PIPELINE_RUNNER/VIDEO_JOBS_DIR |
+| `artifacts` | bridge(三分) | P4 | both 根（共用 core `artifact_url`）|
+
+### 3.2 路径改法（迁包时一起做，别留 parents[3]）
+factory 迁 `packages/factory/src` 后比根布局**多 2 层**，所有 `parents[3]` 断。统一改法 =
+`from ncds_opus_core.common.paths import repo_root`（P1.7 已示范，factory 直接复用、勿重造），
+state 产物根强制 `NOF_STATE_DIR` fail-fast。**逐文件清单见 [PATHS.md §1/§2](MONOREPO-SPLIT-PATHS.md)**
+（已把误标「asr/rw→core」的两行更正为 factory）。重点：
+- `commands/{shenkuo,wolong,wolong_rounds,guiguzi,prescreen,boya,wudaozi,liuyong}.py`、
+  `common/{round_store,topic_store,rubric_store,tikhub_client}.py`、`server/{planner}.py`：parents[3]→`repo_root()`/env。
+- `wudaozi.py:33-34` 硬编码字面 `src/ncds_opus_factory/templates/{figure_talk,stickman}` → `importlib.resources` 取包内资源。
+- skills 路径（shenkuo `skills/tingwu-asr`、`video_job_worker.mjs` `skills/video-pipeline`）：skills/ 留 repo 根，改 `repo_root()/"skills"/...` + env（同 P1.7）。
+
+### 3.3 入口 / workspace / lock（P2 末尾）
+`nof`/`nof-server` 入口随 factory 迁入 `packages/factory/pyproject.toml`；根 `pyproject` 退化为 workspace
+协调器；`[tool.uv.workspace] members` 显式列 `["packages/core","packages/studio","packages/factory"]`；
+顺带定 `uv.lock` 入库（现被 `.gitignore` 忽略）。
+
+### 3.4 退出标准（修正版）
+factory 独立 import；**`grep` studio 名(`pipeline_runner`/`storyboard_director`)在 `packages/factory/src` 包内为空**
+（不是 `factory/` 字面——bridge `state.py` 留根包到 P4）；`grep ncds_opus_factory packages/core/src` 空；
+factory 仅单向依赖 core；**pytest 全绿（基线 300/0）**。
+
+## 4. 容易踩的坑
 - core 内 `from ncds_opus_factory.*` = 违规，每个增量后 grep 核一遍。
 - 加了 core 子模块/子包后**必须重装 core** 才 importable。
 - `*_test.py` 暂留原位（经 shim 仍绿），测试迁移是 P5 的独立小活，别在搬代码时顺手挪（会牵动

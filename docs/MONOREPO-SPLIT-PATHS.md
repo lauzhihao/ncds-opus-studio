@@ -2,6 +2,12 @@
 
 > 自动生成（4 路并行扫描去重）：**64 个 distinct 脆弱点 / 52 文件**，其中 **29 个无 env 兜底**（断 = 对应生成链直接垮）。
 > 配套 [MONOREPO-SPLIT-DESIGN.md](MONOREPO-SPLIT-DESIGN.md)，是 P1–P3 迁包时的逐条核对表。
+>
+> ⚠️ **本表是 P0 产物，部分「归属」早于 §9.4 as-built 纠正——以 [设计 §9.4/§9.5](MONOREPO-SPLIT-DESIGN.md) 为准**：
+> `asr.py`/`rw.py` **命令归 factory**（非 core，原表已就地更正）；core primitive 严格 6 个
+> (wst/tst/vid/tts/render/render_015)。**深度提醒**：factory 迁 `packages/factory/src/ncds_opus_factory/`
+> 后比根布局多 **2 层**（`packages/factory`），原表里按"差一层/+1"写的 `parents[N]` 改法要相应 **+2**
+> ——统一改法是**别数 parents，直接 `from ncds_opus_core.common.paths import repo_root`**（P1.7 已示范）。
 
 ## 0. 统一改法（先建工具，再逐处替换）
 
@@ -69,7 +75,7 @@
 | `scripts/video_job_worker.mjs / rewrite/content/video runner 链` | video_job_worker:23; rewrite_command_runner:18; rewrite_profiles:1; content_rewrite_runner:(被 import) | import {...} from './video_rewrite_runner.mjs… | 只要 .mjs 链被拆到不同包，'./' 相对 import 立即断（§4 MAJOR / §6）。当前设计已规避：整链不拆、随 core 走… | 保持整条 .mjs 链同目录搬进 core（含 feishu_sdk_adapter、douyin_cog_kernel、rewrite_pr… |
 | `src/ncds_opus_factory/cli.py` | (whole file) | from ncds_opus_factory.commands import wst / … | 路径层面不断。但设计 §2 要求按 group 二分 cli.py：primitive 子命令→core/cli.py(入口 nof-core… | 无脆弱路径需改；但拆分时按归属重写各 import 模块路径（core 包名 vs factory 包名）并拆成两个 CLI 入口，prim/… |
 | `src/ncds_opus_factory/commands/__init__.py` | 17-20 | from ncds_opus_factory.commands import asr, r… | 路径层面不断。但这是设计 §2/§6 点名的 core↔factory import 环根源（core 的 registry eager 拉 … | 非路径脆弱点，但必须拆：core/commands/registry.py(PRIMITIVE_REGISTRY 只 import wst/t… |
-| `src/ncds_opus_factory/commands/asr.py` | 25-27 | ROOT = Path(__file__).resolve().parents[3] WO… | 迁 core 后 parents[3]=packages/core/src；scripts/*.mjs 链随 core 走（设计 §4 D2，… | asr→core，.mjs 链随 core。ASR_RUNNER 用包内锚点 importlib.resources.files('<core… |
+| `src/ncds_opus_factory/commands/asr.py` | 25-27 | ROOT = Path(__file__).resolve().parents[3] WO… | **⚠️ 以 §9.4 为准：asr 命令归 factory（非 core）**。迁 packages/factory 后 parents[3]=packages/factory/src 差一层 | **asr→factory**（§9.4 推翻原「asr→core」）。ASR_RUNNER 等 .mjs 链留 factory（`asr_command_runner`/`video_job_worker`/`feishu_sdk_adapter`），路径用 `repo_root()` 或 factory 包内锚点；state 产物根改 `NOF_STATE_DIR` |
 | `src/ncds_opus_factory/commands/boya.py` | 30-31 | ROOT = Path(__file__).resolve().parents[3] DE… | 迁 factory 后 parents[3]=packages/factory/src 差一层；assets/audio_lib 在 repo… | boya→factory。assets/audio_lib 是用户维护的运行期数据库，不该进包：DEFAULT_LIBRARY 改读 env … |
 | `src/ncds_opus_factory/commands/guiguzi.py` | 21-22 | ROOT = Path(__file__).resolve().parents[3] SH… | 迁 factory 后 parents[3]=packages/factory/src 差一层；codex_scodex_shim.sh 是 … | guiguzi→factory，codex_scodex_shim.sh 随 factory。SHIM 改 importlib.resourc… |
 | `src/ncds_opus_factory/commands/guiguzi.py / prescreen.py / boya.py / shenkuo.py / wolong.py / wolong_rounds.py` | guiguzi:21-22, prescreen:31-32, wolong:32-33, wolong_rounds:46, shenkuo:32&36, boya:30 | ROOT=parents[3]; SHIM=ROOT/'scripts'/'codex_s… | 这些 agent 归 factory；它们引的 scripts/*.sh 在 .mjs 链同目录随 core 走（跨包），skills/ 留 … | shim/run_wolong.sh 从 core 引用；tingwu skills 路径改 env（skills 不进 packages，需… |
@@ -80,7 +86,7 @@
 | `src/ncds_opus_factory/commands/render.py` | 35, 44 | _REPO_ROOT = HERE.parents[2] # commands→ncds_… | render 是 core primitive; render_runner.mjs 随 core scripts 走(其实 render_r… | node_modules 锚点改对准 render_runner.mjs 实际所在包目录的向上路径(ESM 从 .mjs 目录向上找),或显式… |
 | `src/ncds_opus_factory/commands/render_015.py` | 27-31 与 61 | HERE = Path(__file__).resolve().parent _REPO_… | 迁包后 commands/render_015.py 深度多一层 packages/<pkg>,HERE.parents[2] 退到 `src… | HERE.parents[2] 修为新深度的 repo_root(或模板所在包根),DEFAULT_TEMPLATE_DIR 改用 impor… |
 | `src/ncds_opus_factory/commands/render_015.py` | 28-31, 61 | _REPO_ROOT = HERE.parents[2]; DEFAULT_TEMPLAT… | render_015 与 015 模板一起进 core（§8 明确：模板随 render_015 进 core）。迁后 HERE=packag… | DEFAULT_TEMPLATE_DIR 改用 importlib.resources.files('ncds_opus_core')/'te… |
-| `src/ncds_opus_factory/commands/rw.py` | 24-26 | ROOT = Path(__file__).resolve().parents[3] WO… | 同 asr：迁 core 后 parents[3] 差一层 + scripts/*.mjs 随 core 不在 repo 根 + cwd/产物… | rw→core，.mjs 随 core。RW_RUNNER 用 importlib.resources.files('<core_pkg>.s… |
+| `src/ncds_opus_factory/commands/rw.py` | 24-26 | ROOT = Path(__file__).resolve().parents[3] WO… | **⚠️ 以 §9.4 为准：rw 命令归 factory（非 core）**。迁 packages/factory 后 parents[3] 差一层 | **rw→factory**（§9.4 推翻原「rw→core」）。`rewrite_command_runner.mjs` 留 factory，跨包 ESM import core 的 rewrite 引擎（P1.6 已落地，见 §9.5）；state 产物根改 `NOF_STATE_DIR` |
 | `src/ncds_opus_factory/commands/shenkuo.py` | 32-37 | ROOT = Path(__file__).resolve().parents[3] BE… | 全断：parents[3] 迁 factory 后=packages/factory/src 差一层；state/、skills/、.env … | shenkuo→factory。state 产物根(BENCH/COLLECTED/BENCH_DB)改读 env NOF_STATE_DIR… |
 | `src/ncds_opus_factory/commands/tst.py` | 18-19 | ROOT = Path(__file__).resolve().parents[3] IM… | 同 wst：迁 core 后 parents[3] 只到 packages/core/src，且 gpt_image 收进 core 不在 r… | tst→core。同 wst 改法：importlib.resources.files('<core_pkg>.gpt_image')/'ge… |
 | `src/ncds_opus_factory/commands/vid.py` | 24 | DEFAULT_STATE_DIR = Path(os.getenv("NOF_STATE… | 不因布局变化而断(fallback 用 home,非 repo 根)。但属 core primitive,迁后口径与其它 state 解析(以… | 布局上安全,无需改; 仅需留意:迁 core 后若想与 factory 的 state 口径统一可对齐,但不是迁包硬伤 |

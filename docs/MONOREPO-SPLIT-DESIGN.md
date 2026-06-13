@@ -44,7 +44,7 @@ ncds_opus_studio                ncds_opus_factory
 |---|---|---|
 | **ncds_opus_core** | 两端复用的纯能力 | primitives：`wst/tst/vid/asr/rw/tts/render/render_015` + `PRIMITIVE_REGISTRY`/`PRIMITIVE_SCHEMAS`/primitive CLI；中性 `common`：`node_runtime/tts_provider/public_upload/lark_cli/cancel`；`pipelines/`(DAG 类型 `PipelineDef/PipelineNode`+015 定义)；`templates/paper_card_talk_015`(render_015 复制它)；`gpt_image/`；`server/artifact_url.py`(新，纯 URL/路径安全工具)；`scripts/*.mjs` runner 链(见 §4) |
 | **ncds_opus_studio** | 画布产品（依赖 core） | `server/`：`pipeline_runner`(015 节点执行)、`storyboard_director`、`mock`(画布 job)、`dev_proxy`、`state`(只 `PIPELINE_RUNNER`+`VIDEO_JOBS_DIR`)、`app`(create_app)、`artifacts`(只开 `video-jobs/` 根)、`routes/{jobs,pipelines,preview,mock,templates,artifacts}`；`web/` SPA |
-| **ncds_opus_factory** | 卧龙工厂产品（依赖 core） | agents：`shenkuo/guiguzi/liuyong/wudaozi/boya/wolong/wolong_rounds/wolong_retro/prescreen` + `AGENT_REGISTRY`/`AGENT_SCHEMAS`/agent CLI；factory `common`：`round_store/topic_store/benchmark_store/signals/rubric_store/quality_rubric/ai_taste/tikhub_client`；`templates/{paper_card_talk(009),figure_talk,stickman,reading_confidence*}`；009 `.mjs` runner；`server/`：`task_runner/task_store/rounds_gate/label_store/planner/subscriptions/retro_trigger/mock_agents/schemas/state(STORE/LABELS/RUNNER)/app/artifacts(state 根+extract_artifacts)/routes/{commands,tasks,rounds,subscriptions,artifacts}`；**`mobile/`（Flutter app，factory 前端，对外经 OpenAPI 契约连 factory-server）** |
+| **ncds_opus_factory** | 卧龙工厂产品（依赖 core） | agents：`shenkuo/guiguzi/liuyong/wudaozi/boya/wolong/wolong_rounds/wolong_retro/prescreen` + `AGENT_REGISTRY`/`AGENT_SCHEMAS`/agent CLI；factory `common`：`round_store/topic_store/benchmark_store/signals/rubric_store/quality_rubric/ai_taste/tikhub_client`；`templates/{paper_card_talk_009,figure_talk,stickman}`（reading_confidence 已删，§7）；**asr/rw 命令及其 schema 归 factory（§9.4，非 core）**；009 `.mjs` runner；`server/`：`task_runner/task_store/rounds_gate/label_store/planner/subscriptions/retro_trigger/mock_agents/schemas/state(STORE/LABELS/RUNNER)/app/artifacts(state 根+extract_artifacts)/routes/{commands,tasks,rounds,subscriptions,artifacts}`；**`mobile/`（Flutter app，factory 前端，对外经 OpenAPI 契约连 factory-server）** |
 
 **零环铁律**：core 内**绝不** import server/ 或任何 agent（P1/P5 用 `grep wolong\|shenkuo\|guiguzi core/` 必须为空）；
 studio↔factory 互不 import。`schemas.py`（TaskMeta/Review/source/reviewer/round_id…全是卧龙语义）
@@ -129,7 +129,7 @@ studio↔factory 互不 import。`schemas.py`（TaskMeta/Review/source/reviewer/
 | **P0** | 建 `packages/{core,studio,factory}` + 各 `pyproject.toml` + 根 `[tool.uv.workspace]`；**先不挪代码**，仅打通 `uv sync` 三包 editable + pytest 聚合；产出所有 `parents[N]` 硬编码路径清单（state.py `parents[3]`、render_015 `parents[2]`、pipeline_runner 多处） | `uv sync` 成功；三空包可 import；现有 test 全绿；硬编码路径清单每条标注迁后改法 |
 | **M-mobile**（解耦，待定） | **不在主迁移序列里**。待另一 agent 的 iOS→Flutter 迁移落定后，把 `~/Documents/claude_traffic_light_flutter` 挪进 `mobile/`（与 `web/` 平级，不进 uv workspace，自带 `pubspec.yaml`）。本计划只占位、不执行 | `mobile/` 就位且 `flutter pub get` 通（由那条迁移收尾时做） |
 | **P1** ✅ | 抽 **core**（**as-built 见 §9.1–9.5**，下列原文已被 §9.4 修正）：~~8~~ **6** primitive(wst/tst/vid/tts/render/render_015) + rewrite 引擎 4 `.mjs`(进 `core/runners/`，**feishu 切尾作废**、不动) + `pipelines/`(DAG) + `templates/paper_card_talk_015` + `gpt_image/` + 中性 common + `PRIMITIVE_REGISTRY/SCHEMAS` + core CLI(`nof-core`)。⚠️ asr/rw **命令**归 factory(§9.4)；`artifact_url.py` **不在 P1**、随 artifacts 三分挪到 **P4** | ✅ 达成：`ncds_opus_core` 独立 import；import-purity grep 空；全量 **300 passed / 0 failed**（9dce05c/89616d2/fdc9f2c/822ca72，boya 修复 4e5db49）|
-| **P2** | 拆 **factory**：6 agent + wolong_rounds/retro/prescreen + factory common(round_store/topic_store/…) + 009 templates + task/round 服务层 + `AGENT_REGISTRY/SCHEMAS` | `factory` agent 侧可 import；`grep 'pipeline_runner\|storyboard_director' factory/` 为空；对 core 仅单向 import |
+| **P2** | **物理拆 factory（全拆+shim，详细步骤见 [HANDOFF §3](MONOREPO-SPLIT-HANDOFF.md) + §9.6 裁定）**：把 factory-only 代码挪进 `packages/factory/src/ncds_opus_factory/`（**包名不变**）—— 6 agent + wolong_rounds/wolong_retro/prescreen + factory common(round_store/topic_store/benchmark_store/signals/rubric_store/quality_rubric/ai_taste/tikhub_client，共 8) + 009 templates(paper_card_talk_009/figure_talk/stickman；**reading_confidence 已删**) + factory routes(commands/tasks/rounds/subscriptions) + 服务层(task_runner/task_store/rounds_gate/label_store/planner/subscriptions/retro_trigger/mock_agents/schemas)。⚠️ **`AGENT_REGISTRY/SCHEMAS` 已在 P1.x 建好（§9.5），本期只随包搬、不重建**；**studio 模块 + bridge(app/state/artifacts) 不挪**(P3/P4)，老树留 sys.modules shim | factory 独立 import；**`grep` studio 名(pipeline_runner/storyboard_director)在 `packages/factory/src` 内为空**（⚠️ **退出标准核「包内」，不是 `factory/` 字面**——state.py 仍在根包、P4 才拆，详见 §9.6）；`grep ncds_opus_factory core/` 空、factory 仅单向依赖 core；pytest 全绿 |
 | **P3** | 拆 **studio**：pipeline_runner/storyboard_director/mock/dev_proxy + 画布 routes + `studio/server/state.py`(只 PIPELINE_RUNNER) + `web/` | `studio` 可 import；`grep 'task_runner\|rounds_gate\|wolong' studio/` 为空；pipeline 单测过；`web/dist` 路径解析正确 |
 | **P4** | 拆 **bridge 总装**：删旧 app.py/state.py，建两 `create_app` + artifacts 三分 + 两 `state`(env 强制)；**+ 对外形态 D1 落地** | 两 server 各自独立起；studio 进程内无 factory 协程、factory 进程内无 PIPELINE_RUNNER；各 `/artifacts` 只服务自己根；**单 origin 反代冒烟**(选 A)；端到端冒烟:画布建 job 出片 + 卧龙建 round 验收 |
 | **P5** | 清依赖 + 删 shim + 入口点收口 + 更新 `.project_map` 生成器(三包目录) + `docs/MIGRATION.md` | 全仓无 factory→studio / studio→factory 生产 import(grep+importlib 静态校验)；core 无反向依赖；三包 pytest 全绿；两 server 入口点冷启动成功 |
@@ -153,8 +153,9 @@ studio↔factory 互不 import。`schemas.py`（TaskMeta/Review/source/reviewer/
 
 ## 7. 仍开放的风险（实施期再定）
 
-- **`douyin_processing` 与 `reading_confidence` 模板零消费者**：本次 grep 未发现使用方，P1/P2
-  直接评估**删除**而非搬运——需你确认是否还要保留。
+- ~~**`reading_confidence` 模板零消费者**~~：✅ **已删**（2026-06-13，用户拍板，commit `e1c413b`；
+  全仓 grep 确认零代码消费者）。`figure_talk`/`stickman` 有消费者（`wudaozi.py`），随 factory 搬、不删。
+- **`douyin_processing`（repo 根 `pipelines/`）零消费者**：仍待定，建议同样删（与 P1.5 的 `core/pipelines/` DAG 无关）——需你确认。
 - **单进程合并部署**：若运维要求对外仍单端口又不想加独立反代，可顶层 `Mount` 两 sub-app，但两
   app 的 startup/lifespan、同名 `/artifacts` 共存(路径前缀)未细化，属部署期决策。
 - **`cancel.py` 归属**：放 core 是"便于 studio 未来用"的前瞻，当前 consumer 全 factory；坚持极薄
@@ -244,3 +245,25 @@ core/studio editable 装入 venv、`nof-server` 入口完好。测试 **298 pass
 **与本节计划的两处务实偏离**（记录在案，避免 P2/P4 误判）：
 1. `core/server/artifact_url.py` **未在 P1 建**——它与 `artifacts.py` 三分耦合（§2 bridge 表），随 **P4** 一起做；§5 P1 行原列它属乐观估计。core 当前**无 `server/` 目录**。
 2. **shim 与 `*_test.py` 全留原位**（P5 才清）：老 `ncds_opus_factory.{pipelines,commands.wst,common.*,...}` 均有 `sys.modules` 转发 shim，旧 import 与 `COMMAND_REGISTRY` 照常工作。
+
+### 9.6 P2 预备裁定（2026-06-13，用户拍板 —— 实施前的决策回填，消除交接歧义）
+P2 启动前做了一轮「交接就绪性审计」（4 路 grounded），暴露 §1/§2/§5 原文若干歧义与漂移，**裁定如下，
+P2 实施以此为准**（执行细节见 [HANDOFF §3](MONOREPO-SPLIT-HANDOFF.md)）：
+
+1. **拆分策略 = 全拆 + shim 兜底**：P2 一次性把 **factory-only 代码**（agent / factory common / 009
+   templates / factory routes / task·round 服务层）`git mv` 进 `packages/factory/src/ncds_opus_factory/`，
+   **包名保持 `ncds_opus_factory`**（`packages/factory/pyproject.toml` 用 `package-dir={""="src"}`，
+   **import 路径不变**）。**studio 模块与 bridge(app/state/artifacts) 暂不挪**（P3/P4），老树 `src/ncds_opus_factory/`
+   对已迁模块留 `sys.modules` 转发 shim，让 studio/bridge 过渡期照常 import。与 P1 经验一致。
+2. **退出标准的「为空」核的是包内**：原 §5 P2「`grep pipeline_runner|storyboard_director factory/` 为空」
+   在 bridge 未拆前**不可满足**（`state.py:16,34` 仍 import `pipeline_runner` 并建 `PIPELINE_RUNNER`）。
+   裁定：退出标准核 **`packages/factory/src` 包内**无 studio 名；`state.py`/`app.py`/`artifacts.py` 三个 bridge
+   **留根包到 P4**，studio 模块留根包到 P3。**P2 不碰 bridge、不碰 studio**。
+3. **`AGENT_REGISTRY/SCHEMAS` 不重建**：P1.x（§9.5）已建在 factory，P2 只随包 `git mv`。
+4. **根 `pyproject.toml` 角色**：P2 后 `[tool.uv.workspace] members` 显式列 `["packages/core","packages/studio","packages/factory"]`；
+   `nof`/`nof-server` 入口随 factory 迁入 `packages/factory/pyproject.toml`；根 `pyproject` 退化为 workspace 协调器
+   （`[project.scripts]` 清空或保留薄壳到 P5）。`uv.lock` 提交入库的决策一并在 P2 落（现被 .gitignore 忽略）。
+5. **路径/parents[N]**：factory 迁 `packages/factory/src` 比根布局多 **2 层**——一律改用
+   `from ncds_opus_core.common.paths import repo_root`（P1.7 已示范），别数 `parents[N]`；state 产物根强制 `NOF_STATE_DIR`。
+   PATHS 文档里标「asr/rw→core」的两行已就地更正为 factory（§9.4）。
+6. **`reading_confidence` 已删**（§7，commit `e1c413b`），P2 不再搬它。
