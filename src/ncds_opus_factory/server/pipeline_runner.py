@@ -1203,8 +1203,16 @@ class PipelineRunner:
         asr_root = job_dir / "01_asr"
         asr_root.mkdir(parents=True, exist_ok=True)
 
-        repo_root = Path(__file__).resolve().parents[3]
-        pipeline_script = repo_root / "skills" / "video-pipeline" / "scripts" / "video_pipeline.py"
+        # skills/ 留 repo 根、不进任何包（P1.7）；用 core repo_root() 定位 + NOF_VIDEO_PIPELINE_SCRIPT
+        # env 兜底，不再数 parents[N]（拆 src-layout 后深度会变）。
+        from ncds_opus_core.common.paths import repo_root as _repo_root
+
+        env_script = os.getenv("NOF_VIDEO_PIPELINE_SCRIPT")
+        pipeline_script = (
+            Path(env_script)
+            if env_script
+            else _repo_root() / "skills" / "video-pipeline" / "scripts" / "video_pipeline.py"
+        )
         if not pipeline_script.is_file():
             raise RuntimeError(f"video_pipeline.py not found at {pipeline_script}")
 
