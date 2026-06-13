@@ -188,3 +188,152 @@ def test_engine_drives_real_015_chain_to_mp4(tmp_path: Path, monkeypatch: pytest
     assert set(ep["scenes"]) == {"s1", "s2"}
     assert all(b.get("audioFile") for b in ep["beats"])  # tts 之后共享 episode 仍流通
     assert (job_dir / "06_render" / "output.mp4").is_file()   # 端到端出 mp4
+
+
+# --------------------------------------------------------------------------- #
+# C) 重步骤 performer（tts/image/render）：真实编排 + 外部 seam 注桩
+# --------------------------------------------------------------------------- #
+def _seed_episode(jd: Path, ep: dict) -> None:
+    (jd / "02_rw").mkdir(parents=True, exist_ok=True)
+    (jd / "02_rw" / "episode.json").write_text(json.dumps(ep, ensure_ascii=False), encoding="utf-8")
+
+
+def test_run_tts_step_rebuilds_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    jd = tmp_path / "job"
+    _seed_episode(jd, {"beats": [{"zh": "一", "scene": "s1"}, {"zh": "二", "scene": "s1"},
+                                 {"zh": "三", "scene": "s2"}], "scenes": {}})
+
+    def _fake_tts(*, script, episode_path, audio_dir, on_line, only=None, force=False):
+        on_line("tts stub")
+        e = json.loads(Path(episode_path).read_text(encoding="utf-8"))
+        for b in e["beats"]:                       # 模拟 tts_gen 写回 scene mp3 + 时间戳
+            b["audioFile"] = f"04_tts/scene-{b['scene']}.mp3"
+            b["audioStart"] = 0.0
+            b["audioEnd"] = 1.0
+        Path(episode_path).write_text(json.dumps(e, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(perf, "_run_tts_gen", _fake_tts)
+    out = perf.run_tts_step(_noop, job_dir=str(jd))
+    assert out["mode"] == "segmented"
+    assert out["scene_count"] == 2                 # s1 / s2
+    assert len(out["items"]) == 3
+    assert out["items"][0]["audio_relpath"] == "04_tts/scene-s1.mp3"
+
+
+def test_run_image_step_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    jd = tmp_path / "job"
+    _seed_episode(jd, {
+        "beats": [{"scene": "ch1"}, {"scene": "s1"}, {"scene": "s2"}],
+        "scenes": {
+            "ch1": {"prompt": "章节卡"},                                  # ch* → 跳过出图
+            "s1": {"prompt": "场景一", "sketches": [{"prompt": "简笔画1"}]},
+            "s2": {"prompt": ""},                                         # 空 prompt → fail
+        },
+        "image": {"size": "1536x1024", "quality": "auto", "sketchStylePrefix": "白底黑剪影"},
+    })
+    calls: list[str] = []
+
+    def _fake_gen(*, scene_id, prompt, size, quality, target, job_id):
+        calls.append(scene_id)
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(b"webp")
+
+    monkeypatch.setattr(perf, "_gen_scene_image", _fake_gen)
+    out = perf.run_image_step(_noop, job_dir=str(jd))
+    assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 1)   # s1 ok / s2 空→fail
+    assert out["sketch_ok"] == 1
+    assert "ch1" not in calls                       # 章节卡不出图
+    assert "s1" in calls and "s1-sk1" in calls      # 容器图 + 简笔画
+    assert (jd / "03_image" / "s1.webp").is_file()
+    assert (jd / "03_image" / "s1-sk1.webp").is_file()
+
+
+def test_run_image_step_idempotent_skip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    jd = tmp_path / "job"
+    (jd / "03_image").mkdir(parents=True)
+    (jd / "03_image" / "s1.webp").write_bytes(b"existing")     # 预先存在 → 跳过、不重生
+    _seed_episode(jd, {"beats": [{"scene": "s1"}], "scenes": {"s1": {"prompt": "场景一"}}, "image": {}})
+    monkeypatch.setattr(perf, "_gen_scene_image",
+                        lambda **k: pytest.fail("不应重生已存在的容器图"))
+    out = perf.run_image_step(_noop, job_dir=str(jd))
+    assert (out["ok"], out["skipped"], out["failed"]) == (0, 1, 0)
+
+
+def test_run_render_step_invokes_render_015(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    jd = tmp_path / "job"
+    _seed_episode(jd, {})
+    (jd / "04_tts").mkdir(parents=True)
+    (jd / "04_tts" / "scene-s1.mp3").write_bytes(b"mp3")
+    captured: dict = {}
+
+    def _fake_render(**kw):
+        captured.update(kw)
+        Path(kw["output_path"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(kw["output_path"]).write_bytes(b"mp4")
+        return {"output_path": kw["output_path"], "video_size_bytes": 3, "workdir": kw["workdir"]}
+
+    monkeypatch.setattr(perf, "_render_run", _fake_render)
+    out = perf.run_render_step(_noop, job_dir=str(jd))
+    assert out["video_relpath"] == "06_render/output.mp4"
+    assert out["video_size_bytes"] == 3
+    assert captured["episode_path"].endswith("02_rw/episode.json")
+    assert captured["audio_dir"].endswith("04_tts")
+    assert captured["picture_dir"] is None          # 03_image 不存在 → None（picture_dir 可选）
+
+
+def test_run_render_step_missing_audio_raises(tmp_path: Path):
+    jd = tmp_path / "job"
+    _seed_episode(jd, {})
+    with pytest.raises(ValueError, match="04_tts"):
+        perf.run_render_step(_noop, job_dir=str(jd))
+
+
+def test_run_render_step_forwards_existing_picture_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # 03_image 存在 → picture_dir 原样转发（钉死 .is_dir()→forward，防漂移成 .is_file()）
+    jd = tmp_path / "job"
+    _seed_episode(jd, {})
+    (jd / "04_tts").mkdir(parents=True)
+    (jd / "04_tts" / "scene-s1.mp3").write_bytes(b"mp3")
+    (jd / "03_image").mkdir(parents=True)
+    captured: dict = {}
+
+    def _fake_render(**kw):
+        captured.update(kw)
+        Path(kw["output_path"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(kw["output_path"]).write_bytes(b"mp4")
+        return {"output_path": kw["output_path"], "video_size_bytes": 1, "workdir": kw["workdir"]}
+
+    monkeypatch.setattr(perf, "_render_run", _fake_render)
+    perf.run_render_step(_noop, job_dir=str(jd))
+    assert captured["picture_dir"] is not None and captured["picture_dir"].endswith("03_image")
+
+
+# 覆盖 image 的两条易漂移分支：单 scene 生成异常被捕获（部分成功）+ 全失败兜底 raise
+def test_run_image_step_captures_generation_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    jd = tmp_path / "job"
+    _seed_episode(jd, {
+        "beats": [{"scene": "s1"}, {"scene": "s2"}],
+        "scenes": {"s1": {"prompt": "好场景"}, "s2": {"prompt": "坏场景"}},
+        "image": {},
+    })
+
+    def _gen(*, scene_id, prompt, size, quality, target, job_id):
+        if scene_id == "s2":
+            raise RuntimeError("gpt-image boom")
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(b"webp")
+
+    monkeypatch.setattr(perf, "_gen_scene_image", _gen)
+    out = perf.run_image_step(_noop, job_dir=str(jd))
+    assert (out["ok"], out["failed"]) == (1, 1)          # s1 成、s2 异常被捕获，run 仍返回
+    s2 = next(it for it in out["items"] if it["scene_id"] == "s2")
+    assert s2["image_relpath"] is None and "boom" in s2["error"]
+
+
+def test_run_image_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    jd = tmp_path / "job"
+    _seed_episode(jd, {"beats": [{"scene": "s1"}], "scenes": {"s1": {"prompt": "唯一场景"}}, "image": {}})
+    monkeypatch.setattr(perf, "_gen_scene_image",
+                        lambda **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="all .* scene image generations failed"):
+        perf.run_image_step(_noop, job_dir=str(jd))

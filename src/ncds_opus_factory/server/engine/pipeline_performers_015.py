@@ -20,12 +20,23 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from ncds_opus_core.templates import template_dir as _template_dir
+from ncds_opus_factory.commands import render_015
 from ncds_opus_factory.server import storyboard_director
 from ncds_opus_factory.server.pipeline_runner import (
     _build_lines_prompt,
     _call_opus_for_rw,
+    _generate_scene_image,
     _load_template_episode,
+    _read_episode,
+    _rebuild_tts_items_015,
+    _run_tts_gen_015,
 )
+
+# 外部副作用调用的 seam（subprocess / node / gpt-image）：默认走真实 helper，测试 monkeypatch。
+_run_tts_gen = _run_tts_gen_015
+_gen_scene_image = _generate_scene_image
+_render_run = render_015.run
 
 
 def _opus_structure(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-7") -> str:
@@ -176,8 +187,191 @@ def run_storyboard_step(
     }
 
 
-# slice-1 performer 表：仅含已真实复用的步骤；asr/rw/tts/image/render 的真实包装后续 slice 补。
+def run_tts_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) -> dict[str, Any]:
+    """TTS：按 ``02_rw/episode.json`` 的 beats[].scene spawn 015 tts_gen.py 整段合成
+    + 写回字级时间戳 → 重建 beat 级 items。复用 ``_run_tts_gen_015`` / ``_rebuild_tts_items_015``。
+    """
+    jd = Path(job_dir)
+    ep = _read_episode(jd)
+    if ep is None:
+        raise ValueError("episode.json not found; run rw/lines first")
+    beats_raw = ep.get("beats") or []
+    if not beats_raw:
+        raise ValueError("episode.beats is empty; nothing to synthesize")
+
+    out_dir = jd / "04_tts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tts_gen = _template_dir("paper_card_talk_015") / ".015-draft-assets" / "tts_gen.py"
+    if not tts_gen.is_file():
+        raise RuntimeError(f"tts_gen.py not found: {tts_gen}")
+    ep_path = jd / "02_rw" / "episode.json"
+    on_progress(f"按 scene 整段合成（{len(beats_raw)} beats）…")
+    _run_tts_gen(script=tts_gen, episode_path=ep_path, audio_dir=out_dir, on_line=on_progress)
+
+    ep2 = json.loads(ep_path.read_text(encoding="utf-8"))
+    items = _rebuild_tts_items_015(ep2)
+    scene_files = {it["audio_relpath"] for it in items if it.get("audio_relpath")}
+    on_progress(f"完成：{len(scene_files)} 段 scene 音频 · {len(items)} beats")
+    return {
+        "items": items, "audio_dir": str(out_dir), "mode": "segmented",
+        "scene_count": len(scene_files), "audio_count": len(scene_files),
+    }
+
+
+def run_image_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) -> dict[str, Any]:
+    """IMAGE：按 ``episode.scenes[].prompt`` 逐 scene 调 gpt-image-2 出容器图 + 简笔画 → WebP。
+    复刻 ``_execute_image`` 编排（出场序去重、跳 ch* 章节卡、幂等、容器+简笔画分层），复用
+    ``_generate_scene_image``。``job_id`` 仅供出图临时目录命名，取 job_dir 末段。
+    """
+    jd = Path(job_dir)
+    job_id = jd.name
+    ep = _read_episode(jd)
+    if ep is None:
+        raise ValueError("episode.json not found; run rw/lines first")
+
+    beats = ep.get("beats") or []
+    scenes_def = ep.get("scenes") or {}
+    image_cfg = ep.get("image") or {}
+
+    seen: set[str] = set()
+    scene_order: list[str] = []
+    for b in beats:
+        sid = b.get("scene")
+        if sid and sid not in seen:
+            seen.add(sid)
+            scene_order.append(sid)
+    eligible = [sid for sid in scene_order if not sid.startswith("ch")]
+    if not eligible:
+        raise ValueError("no image-eligible scenes (all are chapter cards or no scenes)")
+
+    size = image_cfg.get("size") or "1536x1024"
+    quality = image_cfg.get("quality") or "auto"
+    no_text_hint = image_cfg.get("noTextHint") or ""
+    sketch_size = image_cfg.get("sketchSize") or "1024x1024"
+    sketch_prefix = str(image_cfg.get("sketchStylePrefix") or "").strip()
+
+    out_dir = jd / "03_image"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    on_progress(f"image 开始：{len(eligible)} 个场景 · {size} {quality}")
+
+    items: list[dict[str, Any]] = []
+    ok = sk = fail = 0
+    sketch_ok = sketch_fail = 0
+    n_scenes = len(scene_order)
+    for i, sid in enumerate(scene_order, start=1):
+        sc = scenes_def.get(sid) or {}
+        prompt = str(sc.get("prompt") or "").strip()
+        if sid.startswith("ch"):
+            items.append({"scene_id": sid, "prompt": prompt, "image_relpath": None,
+                          "skipped_reason": "chapter card", "sketches": []})
+            continue
+        if not prompt:
+            items.append({"scene_id": sid, "prompt": "", "image_relpath": None,
+                          "skipped_reason": "empty prompt", "sketches": []})
+            fail += 1
+            continue
+
+        target = out_dir / f"{sid}.webp"
+        container_rel: str | None = None
+        container_err: str | None = None
+        if target.is_file():
+            container_rel = f"03_image/{sid}.webp"
+            sk += 1
+            on_progress(f"[{i}/{n_scenes}] {sid} 容器图已存在，跳过")
+        else:
+            full_prompt = f"{prompt} {no_text_hint}".strip() if no_text_hint else prompt
+            on_progress(f"[{i}/{n_scenes}] {sid} 容器图生成中…")
+            try:
+                _gen_scene_image(scene_id=sid, prompt=full_prompt, size=size,
+                                 quality=quality, target=target, job_id=job_id)
+                container_rel = f"03_image/{sid}.webp"
+                ok += 1
+            except Exception as exc:  # noqa: BLE001
+                on_progress(f"[{i}/{n_scenes}] {sid} 容器图失败: {exc}")
+                container_err = str(exc)
+                fail += 1
+
+        sketches_def = sc.get("sketches") or []
+        sketch_items: list[dict[str, Any]] = []
+        for n, skd in enumerate(sketches_def, start=1):
+            sp = str((skd or {}).get("prompt") or "").strip()
+            if not sp:
+                continue
+            srel = f"03_image/{sid}-sk{n}.webp"
+            stgt = out_dir / f"{sid}-sk{n}.webp"
+            if stgt.is_file():
+                sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
+                continue
+            sfull = " ".join(p for p in (sketch_prefix, sp, no_text_hint) if p)
+            on_progress(f"[{i}/{n_scenes}] {sid} 简笔画 {n}/{len(sketches_def)} 生成中…")
+            try:
+                _gen_scene_image(scene_id=f"{sid}-sk{n}", prompt=sfull, size=sketch_size,
+                                 quality=quality, target=stgt, job_id=job_id)
+                sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
+                sketch_ok += 1
+            except Exception as exc:  # noqa: BLE001
+                on_progress(f"[{i}/{n_scenes}] {sid} 简笔画 {n} 失败: {exc}")
+                sketch_items.append({"index": n, "prompt": sp, "image_relpath": None,
+                                     "error": str(exc)})
+                sketch_fail += 1
+
+        item: dict[str, Any] = {"scene_id": sid, "prompt": prompt,
+                                "image_relpath": container_rel, "sketches": sketch_items}
+        if container_err:
+            item["error"] = container_err
+        items.append(item)
+
+    if ok == 0 and fail > 0:
+        raise RuntimeError(f"all {fail} scene image generations failed")
+
+    on_progress(
+        f"image 完成：容器 ok={ok} skipped={sk} failed={fail} · "
+        f"简笔画 ok={sketch_ok} failed={sketch_fail}"
+    )
+    return {
+        "items": items, "pictures_dir": str(out_dir), "pictures_count": ok + sk,
+        "ok": ok, "skipped": sk, "failed": fail,
+        "sketch_ok": sketch_ok, "sketch_failed": sketch_fail,
+    }
+
+
+def run_render_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) -> dict[str, Any]:
+    """RENDER：``render_015.run`` 出 1920x1080 MP4（依赖 episode + 04_tts/*.mp3 + 03_image/*.webp）。"""
+    jd = Path(job_dir)
+    episode_path = jd / "02_rw" / "episode.json"
+    if not episode_path.is_file():
+        raise ValueError("02_rw/episode.json missing; select an rw model first")
+    audio_dir = jd / "04_tts"
+    if not audio_dir.is_dir() or not any(audio_dir.glob("*.mp3")):
+        raise ValueError("04_tts/*.mp3 missing; run tts first")
+    picture_dir = jd / "03_image"
+    out_dir = jd / "06_render"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "output.mp4"
+
+    on_progress("启动 render_015（scene 整段合音）")
+    result = _render_run(
+        episode_path=str(episode_path),
+        audio_dir=str(audio_dir),
+        output_path=str(out_path),
+        picture_dir=str(picture_dir) if picture_dir.is_dir() else None,
+        workdir=str(out_dir / "_render_workdir"),
+        cleanup_workdir=True,
+        on_progress=on_progress,
+    )
+    return {
+        "video_relpath": f"06_render/{out_path.name}",
+        "output_path": result.get("output_path", str(out_path)),
+        "video_size_bytes": result.get("video_size_bytes"),
+        "workdir": result.get("workdir"),
+    }
+
+
+# 已真实复用的 015 performer。asr/rw（inputs.urls / profile / 4 模型 async）待下一 slice。
 PERFORMERS_015: dict[str, Callable[..., dict[str, Any]]] = {
     "lines": run_lines_step,
     "storyboard": run_storyboard_step,
+    "tts": run_tts_step,
+    "image": run_image_step,
+    "render": run_render_step,
 }
