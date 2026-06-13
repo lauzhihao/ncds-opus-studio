@@ -11,6 +11,10 @@ description = "Shared capability core for ncds-opus: primitives, templates, DAG 
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+# core primitive CLI（wst/tst/vid）；agent 子命令在 factory 的 `nof`
+nof-core = "ncds_opus_core.cli:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

@@ -1,46 +1,27 @@
-"""每个 command 的声明式参数 schema —— 给移动端/前端渲染输入表单用。
+"""factory 命令的声明式参数 schema（AGENT_SCHEMAS）+ 全集 get_schema。
 
 不做强校验：``POST /tasks/{cmd}`` 仍把 ``params`` 原样 spread 给 ``run(**params)``，
-保持 free-form 兼容。这里只是「字段说明书」，让 iPad / 手机 UI 知道每个命令该填什么、
-哪些必填、默认值是什么、是不是枚举。字段定义对齐各 commands/*.py 的 run() 签名。
+保持 free-form 兼容。这里只是「字段说明书」，让 iPad / 手机 UI 知道每个命令该填什么。
+
+二分（§9.4）：
+- core ``PRIMITIVE_SCHEMAS`` = wst/tst/vid/tts/render/render_015（在 ncds_opus_core）。
+- factory ``AGENT_SCHEMAS`` = 6 中国风 agent + asr + rw（本文件）。asr/rw UI ``group``
+  仍是 "primitive"，但命令归 factory，故 schema 在这边。
+- ``get_schema()`` 合并 AGENT + PRIMITIVE 暴露全集（``/commands`` 不丢字段）。
 
 字段 type 词表：
-    string   单行文本
-    text     多行文本（提示词 / 创作要求等）
-    int      整数
-    float    小数
-    bool     开关
-    string[] 字符串数组（逗号分隔或多输入框）
-    enum     从 enum 列表里选
+    string / text / int / float / bool / string[] / enum
+（``_f`` helper 由 core 提供，单点维护。）
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from ncds_opus_core.commands.schemas import PRIMITIVE_SCHEMAS, _f
 
-def _f(
-    name: str,
-    label: str,
-    type: str = "string",
-    *,
-    required: bool = False,
-    default: Any = None,
-    enum: list[str] | None = None,
-    help: str = "",
-) -> dict[str, Any]:
-    field: dict[str, Any] = {"name": name, "label": label, "type": type, "required": required}
-    if default is not None:
-        field["default"] = default
-    if enum:
-        field["enum"] = enum
-    if help:
-        field["help"] = help
-    return field
-
-
-# group: "agent"(中国风 agent 层) / "primitive"(底层命令)
-COMMAND_SCHEMAS: dict[str, dict[str, Any]] = {
+# factory 专属命令 schema（agent 层 + asr/rw）
+AGENT_SCHEMAS: dict[str, dict[str, Any]] = {
     # ───────────────────────── 中国风 agent 层 ─────────────────────────
     "guiguzi": {
         "label": "鬼谷子 · 选题官",
@@ -118,26 +99,7 @@ COMMAND_SCHEMAS: dict[str, dict[str, Any]] = {
             _f("avoid", "已发选题(逗号分隔)", "string", help="留空用脚本内置默认"),
         ],
     },
-    # ───────────────────────── 底层命令 ─────────────────────────
-    "wst": {
-        "label": "文生图", "group": "primitive", "summary": "gpt-image 文生图",
-        "fields": [_f("prompt", "提示词", "text", required=True)],
-    },
-    "tst": {
-        "label": "图生图", "group": "primitive", "summary": "gpt-image 参考图编辑",
-        "fields": [
-            _f("prompt", "提示词", "text", required=True),
-            _f("reference_images", "参考图", "string[]", required=True, help="本地路径或 URL"),
-        ],
-    },
-    "vid": {
-        "label": "视频生成", "group": "primitive", "summary": "文/图生视频",
-        "fields": [
-            _f("prompt", "提示词", "text", required=True),
-            _f("ref_image_urls", "参考图 URL", "string[]"),
-            _f("duration", "时长(秒)", "int", default=5),
-        ],
-    },
+    # ───────────────────────── factory primitive(asr/rw) ─────────────────────────
     "asr": {
         "label": "转写", "group": "primitive", "summary": "多链路转写",
         "fields": [_f("text", "输入", "text", required=True)],
@@ -146,36 +108,13 @@ COMMAND_SCHEMAS: dict[str, dict[str, Any]] = {
         "label": "改写", "group": "primitive", "summary": "双模型改写",
         "fields": [_f("docx_url", "文档 URL", "string", required=True)],
     },
-    "tts": {
-        "label": "配音", "group": "primitive", "summary": "CosyVoice 逐 beat 合成人声",
-        "fields": [
-            _f("beats", "逐句文本", "string[]", help="与 beats_path 二选一"),
-            _f("beats_path", "beats 文件", "string", help="与逐句文本二选一"),
-            _f("output_dir", "输出目录", "string", default="audio"),
-            _f("voice", "音色", "string", default="longtian_v3"),
-            _f("rate", "语速", "float", default=1.1),
-        ],
-    },
-    "render": {
-        "label": "合成成片", "group": "primitive", "summary": "puppeteer 录屏 + ffmpeg mux",
-        "fields": [
-            _f("html_url", "页面 URL", "string", required=True),
-            _f("audio_dir", "人声目录", "string", required=True),
-            _f("output_path", "输出 mp4 路径", "string", required=True),
-        ],
-    },
-    "render_015": {
-        "label": "合成成片(015)", "group": "primitive", "summary": "015 纸卡模板成片",
-        "fields": [
-            _f("episode_path", "episode.json 路径", "string", required=True),
-            _f("audio_dir", "人声目录", "string", required=True),
-            _f("output_path", "输出 mp4 路径", "string", required=True),
-            _f("picture_dir", "配图目录", "string"),
-        ],
-    },
 }
 
 
+# 向后兼容别名（P5 清）：全集 = factory AGENT + core PRIMITIVE。
+COMMAND_SCHEMAS: dict[str, dict[str, Any]] = {**PRIMITIVE_SCHEMAS, **AGENT_SCHEMAS}
+
+
 def get_schema(cmd: str) -> dict[str, Any] | None:
-    """返回某 command 的参数 schema；未登记返回 None。"""
-    return COMMAND_SCHEMAS.get(cmd)
+    """返回某 command 的参数 schema（全集：先 factory AGENT，后 core PRIMITIVE）；未登记 None。"""
+    return AGENT_SCHEMAS.get(cmd) or PRIMITIVE_SCHEMAS.get(cmd)

@@ -1,36 +1,29 @@
-"""命令注册表。
+"""命令注册表（factory 侧）。
 
-server.task_runner 通过 COMMAND_REGISTRY 反射调用每个 command 的 run 函数。
-新加命令时只需在这里追加一行（同时实现 commands/<name>.py 里的 run）。
+二分（§9.4）：
+- **core**：``PRIMITIVE_REGISTRY`` = wst/tst/vid/tts/render/render_015（纯能力，复用两端）。
+- **factory**：``AGENT_REGISTRY`` = 6 中国风 agent + asr + rw（含飞书/COS/skills 编排，
+  asr/rw 命令归 factory）。
+- ``build_full_registry()`` 合并两者，喂给 server.task_runner 反射拉起每个 run（口径不变）。
 
 签名约定（所有 command 一致）：
     def run(<参数>..., on_progress: ProgressFn = _noop, ...) -> dict[str, Any]
-
-tts / render 占位：Phase 1 后续步骤会补上对应的 commands/tts.py 与
-commands/render.py（重构自 templates/paper_card_talk/tts_gen.py 与 render.mjs）。
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from ncds_opus_core.commands.registry import PRIMITIVE_REGISTRY, RunFn
 
-from ncds_opus_factory.commands import asr, render, render_015, rw, tst, tts, vid, wst
-# 5 个中国风成片 agent + 卧龙(操盘手)；它们的 run() 同样遵守 run(...on_progress)->dict 契约，
-# 接进 registry 即可被 server.task_runner 异步拉起、进度走 SSE（移动端控制全厂的入口）。
+# asr/rw：factory 专属命令（studio 刻意绕开它们直接 spawn 底层引擎；这两个命令只被 cli +
+# 任务系统用 = factory 关切，含飞书/COS/skills 编排）。
+from ncds_opus_factory.commands import asr, rw
+# 5 个中国风成片 agent + 卧龙(操盘手)；run() 同样遵守 run(...on_progress)->dict 契约。
 from ncds_opus_factory.commands import boya, guiguzi, liuyong, shenkuo, wolong, wudaozi
 
-RunFn = Callable[..., dict[str, Any]]
-
-COMMAND_REGISTRY: dict[str, RunFn] = {
-    "wst": wst.run,
-    "tst": tst.run,
-    "vid": vid.run,
+# factory 专属命令表（asr/rw + agent 层）
+AGENT_REGISTRY: dict[str, RunFn] = {
     "asr": asr.run,
     "rw": rw.run,
-    "tts": tts.run,
-    "render": render.run,
-    "render_015": render_015.run,
-    # 中国风 agent 层
     "guiguzi": guiguzi.run,  # 选题官
     "liuyong": liuyong.run,  # 编剧 + 质检
     "wudaozi": wudaozi.run,  # 美术/视觉(剪影分镜)
@@ -40,4 +33,19 @@ COMMAND_REGISTRY: dict[str, RunFn] = {
 }
 
 
-__all__ = ["COMMAND_REGISTRY", "RunFn"]
+def build_full_registry() -> dict[str, RunFn]:
+    """core PRIMITIVE + factory AGENT 的合并全集，喂给 server.task_runner（口径不变）。"""
+    return {**PRIMITIVE_REGISTRY, **AGENT_REGISTRY}
+
+
+# 向后兼容别名（P5 清 shim 时删）：旧消费者仍可 import COMMAND_REGISTRY。
+COMMAND_REGISTRY: dict[str, RunFn] = build_full_registry()
+
+
+__all__ = [
+    "AGENT_REGISTRY",
+    "PRIMITIVE_REGISTRY",
+    "build_full_registry",
+    "COMMAND_REGISTRY",
+    "RunFn",
+]

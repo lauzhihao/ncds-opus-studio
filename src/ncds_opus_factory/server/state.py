@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ncds_opus_factory.commands import COMMAND_REGISTRY
+from ncds_opus_factory.commands import build_full_registry
 from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.mock_agents import maybe_mock_registry
 from ncds_opus_factory.server.pipeline_runner import PipelineRunner
@@ -30,5 +30,5 @@ STORE: TaskStore = TaskStore(STATE_DIR)
 LABELS: LabelStore = LabelStore(LABELS_DIR)
 # NOF_MOCK_AGENTS 控制哪些命令走 mock（测试期不真调 codex/opus）
 # labels 注入:cron 任务完成自动归档时由 runner 直接落案卷
-RUNNER: TaskRunner = TaskRunner(STORE, maybe_mock_registry(COMMAND_REGISTRY), labels=LABELS)
+RUNNER: TaskRunner = TaskRunner(STORE, maybe_mock_registry(build_full_registry()), labels=LABELS)
 PIPELINE_RUNNER: PipelineRunner = PipelineRunner(VIDEO_JOBS_DIR)
