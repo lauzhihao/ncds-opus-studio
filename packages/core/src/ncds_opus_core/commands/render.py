@@ -31,8 +31,9 @@ DEFAULT_RUNNER = HERE / "render_runner.mjs"
 DEFAULT_NODE_MODULES = os.environ.get("NOF_RENDER_NODE_PATH", "/tmp/node_modules")
 DEFAULT_TIMEOUT = int(os.environ.get("NOF_RENDER_TIMEOUT", "1800"))
 
-# render_runner.mjs 所在仓库根；ESM 解析从这里向上找 node_modules
-_REPO_ROOT = HERE.parents[2]  # commands → ncds_opus_factory → src → <repo>
+# core 包根（packages/core/，自带 package.json + node_modules，见 §9.2）；
+# render_runner.mjs 的 ESM 解析从其目录向上找 node_modules 即命中这里。
+_CORE_PKG_ROOT = HERE.parents[2]  # commands → ncds_opus_core → src → packages/core/
 
 
 def _ensure_node_modules_link(node_modules: Path) -> None:
@@ -41,7 +42,7 @@ def _ensure_node_modules_link(node_modules: Path) -> None:
     ESM 不读 NODE_PATH，也不看 cwd，只从 .mjs 文件目录向上找 node_modules。
     用 symlink 是最干净的桥接：用户已有真 node_modules 不会被覆盖。
     """
-    target = _REPO_ROOT / "node_modules"
+    target = _CORE_PKG_ROOT / "node_modules"
     if target.exists() or target.is_symlink():
         return
     target.symlink_to(node_modules)
