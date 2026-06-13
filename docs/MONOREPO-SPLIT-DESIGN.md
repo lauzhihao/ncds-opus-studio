@@ -1,5 +1,9 @@
 # Monorepo 拆分设计：core / studio / factory（薄核心）
 
+> ⛔ **已作废 / 转历史（2026-06-13）**：三包对等拆分方向被取代——见权威设计
+> **[PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)**（core 能力 → 一个生产引擎 → 两视图）。
+> **P1（抽 core）的成果保留**；本文档的 §9.1–9.6 仍是 P1 的 as-built 记录，有参考价值；P2+ 三包对等拆分**不做**。
+>
 > 状态：**v1 PLAN（2026-06-13）。等用户 "Go" 再实施，本文档只产计划、不含已落地代码。**
 > 产出方式：设计工作流（4 路分类/import 扫描 + 合成边界 + 2 视角对抗）。
 > 对抗总评：**循环依赖视角 `has-blockers` / 运行时契约视角 `needs-revision`**——2 个 BLOCKER

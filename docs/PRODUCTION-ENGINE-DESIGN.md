@@ -1,0 +1,304 @@
+# 统一生产引擎设计（core → 生产引擎 → 两视图）
+
+> 状态：**v1 DESIGN（2026-06-13）。用户已拍板方向、范围、首步路径，本文档是权威设计。**
+> **取代** [MONOREPO-SPLIT-DESIGN.md](MONOREPO-SPLIT-DESIGN.md) / [HANDOFF](MONOREPO-SPLIT-HANDOFF.md) /
+> [PATHS](MONOREPO-SPLIT-PATHS.md)（三包对等拆分作废，转历史）。**P1 抽 core 的成果全部保留。**
+> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线：**300 passed / 0 failed**。
+
+---
+
+## 0. 决策回顾（用户已拍板）
+
+**起因**：server 端长成两套并行运行时（web 的 `PipelineRunner` vs app 的 `TaskRunner`），且 web 把生产步骤
+复刻了一份，bridge 把两套塞进一个进程——"快失控"。三包对等拆分只解 bridge、反而把这个 fork 永久固化
+（P2 撞同名包冲突就是症状）。
+
+**洞察（用户提出，研究证实）**：两端底层是**同一件事**——一个"工作流实例"产出一个作品（视频）。
+`任务ID` 与 `作品ID` 是同一个东西的两个名字。web=作品/内容视角，app=agents/决策视角。
+
+**已定（2026-06-13）**：
+
+| # | 决策 | 选择 |
+|---|---|---|
+| D1 | 方向 | ✅ 放弃三包对等拆分；改 **core 能力 → 一个生产实例引擎 → 两视图 + app 外挂子系统** |
+| D2 | 发起 + 租户 | ✅ 用户发起（给链接/对标账号→卧龙派人）；**按用户隔离**（现无鉴权，schema 预留 `owner_id`，不挡死） |
+| D3 | 配方 | ✅ **多配方**：015 纸卡 / figure_talk 剪影各是一条 recipe；素材来源（生图 vs 沈括切素材）是步骤内策略 |
+| D4 | 介入模型 | ✅ **每步 = agent 先出草稿 + 人可选介入**（质量闸门，尤其挡贵步骤；人反馈回喂卧龙自学习）。web 介入=改内容，app 介入=批决策 |
+| D5 | **范围** | ✅ **全范围**：两端合一 **+ 补完 agent→render 闭环 + retro 自学习**（这条链历史上设计过 CONVERGENCE 但从没建完，见 §9） |
+| D6 | **首步路径** | ✅ **C：web 整条 pipeline 一次迁上引擎**（最快见效，风险最高；护城河=web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉） |
+
+---
+
+## 1. 目标架构
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│ core (ncds_opus_core, 已抽出)  纯能力 + PRIMITIVE_REGISTRY(6)            │
+│   wst/tst/vid/tts/render/render_015 + gpt_image + 模板015 + 中性 common   │
+└───────────────────────────────────────────────────────────────────────┘
+                     ▲ 单向依赖                  ▲ 单向依赖
+┌──────────────────────────────────┐  ┌────────────────────────────────────┐
+│ factory agents (ncds_opus_factory)│  │ ★ 生产引擎 production engine ★       │
+│  柳永/鬼谷子/吴道子/伯牙 = 步骤执行者  │  │  InstanceStore + InstanceRunner      │
+│  卧龙 = 编排 driver                │◄─┤  + Recipe 注册表 + 步骤生命周期       │
+│  + AGENT_REGISTRY(8)              │  │  + 介入点 + 分层 SSE                  │
+│  + app 子系统(采集/学习/验收/案卷)   │  │  靠 build_full_registry() 晚绑定派发  │
+└──────────────────────────────────┘  └────────────────────────────────────┘
+        ▲ 卧龙 driver 驱动                         ▲ web 手动 driver 驱动
+        │                                          │
+┌───────┴──────────┐                    ┌──────────┴───────────┐
+│ app 视图(决策)     │  同一批生产实例      │ web 视图(内容)         │
+│ 小屏·批 go/no-go  │ ◄────────────────► │ 大屏·改每步内容         │
+└──────────────────┘                    └──────────────────────┘
+```
+
+**包拓扑（务实，不再硬拆三包）**：物理上只有 **core 一个独立包**（P1 成果）；**生产引擎 + agents + 两视图路由
+都是根包 `ncds_opus_factory` 内的逻辑分层**（`server/engine/`、`commands/`、`server/routes/`）。
+不重新引入 P2 那种同名包物理拆分的痛。"分层"是模块边界，不是包边界。
+
+**关键机制——晚绑定派发（解掉"recipe 放哪会污染 core"）**：引擎不直接 import 任何 agent。Recipe 里每个步骤
+只写**字符串 key**（`cmd` / `agent` id），引擎通过 **`build_full_registry()`（P1.x 已建：6 core + 8 factory）**
+查表派发。因此引擎对 agents 零静态依赖，core 保持纯净，新增 agent/步骤只是往 registry 加一行。
+
+---
+
+## 2. 核心抽象
+
+一个**生产实例（ProductionInstance）= 一条 recipe 的一次执行**，由有序步骤构成，每步可挂草稿 + 人工介入点。
+`task` 与 `job` 收敛成 `instance`；`task_id`/`job_id` 收敛成 `instance_id`。
+
+```python
+# server/engine/types.py（新）
+
+class StepState(BaseModel):
+    step_id: str                  # "asr"/"rw"/"liuyong"/"wudaozi"/"tts"/"image"/"render"...
+    status: StepStatus            # 见 §4 状态机
+    task_id: str | None = None    # 该步在 InstanceRunner 里的执行体句柄
+    started_at: float | None = None
+    finished_at: float | None = None
+    progress: str = ""            # 最新进度文本（来自执行体 on_progress）
+    draft: dict | None = None     # agent 出的中间产物（review 前；web 可编辑）
+    draft_source: Literal["agent", "user"] = "agent"
+    decision: Literal["approved", "rejected", "pending"] | None = None
+    review: Review | None = None  # 人工审看记录（喂 label_store / retro）
+    outputs: dict = {}            # 定稿产物（review/edit 后）
+    config: dict = {}             # 该步运行参数（profile/quality/选中的 model 等）
+    error: str | None = None
+
+class InstanceMeta(BaseModel):
+    instance_id: str              # i_<ms>_<hex8>；兼容读旧 task_id/job_id
+    owner_id: str | None = None   # 多租户预留（演示=None / "demo"，生产由鉴权中间件填）
+    recipe_id: str                # "paper_card_talk_015" / "figure_talk" ...
+    recipe_version: str = "latest"
+    status: InstanceStatus        # pending/running/paused/completed/failed/cancelled
+    title: str = ""
+    created_at: str; updated_at: str
+    # 溯源（沿用 TaskMeta 语义，更通用）
+    source: TaskSource | None = None      # user/wolong/gate/cron/retro
+    driver: Literal["manual", "wolong"] = "manual"   # 谁在驱动这条实例
+    round_id: str | None = None           # 卧龙 driver 时关联 round
+    parent_instance_id: str | None = None
+    intent_key: str | None = None         # 派发幂等键
+
+class InstanceState(BaseModel):
+    meta: InstanceMeta
+    inputs: dict = {}             # input 节点初始数据（链接/对标账号/选题）
+    steps: dict[str, StepState]   # key=step_id
+    canvas_state: dict = {}       # web 画布布局（纯视图，不影响执行）
+    selected_choices: dict = {}   # step_id -> choice（如 rw 选了哪个 model）
+```
+
+Recipe（DAG 骨架，纯数据 + 字符串 key）：
+
+```python
+class RecipeStep(BaseModel):
+    step_id: str
+    label: str
+    cmd: str | None = None        # 命中 build_full_registry() 的 key（render_015/tts/...）
+    agent: str | None = None      # agent 步（liuyong/wudaozi/guiguzi/boya）；与 cmd 二选一或同源
+    deps: list[str] = []          # 前置步骤（拓扑约束，如 tts 依赖 storyboard 定稿）
+    expensive: bool = False       # 标"贵步骤"，driver 据此决定是否在它前面强制闸门
+    intervention: Literal["content_edit", "decision_only", None] = None
+    material_source: Literal["generated", "collected", None] = None  # figure_talk: collected
+
+class Recipe(BaseModel):
+    recipe_id: str
+    name: str; description: str
+    steps: list[RecipeStep]       # 有序
+    template_renderer: str        # "paper_card_talk_015"/"figure_talk"/"stickman"
+
+RECIPE_REGISTRY: dict[str, Recipe]   # 015、figure_talk … 引擎层维护
+```
+
+---
+
+## 3. 引擎 vs app 子系统 边界（研究共识）
+
+| 组件 | 裁定 | 说明 |
+|---|---|---|
+| web `_execute_{asr,rw,lines,storyboard,tts,image,render}` | **进引擎** | 全是生产步骤；render 早已共用 `render_015.run`。改成统一 step + 经 registry 派发 |
+| 柳永/鬼谷子/吴道子/伯牙 | **进引擎（作为步骤执行者）** | agents 就是步骤的 performer；recipe 按 id 晚绑定它们 |
+| `TaskStore` / `TaskRunner` / `EventBus`(SSE) | **进引擎** | 是统一 store/调度/事件的底层，扩展而非替换 |
+| `PipelineRunner` + `JobState` + `video-jobs/` | **退役** | 015 DAG 是一条 recipe 的特例；被 InstanceStore 的 recipe/steps 包容 |
+| **卧龙** | **保留为可插拔 driver** | 掌编排机械（状态推进/派发/事件消费），**决策权归人**（走 review 路由→rounds_gate）；与 web 手动 driver 并列 |
+| `rounds_gate` / `label_store` | **app 子系统** | 事件接线 + 案卷库（训练数据，独立于实例生命周期） |
+| 沈括(采集) / `subscriptions` / `planner` | **app 子系统** | 外围信号→补货，不在实例关键路径；独立协程 + 独立配额桶 |
+| `retro_trigger` / `wolong_retro`(自学习) | **app 子系统** | 离线学习闭环：done 战报 + 标注样本 → rubric → 下一轮注入 |
+| 介入点机制（content_edit / decision_only） | **引擎提供原语，driver 用** | 引擎给状态机+草稿+审看字段；闸门**逻辑**在 driver（卧龙 round / web 手动） |
+
+**纪律**：卧龙只掌编排，绝不内化决策；人决策一律经 review 路由进 `rounds_gate`。这条保证了"两个 driver"
+共用一套引擎而不互相渗透。
+
+---
+
+## 4. 步骤生命周期 + 介入点
+
+扩展状态机（统一 web 节点 + app 任务）：
+
+```
+idle → queued → running → draft_ready
+                              │
+              ┌───────────────┴───────────────┐
+        intervention=None              intervention!=None
+              │                               │
+            done                       awaiting_review
+                                              │
+                        ┌─────────────────────┼──────────────────────┐
+                   approved                 edited(web)            rejected
+                   (app 批)              (改 draft→user 源)        (打回)
+                        │                     │                      │
+                       done ◄────────── rerun/finalize          rework/skip
+```
+
+- **每步先出草稿**（`draft`），`intervention=None` 的步骤直接 `done`；有介入点的进 `awaiting_review`。
+- **web 介入 = `content_edit`**：改 `draft` 内容（beats / 文稿 / prompt），`draft_source="user"`，可触发该步重跑或直接定稿。
+- **app 介入 = `decision_only`**：`approved` / `rejected` + note，写 `review`，落 `label_store` 案卷（`reviewer=user` 才进训练集）。
+- **贵步骤闸门**：`expensive=true`（生图/tts/render）由 **driver** 在其前面插强制 `awaiting_review`——把低质内容挡在烧钱步骤之前（D4 的初衷）。闸门是 driver 策略，不是引擎硬规则（不同 recipe/round 可不同）。
+- **反馈回喂**：`review` + 定稿差异 → `label_store` → `retro` 学 rubric → 注入下一轮 `liuyong` brief / `prescreen`（§9）。
+
+---
+
+## 5. 多配方
+
+- Recipe = 有序 `RecipeStep`，每步绑 `cmd`/`agent`（字符串）、`expensive`、`intervention`、`material_source`。
+- **015 纸卡** 与 **figure_talk 剪影** 各表达成一条 recipe；`template_renderer` 指向对应渲染模板。
+- **素材来源**是步骤内策略：`material_source="generated"`（gpt-image 生图，015）vs `"collected"`（沈括切素材，figure_talk）——不冲突、按 recipe/step 配。
+- 新风格 = 新 recipe + 新 `template_renderer`，不动引擎。
+
+---
+
+## 6. 统一 store / id / 多租户
+
+布局（扩展现有 `state/tasks` 结构，不另起炉灶）：
+
+```
+state/instances/{instance_id}/
+├── meta.json                 # InstanceMeta
+├── inputs.json               # 全局输入
+├── canvas_state.json         # web 画布（纯视图）
+├── instance_events.jsonl     # 实例级事件
+└── steps/{step_id}/
+    ├── state.json            # StepState
+    ├── events.jsonl          # 步级事件（progress/draft/decision）
+    ├── draft.json            # 草稿（web 可改）
+    ├── outputs/              # 该步产物（替代 video-jobs/{job}/NN_*）
+    └── reviews/{review_id}.json
+state/wolong/labels/          # 案卷库（label_store，独立生命周期）
+state/recipes/                # recipe 定义（或内置代码）
+```
+
+- **instance_id** = `i_<ms>_<hex8>`；**兼容读**旧 `task_id`(`t_*`)/`job_id`(12-hex)：旧 URI（`GET /tasks/{id}`、`/jobs/{id}`）走兼容适配层映射到 instance，新流量走 `/instances/{id}`。
+- **多租户**：`owner_id` 入 schema（演示 `None`）；隔离由**路由中间件**校验（`auth_user != instance.owner_id → 403`）+ `list_instances(owner_filter)`，**不在 store 里硬编码鉴权**。生产接入鉴权后中间件填真 `owner_id`。
+
+---
+
+## 7. 分层 SSE / 两视图
+
+一条统一事件流，按 `level` 分层订阅：
+
+```
+event levels: meta(实例状态) | step(步骤状态/决策) | detail(progress/draft 微更新)
+app  订 ?level=meta,step          → 只看决策级，不被内容微更新刷屏
+web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支撑画布实时
+```
+
+- **web 视图**：画布 + 每步抽屉（rw 4 模型选稿 / lines beats 编辑 / storyboard 场景网格 / image·tts 预览重生 / preview iframe 原地改 episode.json）。是 `content_edit` 介入的载体。
+- **app 视图**：实例列表（作品=agents 产出物的另一种视角）+ 决策卡（approve/reject + note）。是 `decision_only` 介入的载体。
+- 同一批 instance，两视图看同一套 `steps` 状态；人的反馈都汇聚到 `rounds_gate`。
+
+---
+
+## 8. 两个 driver（编排策略可插拔）
+
+引擎只负责"执行一个步骤 + 维护实例/步骤状态 + 推事件"。**谁决定下一步跑什么 = driver**：
+
+- **manual driver（web）**：人在画布上点"跑这步 / 改这步 / 重生这步"，逐节点推进。`meta.driver="manual"`。
+- **wolong driver（app）**：卧龙派单→续跑循环消费 `rounds_gate` 事件自动推进，人只在闸门处 `decision_only`。`meta.driver="wolong"`，`round_id` 关联。
+
+两个 driver 调同一套 `InstanceRunner.run_step(instance_id, step_id, inputs)`。这正是"一套 runtime + 可插拔编排策略"。
+
+---
+
+## 9. 补完 agent→render 闭环 + retro 学习（D5 范围）
+
+**现实（研究实测）**：app 的卧龙 round 今天走到**成稿就停**；"成稿→成片"渲染段（旧 `CONVERGENCE` 设计的
+`job_driver.py`）**从没建**；`wolong.mode="retro"` 是 `NotImplementedError` 桩。真正能到 mp4 的只有 web 015 链。
+
+**本设计如何补完**（这是统一引擎的副产品红利，不再需要单独的 job_driver 把卧龙焊到 015 pipeline 上）：
+
+1. **agent→render**：卧龙 driver 的 round line 走完 柳永（成稿）→ 人验收 → **继续派 wudaozi（分镜）→ boya（声音）→ render**，
+   全部是同一引擎的步骤（同一 recipe 的后续步骤），不需要第二套渲染管线。round line 的 `instance_id`
+   就是那条生产实例。
+2. **retro 学习**：`retro_trigger`（夜间窗口 + 样本闸）→ 读 `label_store` 案卷 + done 战报 → opus 学 rubric →
+   `state/wolong/rubric/v{n}.md` → 注入下一轮 `liuyong` brief 与 `prescreen`。把现有桩补成实链。
+
+---
+
+## 10. 迁移分期（路径 C：web 整条上引擎；带检查点）
+
+> C 选了"最快见效、风险最高"。即便如此，**每个 milestone 都可验证、可回退**；护城河 = `main` 有 web 旧画布
+> 可跑副本，本 branch 不并 main 就毁不掉它。**每步退出标准必含"全量 pytest 不掉绿"。**
+
+| 期 | 做什么 | 退出标准（检查点） |
+|---|---|---|
+| **E0 引擎骨架** | 建 `server/engine/`：`types.py`(Instance/Step/Recipe) + `instance_store.py`(扩展 TaskStore 布局) + `instance_runner.py`(经 `build_full_registry()` 派发单步 + 状态机 + 分层 SSE)；`recipes.py` 把 015 表达成一条 Recipe。**先不接任何视图** | 引擎可独立跑通"建实例→跑 render 步（已共享）→出事件→落 store"；新单测覆盖状态机 + 晚绑定派发；pytest 绿 |
+| **E1 web 整条迁上引擎（C 的主刀）** | 把 `PipelineRunner._execute_*` 七步逐个改成"引擎步骤执行者"（asr/rw/lines/storyboard/tts/image 复用其现有实现，但纳入 step 生命周期 + 经 registry）；`routes/{jobs,pipelines,preview}` 重指引擎（`/instances` + 兼容 `/jobs`）；`web/` 前端走新 instance API（画布=内容视角） | **web 画布端到端冒烟**：贴链接→逐节点→出 mp4，与旧行为对齐；`content_edit`（改 beats/prompt）通；旧 `job_id` 兼容读通；pytest 绿；**`PipelineRunner` 退役** |
+| **E2 app driver 上引擎** | 卧龙 driver 调 `InstanceRunner.run_step`；`rounds_gate` 接 review→decision；`/tasks` 兼容读映射到 instance；app 决策视角订 `level=meta,step` | 卧龙 round 跑通到**成稿+验收**，task 兼容读通；app 子系统(采集/订阅/planner) 不动照常；pytest 绿 |
+| **E3 补完 agent→render** | round line 续到 wudaozi→boya→render（同引擎后续步骤）；figure_talk 作第二条 recipe 入 `RECIPE_REGISTRY` | 卧龙 driver **端到端出 mp4**（成稿→分镜→声音→成片）；多 recipe 可选；贵步骤闸门生效 |
+| **E4 retro 学习闭环** | 补 `retro_trigger`→`label_store`→opus rubric→注入 liuyong/prescreen 实链（去桩） | 标注样本攒够→夜间复盘出新 rubric→下一轮注入可观测；闭环跑通 |
+| **E5 收口** | 删 `JobState`/`PipelineRunner` 残留 + 旧 `/jobs` 双线 + `video-jobs` 迁 `state/instances`；更新 `.project_map` + 文档 | 全仓单运行时；两视图同源；冷启动 OK；pytest 全绿 |
+
+---
+
+## 11. 风险与缓解（研究的 blocker/major → 折入）
+
+| 严重度 | 风险 | 缓解 |
+|---|---|---|
+| BLOCKER | 过渡期 web/app 两套 state 并行，人介入窗口不对齐（web 改 episode.json vs app task.result 已定） | E1 先把 web 收进引擎单一 store；E2 再切 app；**任一时刻只有一处是"真相源"**，另一处兼容读 |
+| BLOCKER | `agent→render`、`retro` 是缺口/桩（旧 CONVERGENCE 没建完） | 明确列为 E3/E4 的**补能力**，不是搬代码（D5 已确认范围） |
+| MAJOR | `_execute_*` 复刻实现与命令签名不一致（spawn vs import、on_progress 回调） | E1 逐步迁、每步冒烟；保留各步现有实现体，只套进 step 生命周期，不重写算法 |
+| MAJOR | rw 4 模型可用性探测（`shutil.which`/env）在不同进程/环境下静默失败 | 探测结果入 `step.config` + 共享配置，不藏在节点里 |
+| MAJOR | preview 的 `regen_*` 在 DAG 之外原地改、不级联失效 | 显式建模为"微步骤"（step 内重生），与整步重跑区分；写 `draft` 触发下游 `stale` 标记 |
+| MAJOR | storyboard→tts 顺序依赖（tts 要 scene_id） | recipe `deps` 硬约束 + 引擎拓扑校验，driver 不能乱序派 |
+| MAJOR | render_015 是 Python 调用，并发下线程安全 | 引擎里 `to_thread`/子进程隔离跑贵步骤 |
+| MAJOR | 多租户后期加 `owner_id` 易漏校验→串户 | 中间件统一校验 + `list/get` 强制 `owner_filter`；演示期 `None` 直通 |
+| MINOR | recipe 版本 vs 旧实例 replay | `recipe_version` 钉在实例上，升级 recipe 不影响在跑实例 |
+
+---
+
+## 12. 与既有成果的关系
+
+- **P1（抽 core，6 primitive + runners + pipelines(DAG 类型) + 模板015 + registry/cli 二分）全部保留**——core 在本架构里是最底层能力，且 `build_full_registry()` 直接成为引擎的晚绑定派发表。
+- **MONOREPO-SPLIT 三包对等拆分作废**（P2+ 不做）；那三份文档转历史，本文档接任权威设计。
+- **基线 300 passed / 0 failed**；每个 E-期退出标准含"不掉绿"。
+- **操作安全网**：`main` 有 web 旧画布可跑副本；本 branch `claude/gallant-hellman-27de2a` 做重做，**不并 main**。
+
+---
+
+## 13. 仍需实施期确认的开放点（不阻塞 E0/E1）
+
+- recipe 定义放代码内置还是 `state/recipes/*.json`（E0 选）。
+- `instance_id` 是否保留 `t_<ms>` 时序形（便于按时间查）vs 纯 UUID。
+- opus/scodex 等 CLI 在高并发下是否要 per-account 串行队列（E1 压测时定）。
+- `figure_talk` 的 `material_source="collected"` 是 recipe 显式声明还是 wudaozi 内部选项（E3 定）。
+- 旧 `video-jobs/` 存量 job 冷迁移（新建走新树）vs 热迁移脚本（E5 定）。
