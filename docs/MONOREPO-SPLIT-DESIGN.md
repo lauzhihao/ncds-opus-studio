@@ -128,7 +128,7 @@ studio↔factory 互不 import。`schemas.py`（TaskMeta/Review/source/reviewer/
 |---|---|---|
 | **P0** | 建 `packages/{core,studio,factory}` + 各 `pyproject.toml` + 根 `[tool.uv.workspace]`；**先不挪代码**，仅打通 `uv sync` 三包 editable + pytest 聚合；产出所有 `parents[N]` 硬编码路径清单（state.py `parents[3]`、render_015 `parents[2]`、pipeline_runner 多处） | `uv sync` 成功；三空包可 import；现有 test 全绿；硬编码路径清单每条标注迁后改法 |
 | **M-mobile**（解耦，待定） | **不在主迁移序列里**。待另一 agent 的 iOS→Flutter 迁移落定后，把 `~/Documents/claude_traffic_light_flutter` 挪进 `mobile/`（与 `web/` 平级，不进 uv workspace，自带 `pubspec.yaml`）。本计划只占位、不执行 | `mobile/` 就位且 `flutter pub get` 通（由那条迁移收尾时做） |
-| **P1** | 抽 **core**：8 primitive + `scripts/*.mjs` 链(切 feishu 尾) + `pipelines/`(DAG) + `templates/paper_card_talk_015` + `gpt_image/`(从 repo 根收进 core) + 中性 common + `artifact_url.py` + `PRIMITIVE_REGISTRY/SCHEMAS` + core CLI | `ncds_opus_core` 独立 import；`grep -r 'server\|wolong\|shenkuo\|guiguzi' core/` **为空**；primitive 单测(render_015 复制模板/tts/asr-rw spawn) 通过 |
+| **P1** ✅ | 抽 **core**（**as-built 见 §9.1–9.5**，下列原文已被 §9.4 修正）：~~8~~ **6** primitive(wst/tst/vid/tts/render/render_015) + rewrite 引擎 4 `.mjs`(进 `core/runners/`，**feishu 切尾作废**、不动) + `pipelines/`(DAG) + `templates/paper_card_talk_015` + `gpt_image/` + 中性 common + `PRIMITIVE_REGISTRY/SCHEMAS` + core CLI(`nof-core`)。⚠️ asr/rw **命令**归 factory(§9.4)；`artifact_url.py` **不在 P1**、随 artifacts 三分挪到 **P4** | ✅ 达成：`ncds_opus_core` 独立 import；import-purity grep 空；全量 **300 passed / 0 failed**（9dce05c/89616d2/fdc9f2c/822ca72，boya 修复 4e5db49）|
 | **P2** | 拆 **factory**：6 agent + wolong_rounds/retro/prescreen + factory common(round_store/topic_store/…) + 009 templates + task/round 服务层 + `AGENT_REGISTRY/SCHEMAS` | `factory` agent 侧可 import；`grep 'pipeline_runner\|storyboard_director' factory/` 为空；对 core 仅单向 import |
 | **P3** | 拆 **studio**：pipeline_runner/storyboard_director/mock/dev_proxy + 画布 routes + `studio/server/state.py`(只 PIPELINE_RUNNER) + `web/` | `studio` 可 import；`grep 'task_runner\|rounds_gate\|wolong' studio/` 为空；pipeline 单测过；`web/dist` 路径解析正确 |
 | **P4** | 拆 **bridge 总装**：删旧 app.py/state.py，建两 `create_app` + artifacts 三分 + 两 `state`(env 强制)；**+ 对外形态 D1 落地** | 两 server 各自独立起；studio 进程内无 factory 协程、factory 进程内无 PIPELINE_RUNNER；各 `/artifacts` 只服务自己根；**单 origin 反代冒烟**(选 A)；端到端冒烟:画布建 job 出片 + 卧龙建 round 验收 |
@@ -229,3 +229,18 @@ core/studio editable 装入 venv、`nof-server` 入口完好。测试 **298 pass
 - **`PRIMITIVE_REGISTRY` 收为 6 个**：wst/tst/vid/tts/render/render_015（asr/rw 不在内）。
 - **余下一步**（engine 进 core 时）：factory 的 `rewrite_command_runner` 要 ESM import core 引擎——
   跨包相对路径 or npm workspace 按名解析，P1.6 收尾时定。studio 侧是 spawn-by-path（不受影响）。
+
+### 9.5 P1 收官 as-built（2026-06-13，已落地全绿）
+**P1 全部完成并 committed，全量 300 passed / 0 failed**（执行细节见
+[MONOREPO-SPLIT-HANDOFF.md](MONOREPO-SPLIT-HANDOFF.md) §2，各项带 commit）。
+
+| 增量 | commit | 落地 | 实测对原文的纠正 |
+|---|---|---|---|
+| **P1.6** rewrite 引擎进 core | `9dce05c` | 4 引擎 + 3 引擎 `.mjs` 测试 → `core/runners/`（新 `runner_path()`）；feishu 切尾作废（§9.4） | 消费者实为 **3**：~~studio 已非消费者（rw 节点改内联 4 模型）~~ + factory `liuyong.py:27`(spawn) + `video_job_worker.mjs:23`(ESM) + `rewrite_command_runner.mjs:18`(ESM)；后两者用跨包相对路径(P5 升 workspace) |
+| **P1.5** pipelines(DAG) 进 core | `89616d2` | `__init__/types/paper_card_talk_015` → `core/pipelines/`；老位置 package shim | 消费者实为 **3**：`pipeline_runner.py:38`/`mock.py:29`/`routes/pipelines.py:48`（原文漏列第 3 个） |
+| **P1.7** skills 路径修复 | `fdc9f2c` | `_execute_asr` 改 `core.common.paths.repo_root()` + `NOF_VIDEO_PIPELINE_SCRIPT` 兜底；**skills/ 留 repo 根**（§9.2） | factory 侧（shenkuo `skills/tingwu-asr`、`video_job_worker.mjs`）`parents[N]` 在 factory 内仍对，**留到 P2** |
+| **P1.x** registry/schemas/cli 二分 | `822ca72` | core `PRIMITIVE_REGISTRY/SCHEMAS`(6) + `nof-core`；factory `AGENT_REGISTRY`(8=6 agent+asr+rw) + `build_full_registry()` + `get_schema` merge；`COMMAND_REGISTRY/SCHEMAS` 留向后兼容别名 | schema 二分**按 §9.4 归属切（core 严格 6）、不按 `group` 字段**：asr/rw 的 `group="primitive"` 只是 UI 语义，命令归 factory |
+
+**与本节计划的两处务实偏离**（记录在案，避免 P2/P4 误判）：
+1. `core/server/artifact_url.py` **未在 P1 建**——它与 `artifacts.py` 三分耦合（§2 bridge 表），随 **P4** 一起做；§5 P1 行原列它属乐观估计。core 当前**无 `server/` 目录**。
+2. **shim 与 `*_test.py` 全留原位**（P5 才清）：老 `ncds_opus_factory.{pipelines,commands.wst,common.*,...}` 均有 `sys.modules` 转发 shim，旧 import 与 `COMMAND_REGISTRY` 照常工作。
