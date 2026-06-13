@@ -288,6 +288,21 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 | **E4 retro 学习闭环** | 补 `retro_trigger`→`label_store`→opus rubric→注入 liuyong/prescreen 实链（去桩） | 标注样本攒够→夜间复盘出新 rubric→下一轮注入可观测；闭环跑通 |
 | **E5 收口** | 删 `JobState`/`PipelineRunner` 残留 + 旧 `/jobs` 双线 + `video-jobs` 迁 `state/instances`；更新 `.project_map` + 文档 | 全仓单运行时；两视图同源；冷启动 OK；pytest 全绿 |
 
+### E0 as-built + E1 引擎 API 待补（E0 评审确认）
+**E0 已落地**（commit `b2e66e3` + 评审加固）：`server/engine/{types,recipes,instance_store,instance_runner}.py`
++ 12 单测；按实例 `asyncio.Lock` 串行化、配方自检（悬空 deps/环/重复）；全量 **312 passed**。
+E0 评审（3 lens + 对抗复核）确认两条已修（并发 run_step 竞态→加锁；配方校验），其余按 E0 范围
+（"不接 driver"）属**预期缺口**，是 **E1 必补的引擎 driver API**：
+
+- `approve_step(iid, step_id, decision, edited_draft=None, note=None)`：`awaiting_review`→定稿/打回（content_edit/decision_only 的出口，否则 awaiting_review 死锁）。
+- `get_step_output(iid, step_id)` + `get_runnable_steps(iid)`：driver 据 deps 找下一可跑步、装配上游产物→下游 `step_inputs`。
+- `reset_step(iid, step_id)`：重跑某步**级联 reset 下游**为 idle（改稿后下游失效）。
+- `finalize_instance(iid)`：据各步终态把 `meta.status` 置 `completed/failed`（现 E0 停在 `running`）。
+- `run_step(..., config=...)` + 落 `StepState.config`：承接运行期选择（如 rw 选模型）。
+- `GET /instances/{id}/events?level=…` SSE 路由 + `GET /instances` 列表（store 已有 `owner_id` 过滤，补 `status/recipe_id`）。
+- 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
+- 保留：SSE 满队列丢事件（与现 PipelineRunner 同款取舍，客户端 GET 全量重同步）。
+
 ---
 
 ## 11. 风险与缓解（研究的 blocker/major → 折入）

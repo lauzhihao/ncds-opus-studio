@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from ncds_opus_factory.commands import build_full_registry
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
@@ -76,7 +76,9 @@ class EngineEventBus:
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
-                # 慢消费者忽略；客户端可 GET 全量状态兜底
+                # 慢消费者丢事件（与既有 PipelineRunner.EventBus 同款取舍）：SSE 只作实时提示，
+                # 不是correctness 真源；客户端按 instance_id GET 全量状态兜底。E1 的 SSE 路由
+                # 应支持断点重连 + 全量重同步（见 PRODUCTION-ENGINE-DESIGN.md §7）。
                 pass
 
 
@@ -96,6 +98,7 @@ class InstanceRunner:
         self.registry = registry if registry is not None else build_full_registry()
         self.recipes = recipes if recipes is not None else RECIPE_REGISTRY
         self.bus = EngineEventBus()
+        self._locks: dict[str, asyncio.Lock] = {}
 
     # ------------------------------------------------------------ create
     def create_instance(
@@ -105,13 +108,33 @@ class InstanceRunner:
         **meta_kwargs: Any,
     ) -> InstanceState:
         recipe = self._recipe(recipe_id)
+        recipe.validate()  # 坏配方（重复 step_id / 悬空 deps / 成环）早抛
         meta = self.store.create(recipe_id, recipe.step_ids(), inputs, **meta_kwargs)
         state = self.store.get_state(meta.instance_id)
         assert state is not None  # 刚建必存在
         return state
 
     # ------------------------------------------------------------ run one step
+    def _lock_for(self, instance_id: str) -> asyncio.Lock:
+        # 同一实例的步骤串行化：防并发 run_step 对 meta 的 read-modify-write 竞态。
+        # 单事件循环内 dict get/set 之间无 await 间隙、天然原子，无需再锁这个 dict。
+        lock = self._locks.get(instance_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[instance_id] = lock
+        return lock
+
     async def run_step(
+        self,
+        instance_id: str,
+        step_id: str,
+        step_inputs: dict[str, Any] | None = None,
+    ) -> StepState:
+        """执行单步（**按实例串行化**，防并发步骤竞态）；执行细节见 _run_step。"""
+        async with self._lock_for(instance_id):
+            return await self._run_step(instance_id, step_id, step_inputs)
+
+    async def _run_step(
         self,
         instance_id: str,
         step_id: str,
@@ -194,7 +217,7 @@ class InstanceRunner:
         *,
         started_at: str | None = None,
         finished_at: str | None = None,
-        decision: str | None = None,
+        decision: Literal["approved", "rejected", "pending"] | None = None,
     ) -> None:
         if not can_transition(state.status, new):
             raise ValueError(f"illegal step transition {state.status!r} -> {new!r} ({state.step_id})")
@@ -204,7 +227,7 @@ class InstanceRunner:
         if finished_at is not None:
             state.finished_at = finished_at
         if decision is not None:
-            state.decision = decision  # type: ignore[assignment]
+            state.decision = decision
         self.store.write_step_state(instance_id, state)
         ev = InstanceEvent(
             instance_id=instance_id, ts=_now_ms(), level="step",

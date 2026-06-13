@@ -108,23 +108,40 @@ class Recipe(BaseModel):
         return [s.step_id for s in self.steps]
 
     def topological_order(self) -> list[str]:
-        """按 deps 的拓扑序返回 step_id（输入顺序作 tie-break）。"""
+        """按 deps 的拓扑序返回 step_id（输入顺序作 tie-break）。检测到环抛 ValueError。"""
         order: list[str] = []
-        seen: set[str] = set()
+        done: set[str] = set()
+        visiting: set[str] = set()
         by_id = {s.step_id: s for s in self.steps}
 
         def visit(sid: str) -> None:
-            if sid in seen:
+            if sid in done:
                 return
+            if sid in visiting:
+                raise ValueError(f"recipe {self.recipe_id} 步骤依赖成环（在 {sid}）")
+            visiting.add(sid)
             for dep in by_id[sid].deps:
                 if dep in by_id:
                     visit(dep)
-            seen.add(sid)
+            visiting.discard(sid)
+            done.add(sid)
             order.append(sid)
 
         for s in self.steps:
             visit(s.step_id)
         return order
+
+    def validate(self) -> None:
+        """配方自检：step_id 唯一、deps 都指向已存在步骤、DAG 无环。坏配方早抛、别等运行时。"""
+        ids = [s.step_id for s in self.steps]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"recipe {self.recipe_id} 有重复 step_id")
+        id_set = set(ids)
+        for s in self.steps:
+            for dep in s.deps:
+                if dep not in id_set:
+                    raise ValueError(f"recipe {self.recipe_id} 步骤 {s.step_id} 依赖了不存在的 {dep}")
+        self.topological_order()  # 触发环检测
 
 
 # ---------------------------------------------------------------------------

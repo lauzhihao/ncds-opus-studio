@@ -10,6 +10,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from ncds_opus_factory.commands import build_full_registry
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
@@ -197,3 +199,58 @@ def test_default_runner_real_015_create_and_passthrough(tmp_path: Path):
     st = asyncio.run(runner.run_step(iid, "input"))
     assert st.status == "done"
     assert runner.store.get_step_state(iid, "input").status == "done"
+
+
+# --------------------------------------------------------------------------- #
+# 10) 配方自检：悬空 deps / 成环 / 重复 step_id 早抛；015 通过
+# --------------------------------------------------------------------------- #
+def test_recipe_validate_rejects_bad_recipes():
+    PAPER_CARD_TALK_015.validate()  # 内置配方应通过，不抛
+
+    dangling = Recipe(recipe_id="d", name="x",
+                      steps=[RecipeStep(step_id="a", deps=["nope"])])
+    with pytest.raises(ValueError, match="不存在"):
+        dangling.validate()
+
+    cyclic = Recipe(recipe_id="c", name="x", steps=[
+        RecipeStep(step_id="a", deps=["b"]),
+        RecipeStep(step_id="b", deps=["a"]),
+    ])
+    with pytest.raises(ValueError, match="成环"):
+        cyclic.validate()
+
+    dup = Recipe(recipe_id="dup", name="x",
+                 steps=[RecipeStep(step_id="a"), RecipeStep(step_id="a")])
+    with pytest.raises(ValueError, match="重复"):
+        dup.validate()
+
+
+def test_create_instance_validates_recipe(tmp_path: Path):
+    bad = Recipe(recipe_id="bad", name="x",
+                 steps=[RecipeStep(step_id="a", deps=["ghost"])])
+    store = InstanceStore(tmp_path / "instances")
+    runner = InstanceRunner(store, registry={}, recipes={"bad": bad})
+    with pytest.raises(ValueError):
+        runner.create_instance("bad")
+
+
+# --------------------------------------------------------------------------- #
+# 11) 并发 run_step 同一实例（不同步）：按实例锁串行化，两步都完成、不死锁、meta 一致
+# --------------------------------------------------------------------------- #
+def test_concurrent_run_step_same_instance_serializes(tmp_path: Path):
+    runner = _runner(tmp_path)
+    iid = runner.create_instance("t").meta.instance_id
+
+    async def _both():
+        return await asyncio.gather(
+            runner.run_step(iid, "work", step_inputs={"x": 1}),
+            runner.run_step(iid, "gated", step_inputs={"y": 2}),
+        )
+
+    work, gated = asyncio.run(_both())
+    assert work.status == "done"
+    assert gated.status == "awaiting_review"
+    # 两步落盘一致，meta 没被竞态写坏
+    assert runner.store.get_step_state(iid, "work").status == "done"
+    assert runner.store.get_step_state(iid, "gated").status == "awaiting_review"
+    assert runner.store.get_meta(iid).status == "running"
