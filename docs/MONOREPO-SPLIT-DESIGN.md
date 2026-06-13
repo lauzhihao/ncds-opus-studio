@@ -209,3 +209,19 @@ core/studio editable 装入 venv、`nof-server` 入口完好。测试 **298 pass
 建文档/发消息调用），只留改写逻辑 + stdout JSON（符合 AGENTS.md"命令不发飞书、只 on_progress"）。
 `feishu_sdk_adapter.mjs` / `lark_cli.mjs` / `video_job_worker.mjs` 等飞书 IO / 老 bot 流**不进 core**，
 留 factory（或 repo 根 legacy）。
+
+### 9.4 as-built 纠正：asr/rw 命令归 factory，只 rewrite 引擎进 core（2026-06-13，用户确认）
+深入 `.mjs` 排查（[pipeline_runner.py:1194](../src/ncds_opus_factory/server/pipeline_runner.py:1194)
+注释为铁证）**推翻了规划的"asr/rw = core primitive"**：studio **刻意绕开命令包装**，直接 spawn
+底层引擎（asr 用 `skills/video_pipeline.py`、rw 用 `content_rewrite_runner.mjs`）；`asr.py`/`rw.py`
+命令只被 cli + 任务系统用 = **factory 专属**。已查 `asr.py → asr_command_runner → video_job_worker`
+牵连 feishu + skills + 腾讯 COS，全是 factory 关切。
+**✅ 裁定**：
+- **core**：rewrite 引擎 `content_rewrite_runner + video_rewrite_runner + rewrite_profiles +
+  douyin_cog_kernel`（**无 feishu**，studio rw 节点 spawn + factory rw 命令 import 共用）。
+- **factory**：`asr.py/rw.py` 命令 + `asr_command_runner/rewrite_command_runner/video_job_worker/
+  feishu_sdk_adapter/lark_cli`（含 feishu/老 bot/COS/skills 编排）。
+- **§9.3 的"切 feishu 尾"作废**：`rewrite_command_runner` 留 factory，feishu→factory 天然合法。
+- **`PRIMITIVE_REGISTRY` 收为 6 个**：wst/tst/vid/tts/render/render_015（asr/rw 不在内）。
+- **余下一步**（engine 进 core 时）：factory 的 `rewrite_command_runner` 要 ESM import core 引擎——
+  跨包相对路径 or npm workspace 按名解析，P1.6 收尾时定。studio 侧是 spawn-by-path（不受影响）。
