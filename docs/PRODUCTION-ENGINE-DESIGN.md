@@ -3,7 +3,7 @@
 > 状态：**v1 DESIGN（2026-06-13）。用户已拍板方向、范围、首步路径，本文档是权威设计。**
 > **取代**已归档的三包拆分系列（[archive/](archive/)：MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS} +
 > CONVERGENCE-DESIGN）——三包对等拆分作废、转历史；**P1 抽 core 的成果全部保留**。
-> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 312 → E1-a driver API 后 336 → E1-b1 /instances 路由后 **359 passed**）。
+> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 312 → E1-a driver API 后 336 → E1-b1 /instances 路由后 359 → E1-b2 slice-1 后端验证后 **363 passed**）。
 
 ---
 
@@ -314,9 +314,15 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 
 **E1-b1 范围取舍（b2 补）**：`/run` 同步 await（贵步骤后台派发待 b2）；SSE 只推 meta/step（detail/progress 走 jsonl、tail-merge 待 b2）。
 
+**E1-b2 slice-1 后端验证已落地**（纯增量、hermetic；全量 **363 passed**）：
+- `server/engine/pipeline_performers_015.py`：把 web `_execute_lines`/`_execute_storyboard` 的 opus 结构化算法**原样复用**成引擎 step-performer（经 `_opus_structure` 间接层可注入桩；保留 `video-jobs/` + 共享 `02_rw/episode.json` 耦合，去掉 PipelineRunner 的 self.* 状态管理交引擎接管）。
+- 集成测试 `test_pipeline_performers_015.py`：引擎按真实 015 拓扑（rw/lines/storyboard/preview 四道 `content_edit` 闸门经 `approve_step` 放行）驱动 lines/storyboard 真实 performer + asr/rw/tts/image/render 桩，经共享 episode.json **端到端出 mp4**——证明引擎能编排真实 015 链 + 文件系统耦合 + 闸门，不依赖真 opus/node/ffmpeg/015 样例素材。
+- 评审加固：补回 storyboard `groups_count`（与 web `StoryboardOutputs` 契约对齐）；e2e 闸门断言改 load-bearing（断真正 fire 的 content_edit 步 == recipe 声明集，删任一 intervention 即变红）。
+
 **E1-b2 仍待补**（路径 C 高风险段，下一步）：
-- web `PipelineRunner._execute_*` 七步迁成引擎步骤执行者 + `routes/{jobs,pipelines,preview}` 重指引擎 + 前端走新 instance API（画布=内容视角）。
-- 贵步骤后台派发 + detail 级 SSE（jsonl tail-merge，给 web 画布逐字进度）。
+- asr/rw/tts/image/render 真实算法包装（含 video_pipeline/tts_gen/render.mjs 子进程、4 模型 rw）—— 抽 PipelineRunner 实例方法成 performer。
+- 全局 015 recipe 的 lines/storyboard 绑 cmd 到新 performer（slice-1 用注入 registry 验证、未动全局 recipe）。
+- web `routes/{jobs,pipelines,preview}` 重指引擎 + 前端走新 instance API（画布=内容视角）+ 贵步骤后台派发 + detail 级 SSE（jsonl tail-merge，给 web 画布逐字进度）。
 - 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
 - 保留：SSE 满队列丢事件（与现 PipelineRunner 同款取舍，客户端 GET 全量重同步）。
 
@@ -342,7 +348,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 
 - **P1（抽 core，6 primitive + runners + pipelines(DAG 类型) + 模板015 + registry/cli 二分）全部保留**——core 在本架构里是最底层能力，且 `build_full_registry()` 直接成为引擎的晚绑定派发表。
 - **MONOREPO-SPLIT 三包对等拆分作废**（P2+ 不做）；那三份文档转历史，本文档接任权威设计。
-- **基线随实施推进（E1-b1 /instances 路由后 359 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
+- **基线随实施推进（E1-b2 slice-1 后端验证后 363 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
 - **操作安全网**：`main` 有 web 旧画布可跑副本；本 branch `claude/gallant-hellman-27de2a` 做重做，**不并 main**。
 
 ---

@@ -8,8 +8,9 @@
 （agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（取代早先的"core/studio/factory 三包对等拆分"）。
 
 进度：**P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）；
-**E0 引擎骨架 + E1-a driver API + E1-b1 /instances HTTP 路由已落地**（`src/ncds_opus_factory/server/engine/` 全套 driver 原语
-+ `routes/instances.py` 暴露为 HTTP + 两轮评审加固，359 passed）；**下一步 E1-b2**=web `PipelineRunner` 七步迁上引擎 + 路由切换 + 前端走新 API（见设计 §10，风险高那段）。
+**E0 引擎骨架 + E1-a driver API + E1-b1 /instances 路由 + E1-b2 slice-1（lines/storyboard 真实 performer + 引擎驱动真实 015 链端到端出 mp4 验证）已落地**
+（`src/ncds_opus_factory/server/engine/` 全套 driver 原语 + `routes/instances.py` + `pipeline_performers_015.py` + 多轮评审加固，363 passed）；
+**下一步 E1-b2 续**=asr/rw/tts/image/render 真实包装 + 全局 recipe 绑定 + 路由/前端切换（见设计 §10，风险高那段）。
 ⚠️ 护城河：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
 
 ## 活文档（current）
