@@ -1,9 +1,9 @@
 # 统一生产引擎设计（core → 生产引擎 → 两视图）
 
 > 状态：**v1 DESIGN（2026-06-13）。用户已拍板方向、范围、首步路径，本文档是权威设计。**
-> **取代** [MONOREPO-SPLIT-DESIGN.md](MONOREPO-SPLIT-DESIGN.md) / [HANDOFF](MONOREPO-SPLIT-HANDOFF.md) /
-> [PATHS](MONOREPO-SPLIT-PATHS.md)（三包对等拆分作废，转历史）。**P1 抽 core 的成果全部保留。**
-> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线：**300 passed / 0 failed**。
+> **取代**已归档的三包拆分系列（[archive/](archive/)：MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS} +
+> CONVERGENCE-DESIGN）——三包对等拆分作废、转历史；**P1 抽 core 的成果全部保留**。
+> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 **312 passed**）。
 
 ---
 

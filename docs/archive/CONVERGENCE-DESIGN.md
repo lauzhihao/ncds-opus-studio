@@ -4,8 +4,8 @@
 > 产出方式：设计工作流（4 路接口查实 + 3 套方案 + 评审合成 + 3 视角对抗）。对抗发现的
 > 2 个普适 BLOCKER + 1 个目标级 BLOCKER + 6 个 MAJOR 已折进 §2/§4/§5。三视角总评均为
 > `needs-revision`（计划方向成立、需加固），非 `has-blockers`。
-> 前置阅读：[WOLONG-DESIGN.md](WOLONG-DESIGN.md)（round 编排 / 闸门 / 离线学习）、
-> [FRONTEND-API.md](FRONTEND-API.md)（各 agent 脾气 / artifact 渲染）。
+> 前置阅读：[WOLONG-DESIGN.md](../WOLONG-DESIGN.md)（round 编排 / 闸门 / 离线学习）、
+> [FRONTEND-API.md](../FRONTEND-API.md)（各 agent 脾气 / artifact 渲染）。
 
 ---
 

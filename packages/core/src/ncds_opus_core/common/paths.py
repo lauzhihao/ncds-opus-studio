@@ -4,7 +4,7 @@
 向上找标记；运行时产物根（state/ video-jobs/）一律以 `NOF_*_DIR` env 为准，import 期
 default 仅作本地裸跑兜底。包内资源（templates 等）改用 `importlib.resources`，不从仓库根重拼。
 
-详见 docs/MONOREPO-SPLIT-PATHS.md。
+详见 docs/archive/MONOREPO-SPLIT-PATHS.md。
 """
 
 from __future__ import annotations

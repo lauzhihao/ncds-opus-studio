@@ -1,7 +1,7 @@
 # P1 续作交接（monorepo 拆分 · 给接手 agent 的 runbook）
 
 > ⛔ **方向已转（2026-06-13）**：三包对等拆分作废，§3 的 P2 交底**不再执行**。权威设计转
-> **[PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)**（统一生产引擎 + 两视图）。
+> **[PRODUCTION-ENGINE-DESIGN.md](../PRODUCTION-ENGINE-DESIGN.md)**（统一生产引擎 + 两视图）。
 > 本文档 §0–§2 仍是 P1（已完成、300/0）的真实 as-built 记录，保留参考。
 
 > 状态：**2026-06-13。P1 全部完成并 committed（P0 + P1.1–P1.7 + P1.x），全量 300 passed / 0 failed。**

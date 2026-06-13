@@ -1,7 +1,7 @@
 # Monorepo 拆分设计：core / studio / factory（薄核心）
 
 > ⛔ **已作废 / 转历史（2026-06-13）**：三包对等拆分方向被取代——见权威设计
-> **[PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)**（core 能力 → 一个生产引擎 → 两视图）。
+> **[PRODUCTION-ENGINE-DESIGN.md](../PRODUCTION-ENGINE-DESIGN.md)**（core 能力 → 一个生产引擎 → 两视图）。
 > **P1（抽 core）的成果保留**；本文档的 §9.1–9.6 仍是 P1 的 as-built 记录，有参考价值；P2+ 三包对等拆分**不做**。
 >
 > 状态：**v1 PLAN（2026-06-13）。等用户 "Go" 再实施，本文档只产计划、不含已落地代码。**
@@ -9,7 +9,7 @@
 > 对抗总评：**循环依赖视角 `has-blockers` / 运行时契约视角 `needs-revision`**——2 个 BLOCKER
 > + 6 个 MAJOR 已折入 §3/§4/§5/§6；另有 **2 个决策须你拍板**（§0）。
 > 取代 [CONVERGENCE-DESIGN.md](CONVERGENCE-DESIGN.md)（收敛方向已被"拆开"取代，该文档留作
-> "为什么收敛很难"的证据）。前置阅读：[FRONTEND-API.md](FRONTEND-API.md)、[FEISHU-REFACTOR.md](FEISHU-REFACTOR.md)。
+> "为什么收敛很难"的证据）。前置阅读：[FRONTEND-API.md](../FRONTEND-API.md)、[FEISHU-REFACTOR.md](../FEISHU-REFACTOR.md)。
 
 ---
 
@@ -24,7 +24,7 @@
 |---|---|---|
 | D1 | **对外形态** | ✅ **A：顶层反代把 8810(studio)+8811(factory) 合并回单 origin**，iOS/Flutter base URL / `/openapi.json` 不变、端上零改动（§3） |
 | D2 | **飞书边界** | ✅ **A：整条 `scripts/*.mjs` 链留 core 不拆 + 切掉 feishu IO 尾**，runner 只走 `on_progress` 回调（对齐 AGENTS.md"命令不发飞书" + FEISHU-REFACTOR，借拆分清历史债）（§4） |
-| D3 | **app 前端拓扑** | ✅ **目标：Flutter app 进 monorepo 作 factory 前端**（`mobile/`），与 `web/` 之于 studio 对称；**不**把 factory 搬出去——那会把 core↔factory 紧耦合代码缝变跨仓、抵消 monorepo 初衷。**⚠️ "挪进来"动作暂缓**：另一 agent 正在 `~/Documents/claude_traffic_light_flutter` 做 iOS→Flutter 迁移设计，该目录由其负责，**本计划不碰它**；relocation 从 P0 解耦，待其迁移落定后单独执行（§5 M-mobile）。**协调点**：factory 对外 OpenAPI 契约（[FRONTEND-API.md](FRONTEND-API.md)）必须保持稳定，那是该 Flutter 迁移的消费目标——D1 单 origin 反代正是为此 |
+| D3 | **app 前端拓扑** | ✅ **目标：Flutter app 进 monorepo 作 factory 前端**（`mobile/`），与 `web/` 之于 studio 对称；**不**把 factory 搬出去——那会把 core↔factory 紧耦合代码缝变跨仓、抵消 monorepo 初衷。**⚠️ "挪进来"动作暂缓**：另一 agent 正在 `~/Documents/claude_traffic_light_flutter` 做 iOS→Flutter 迁移设计，该目录由其负责，**本计划不碰它**；relocation 从 P0 解耦，待其迁移落定后单独执行（§5 M-mobile）。**协调点**：factory 对外 OpenAPI 契约（[FRONTEND-API.md](../FRONTEND-API.md)）必须保持稳定，那是该 Flutter 迁移的消费目标——D1 单 origin 反代正是为此 |
 
 定调：**两个产品各自全栈（studio=后端+`web/`，factory=后端+`mobile/`）、都在同仓**；产品形态在
 后端隔离，但对外仍一个入口——最贴合"产品隔离、能力复用"的本意。
@@ -72,7 +72,7 @@ studio↔factory 互不 import。`schemas.py`（TaskMeta/Review/source/reviewer/
 
 ## 3. 两个 server + 对外形态〔BLOCKER D1〕
 
-**问题**：[FRONTEND-API.md](FRONTEND-API.md) 通篇单 base（8810）、明示"端点签名真源=`/openapi.json`"，
+**问题**：[FRONTEND-API.md](../FRONTEND-API.md) 通篇单 base（8810）、明示"端点签名真源=`/openapi.json`"，
 即**一份 OpenAPI 覆盖两端全部端点**；web SPA 的 vite proxy 也把 8 个前缀全转单后端。拆成
 8810+8811 后，iOS base URL、`/openapi.json`、dev proxy 全断。
 
@@ -116,7 +116,7 @@ studio↔factory 互不 import。`schemas.py`（TaskMeta/Review/source/reviewer/
 - **选项 A（推荐）**：整条 `scripts/*.mjs` 链**留 core、不拆**（一个 `.mjs` 目录跟一个包走，
   彻底消除 `.mjs` 跨包 import 问题）+ **切掉 feishu IO 尾**：runner 不再 `import feishu_sdk_adapter`，
   改为只走 `on_progress` 回调把状态吐给调用方（**正是 AGENTS.md 设计原则**："命令本身不知道
-  发飞书消息"）。这与 [FEISHU-REFACTOR.md](FEISHU-REFACTOR.md) 既定方向一致，是借拆分清历史债。
+  发飞书消息"）。这与 [FEISHU-REFACTOR.md](../FEISHU-REFACTOR.md) 既定方向一致，是借拆分清历史债。
 - **选项 B**：asr/rw + 其 `.mjs` 整体下放某产品，core 不含 asr/rw——但这违背"两端都用"的事实，
   会逼另一端反向依赖，不推荐。
 
