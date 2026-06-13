@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_core.templates import template_dir as _template_dir
-from ncds_opus_factory.pipelines import PIPELINE_REGISTRY, PipelineDef, get_pipeline
+from ncds_opus_core.pipelines import PIPELINE_REGISTRY, PipelineDef, get_pipeline
 from ncds_opus_factory.server import storyboard_director
 
 logger = logging.getLogger(__name__)

@@ -45,7 +45,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from ncds_opus_factory.pipelines import PIPELINE_REGISTRY
+from ncds_opus_core.pipelines import PIPELINE_REGISTRY
 from ncds_opus_factory.server.state import PIPELINE_RUNNER
 
 logger = logging.getLogger(__name__)

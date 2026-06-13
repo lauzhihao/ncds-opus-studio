@@ -21,7 +21,7 @@ DAG 形态（线性 10 节点）：
 
 from __future__ import annotations
 
-from ncds_opus_factory.pipelines.types import NodePosition, PipelineDef, PipelineNode
+from ncds_opus_core.pipelines.types import NodePosition, PipelineDef, PipelineNode
 
 PIPELINE = PipelineDef(
     id="paper_card_talk_015",

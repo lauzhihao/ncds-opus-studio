@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ncds_opus_factory.pipelines import get_pipeline
+from ncds_opus_core.pipelines import get_pipeline
 from ncds_opus_factory.server.pipeline_runner import (
     JobState,
     NodeState,
