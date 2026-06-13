@@ -20,7 +20,8 @@ import {
   uploadDriveFile as uploadDriveFileWithCli,
   writeMarkdownToDocx,
 } from './feishu_sdk_adapter.mjs';
-import { runCodexCli, getDefaultCodexCliPath } from './video_rewrite_runner.mjs';
+// rewrite 引擎已迁入 ncds_opus_core.runners（P1.6）；跨包 ESM 相对路径（P5 升 npm workspace 按包名解析）
+import { runCodexCli, getDefaultCodexCliPath } from '../packages/core/src/ncds_opus_core/runners/video_rewrite_runner.mjs';
 
 // 精华分析使用 gpt-5.5，统一在 ASR 阶段产出爆款洞察文档；多模型改写在 /rw 命令中独立执行。
 const HIGHLIGHT_MODEL = 'gpt-5.5';

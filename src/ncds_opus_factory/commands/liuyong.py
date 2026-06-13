@@ -3,7 +3,7 @@
 输入一个"选题"(一句话想法)，按 douyin_cog 内核(爆款骨架 v2 + 选题公式 + 反模式)
 从零创作一条不糙的认知口播脚本。
 
-复用 scripts/content_rewrite_runner.mjs(双模型 + profile 编排)，不碰飞书：
+复用 ncds_opus_core.runners 的 content_rewrite_runner.mjs(双模型 + profile 编排)，不碰飞书：
 直接喂 sourceText=选题、targetProfile=douyin_cog，本地产出 draft。
 """
 
@@ -20,11 +20,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ncds_opus_core.runners import runner_path
 from ncds_opus_factory.common import ai_taste, quality_rubric, rubric_store
 from ncds_opus_factory.common.node_runtime import resolve_node
 
 ROOT = Path(__file__).resolve().parents[3]
-RUNNER = ROOT / "scripts" / "content_rewrite_runner.mjs"
+# rewrite 引擎已迁入 ncds_opus_core.runners（P1.6）；用 core 定位器取，不再从 repo 根拼 scripts/
+RUNNER = runner_path("content_rewrite_runner.mjs")
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("NOF_OGILVY_TIMEOUT", "1800"))
 
 ProgressFn = Callable[[str], None]

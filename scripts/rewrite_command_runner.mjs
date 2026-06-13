@@ -15,7 +15,8 @@ import {
   setOrgEditablePermission,
   writeMarkdownToDocx,
 } from './feishu_sdk_adapter.mjs';
-import { runContentRewrite } from './content_rewrite_runner.mjs';
+// rewrite 引擎已迁入 ncds_opus_core.runners（P1.6）；跨包 ESM 相对路径（P5 升 npm workspace 按包名解析）
+import { runContentRewrite } from '../packages/core/src/ncds_opus_core/runners/content_rewrite_runner.mjs';
 
 const defaultWorkspaceDir = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
