@@ -60,8 +60,10 @@ IGNORE_DIRS = {
 }
 
 POLL_INTERVAL_SECONDS = 3.0
-# 检测到变化后再等 DEBOUNCE 秒才真正跑，吸收连续保存
-DEBOUNCE_SECONDS = 1.5
+# 变更"停止"后再静默等待 DEBOUNCE 秒才重生成（quiet-period 去抖）：
+# 只要还在连续保存就不断刷新计时器，直到彻底停手满 30s 才跑一次，
+# 避免编辑途中反复重跑、也保证每个 agent 拿到的是最终态地图
+DEBOUNCE_SECONDS = 30.0
 
 _running = True
 
@@ -161,7 +163,8 @@ def main() -> int:
 
     _log(f"watchdog starting; root={PROJECT_ROOT}")
     _run_map()
-    last = _scan_snapshot()
+    last = _scan_snapshot()       # 上次重生成时的基线快照
+    prev = last                   # 上一轮轮询的快照，用来判断"是否还在变更中"
     _log(f"initial snapshot: {len(last)} tracked files")
 
     pending_since: float | None = None
@@ -174,22 +177,25 @@ def main() -> int:
             _log(f"scan error: {e!r}")
             continue
 
-        if current != last:
-            if pending_since is None:
-                pending_since = time.monotonic()
-            elif time.monotonic() - pending_since >= DEBOUNCE_SECONDS:
+        if current != prev:
+            # 还在变更：刷新静默计时器，等彻底停手再重生成
+            pending_since = time.monotonic()
+            prev = current
+            continue
+
+        # 自上一轮以来没有新变化 —— 进入静默期，停手满 DEBOUNCE 秒才跑
+        if current != last and pending_since is not None:
+            if time.monotonic() - pending_since >= DEBOUNCE_SECONDS:
                 added = len(current.keys() - last.keys())
                 removed = len(last.keys() - current.keys())
                 changed = sum(
                     1 for k in current.keys() & last.keys()
                     if current[k] != last[k]
                 )
-                _log(f"change detected: +{added} -{removed} ~{changed}")
+                _log(f"change settled (quiet {DEBOUNCE_SECONDS:.0f}s): +{added} -{removed} ~{changed}")
                 _run_map()
                 last = current
                 pending_since = None
-        else:
-            pending_since = None
 
     _log("watchdog stopped")
     try:
