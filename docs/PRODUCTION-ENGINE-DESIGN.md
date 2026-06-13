@@ -3,7 +3,7 @@
 > 状态：**v1 DESIGN（2026-06-13）。用户已拍板方向、范围、首步路径，本文档是权威设计。**
 > **取代**已归档的三包拆分系列（[archive/](archive/)：MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS} +
 > CONVERGENCE-DESIGN）——三包对等拆分作废、转历史；**P1 抽 core 的成果全部保留**。
-> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 后 312 → E1-a 后 336 → E1-b1 路由后 359 → E1-b2 全 7 步 performer 后 **382 passed**）。
+> 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。基线随实施推进（E0 312 → E1-a 336 → E1-b1 路由 359 → E1-b2 performer 382 → recipe 绑定 383 → 绞杀者 **389 passed**）。
 
 ---
 
@@ -329,8 +329,17 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 `build_full_registry()`(含 mock 门) ∪ `PERFORMERS_015`。`preview` 仍是无 performer 的 content_edit 人工闸。
 带生产 wiring 守护测试（015 每个执行步的 performer 必须在生产 registry 解析）。
 
+**E1-b2 #3 绞杀者（strangler）已落地**：`PipelineRunner` 经 `attach_engine(INSTANCE_RUNNER)` 注入引擎；
+`NOF_ENGINE_NODES`（csv，默认空=零行为变化）命中的节点，其执行从 `_execute_*` 改走引擎
+`InstanceRunner.run_step`（经合并 registry 派发到 `pct015_*` performer + 引擎状态机）。**UI/`/jobs` 契约不变**——
+JobState 仍是 facade 真相源，每 job 复用一个引擎实例（iid 持久化在 `pipeline_state.json`，重启不留孤儿）；
+content_edit 步（lines/storyboard）跑出 awaiting_review 后由 facade 自动定稿；performer 的 on_progress 经
+新增的 `run_step(on_progress=)` 回桥到 facade SSE（避免 storyboard/image/render running 态进度冻结）。
+浏览器验证：`NOF_ENGINE_NODES=lines,storyboard,tts,image,render nof-server` + 跑 web 画布，那几步即走引擎。
+
 **E1-b2 仍待补**（路径 C 高风险段，下一步）：
-- web `routes/{jobs,pipelines,preview}` 重指引擎 + 前端走新 instance API（画布=内容视角）+ 贵步骤后台派发 + detail 级 SSE（jsonl tail-merge，给 web 画布逐字进度）。
+- asr/rw 改道引擎：需先给引擎补**步内增量 outputs**（asr `item_progress` / rw `model_progress` 实时面板），否则这两步改道会丢实时逐项/4 模型进度。
+- 全切换：前端直走 `/instances`（退役 /jobs facade）+ 贵步骤后台派发 + 旧 `job_id`/`task_id` → `instance_id` 兼容适配层（§6）。
 - 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
 - 保留：SSE 满队列丢事件（与现 PipelineRunner 同款取舍，客户端 GET 全量重同步）。
 
@@ -356,7 +365,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 
 - **P1（抽 core，6 primitive + runners + pipelines(DAG 类型) + 模板015 + registry/cli 二分）全部保留**——core 在本架构里是最底层能力，且 `build_full_registry()` 直接成为引擎的晚绑定派发表。
 - **MONOREPO-SPLIT 三包对等拆分作废**（P2+ 不做）；那三份文档转历史，本文档接任权威设计。
-- **基线随实施推进（E1-b2 全 7 步 performer 后 382 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
+- **基线随实施推进（E1-b2 绞杀者后 389 passed / 0 failed）**；每个 E-期退出标准含"不掉绿"。
 - **操作安全网**：`main` 有 web 旧画布可跑副本；本 branch `claude/gallant-hellman-27de2a` 做重做，**不并 main**。
 
 ---

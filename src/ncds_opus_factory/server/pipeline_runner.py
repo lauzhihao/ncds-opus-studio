@@ -74,6 +74,9 @@ class JobState:
     # mock 作品标志：True 时 _execute 走 _execute_mock（sleep + 015 素材产物），
     # 不打任何真实下游（gpt-image / TTS / LLM）。仅 server.mock 种的 mock015 会置 True。
     mock: bool = False
+    # 绞杀者（E1-b2 #3）：该 job 复用的生产引擎实例 iid。持久化以便 server 重启后复用同一实例，
+    # 避免每次重启 + 改道运行就新建一个、旧的成磁盘孤儿 + 污染 /instances 视图。
+    engine_iid: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +127,19 @@ class PipelineRunner:
         self.video_jobs_dir.mkdir(parents=True, exist_ok=True)
         self.bus = EventBus()
         self._running_nodes: dict[tuple[str, str], asyncio.Task[Any]] = {}
+        # 绞杀者（E1-b2 #3）：注入的生产引擎 + 命中节点集。每 job 的引擎实例 iid 持久化在
+        # JobState.engine_iid（不放内存，避免重启后重建孤儿实例）。
+        self._engine: Any = None
+        # NOF_ENGINE_NODES=lines,storyboard,tts,image,render：这些节点的执行改走引擎 run_step
+        # （经 registry 派发到 pct015_* performer + 引擎状态机）。默认空 = 全走旧 _execute_*，零行为变化。
+        self._engine_nodes: set[str] = {
+            n.strip() for n in os.getenv("NOF_ENGINE_NODES", "").split(",") if n.strip()
+        }
+
+    def attach_engine(self, engine: Any) -> None:
+        """注入生产引擎（InstanceRunner）。由 server/state.py 在两 runner 都建好后调，
+        避免 pipeline_runner ↔ state 的 import 环。"""
+        self._engine = engine
 
     # ---------- 持久化 ----------
 
@@ -178,6 +194,7 @@ class PipelineRunner:
             node_positions=data.get("node_positions", {}),
             node_configs=data.get("node_configs", {}),
             mock=data.get("mock", False),
+            engine_iid=data.get("engine_iid"),
         )
 
     # ---------- Public API ----------
@@ -919,7 +936,10 @@ class PipelineRunner:
         self._save(state)
         self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
-        if node_name == "tts":
+        if self._engine is not None and node_name in self._engine_nodes:
+            # 绞杀者：该节点改走生产引擎执行（JobState 仍是 facade 真相源）
+            outputs = await self._execute_via_engine(job_id, node_name)
+        elif node_name == "tts":
             outputs = await self._execute_tts(job_id)
         elif node_name == "image":
             outputs = await self._execute_image(job_id)
@@ -944,6 +964,37 @@ class PipelineRunner:
         n.outputs = outputs
         self._save(state)
         self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+
+    async def _execute_via_engine(self, job_id: str, node_name: str) -> dict[str, Any]:
+        """绞杀者（E1-b2 #3）：该节点的执行改走生产引擎 ``run_step``——经合并 registry 派发到
+        ``pct015_*`` performer + 引擎状态机。
+
+        JobState 仍是 facade 真相源；引擎实例只作执行载体（throwaway，每 job 复用一个、跑前
+        ``reset_step`` 回 idle 支持重跑）。performer 读写同一 ``video-jobs/{job_id}`` 文件，故与未迁
+        节点经共享 ``02_rw/episode.json`` 互通。返回引擎步骤的 outputs，由 ``_execute_real`` 落进
+        JobState.nodes[node]。仅 ``NOF_ENGINE_NODES`` 命中的（slice-1：无步内增量进度的）节点启用。
+        """
+        engine = self._engine
+        job = self._load(job_id)
+        iid = job.engine_iid
+        if iid is None or not engine.store.exists(iid):
+            iid = engine.create_instance("paper_card_talk_015", inputs=job.inputs).meta.instance_id
+            job.engine_iid = iid          # 持久化句柄，重启后复用同一实例（不留孤儿）
+            self._save(job)
+        await engine.reset_step(iid, node_name)   # 回 idle，支持重跑
+        step_inputs = {"job_dir": str(self.video_jobs_dir / job_id)}
+        # 把 performer 的 on_progress 回桥到 facade JobState.nodes[node].progress + /jobs SSE，
+        # 否则引擎路径下 storyboard/image/render 抽屉 running 态进度文本会冻结。
+        st = await engine.run_step(
+            iid, node_name, step_inputs,
+            on_progress=lambda text: self._push_progress(job_id, node_name, text),
+        )
+        if st.status == "awaiting_review":
+            # content_edit 步（lines/storyboard）：facade 无 awaiting 闸（编辑走 episode 端点），自动定稿
+            st = await engine.approve_step(iid, node_name, "approved")
+        if st.status != "done":
+            raise RuntimeError(f"engine step {node_name} -> {st.status}: {st.error or ''}")
+        return dict(st.outputs)
 
     # ------------------------------------------------------------
     # 真接入：进度推送 helper

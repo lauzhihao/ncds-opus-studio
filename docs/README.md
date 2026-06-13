@@ -10,7 +10,8 @@
 进度：**P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）；
 **E0 引擎骨架 + E1-a driver API + E1-b1 /instances 路由 + E1-b2 全 7 步 step-performer（lines/storyboard/tts/image/render/asr/rw 真实包装 + 引擎驱动真实 015 链端到端出 mp4 验证）已落地**
 （`src/ncds_opus_factory/server/engine/` 全套 driver 原语 + `routes/instances.py` + `pipeline_performers_015.py` + 多轮评审加固，382 passed）；
-**下一步 E1-b2 续**=全局 recipe 绑定 + 后台派发/detail SSE + 路由/前端切换（见设计 §10，风险高那段）。
+**E1-b2 #2 全局 recipe 绑定 + #3 绞杀者已落地**（`NOF_ENGINE_NODES` 命中节点执行改走引擎、UI 不变，389 passed）；
+**下一步**=引擎补步内增量 outputs（让 asr/rw 也能改道不丢实时进度）+ 全切换前端直走 /instances（见设计 §10）。
 ⚠️ 护城河：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
 
 ## 活文档（current）

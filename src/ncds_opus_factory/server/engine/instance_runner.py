@@ -133,6 +133,7 @@ class InstanceRunner:
         step_id: str,
         step_inputs: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> StepState:
         """执行单步（**按实例串行化**，防并发步骤竞态）；执行细节见 _run_step。
 
@@ -141,9 +142,12 @@ class InstanceRunner:
         ⚠️ config **不** splat 进 performer——真实命令是闭合签名（rw 的 model 在 ``payload`` 里、
         不是顶层 kwarg），盲传必 ``TypeError``。driver 负责把选择折进 ``step_inputs``（与 TaskRunner
         "调用方建好 params" 的契约一致）；引擎只把 config 记成"这步用了哪个模型/参数"。
+
+        ``on_progress`` = driver 透传回调：performer 每吐一行进度，引擎在落 jsonl 之外再调它一次
+        （从工作线程同步调，driver 自己保证线程安全）。绞杀者据此把进度回桥到旧 facade SSE。
         """
         async with self._lock_for(instance_id):
-            return await self._run_step(instance_id, step_id, step_inputs, config)
+            return await self._run_step(instance_id, step_id, step_inputs, config, on_progress)
 
     async def _run_step(
         self,
@@ -151,6 +155,7 @@ class InstanceRunner:
         step_id: str,
         step_inputs: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> StepState:
         """执行单步：派发 → 状态机推进 → 事件/落盘。返回该步终态 StepState。
 
@@ -194,20 +199,22 @@ class InstanceRunner:
 
         self._start_running(instance_id, state, config)
 
-        def on_progress(text: str) -> None:
-            # 从工作线程调：只 append 步级 detail 事件（jsonl 线程安全）+ 更新内存 progress；
-            # 不从工作线程碰 asyncio 总线（非线程安全）。
+        def _step_progress(text: str) -> None:
+            # 从工作线程调：append 步级 detail 事件（jsonl 线程安全）+ 更新内存 progress；
+            # 不从工作线程碰 asyncio 总线（非线程安全）。driver 的 on_progress 也在此同步透传。
             state.progress = text
             self.store.append_step_event(
                 instance_id, step_id,
                 InstanceEvent(instance_id=instance_id, ts=_now_ms(), level="detail",
                               type="progress", step_id=step_id, payload={"text": text}),
             )
+            if on_progress is not None:
+                on_progress(text)
 
         # config 是溯源记录、不进 performer 参数（闭合签名会 TypeError）；driver 已把选择折进 step_inputs
         params = dict(step_inputs or {})
         try:
-            result = await asyncio.to_thread(_invoke, run_fn, params, on_progress)
+            result = await asyncio.to_thread(_invoke, run_fn, params, _step_progress)
         except Exception as exc:  # noqa: BLE001  —— 任何步骤异常都收成 failed，不冒泡炸 driver
             self._fail(instance_id, state, f"{type(exc).__name__}: {exc}")
             return state

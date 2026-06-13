@@ -46,3 +46,6 @@ INSTANCE_RUNNER: InstanceRunner = InstanceRunner(
     INSTANCE_STORE,
     {**maybe_mock_registry(build_full_registry()), **PERFORMERS_015},
 )
+# 绞杀者（E1-b2 #3）：把引擎注入 PipelineRunner，NOF_ENGINE_NODES 命中的节点执行改走引擎。
+# 在两个 runner 都建好后注入，避免 pipeline_runner ↔ state 的 import 环。
+PIPELINE_RUNNER.attach_engine(INSTANCE_RUNNER)

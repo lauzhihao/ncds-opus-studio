@@ -314,6 +314,15 @@ def test_concurrent_run_step_same_instance_serializes(tmp_path: Path):
 # --------------------------------------------------------------------------- #
 # 12) run_step(config=) → 落 StepState.config 作溯源；config **不** splat 进 performer
 # --------------------------------------------------------------------------- #
+def test_run_step_on_progress_callback_invoked(tmp_path: Path):
+    # driver 透传的 on_progress 收到 performer 每行进度（绞杀者据此回桥 facade SSE）
+    runner = _runner(tmp_path)
+    iid = runner.create_instance("t").meta.instance_id
+    seen: list[str] = []
+    asyncio.run(runner.run_step(iid, "work", step_inputs={"x": 1}, on_progress=seen.append))
+    assert seen == ["1/2 启动", "2/2 完成"]      # 与 _fake_ok 的 on_progress 调用一致
+
+
 def test_run_step_config_persists_as_provenance(tmp_path: Path):
     runner = _runner(tmp_path)
     iid = runner.create_instance("t").meta.instance_id
