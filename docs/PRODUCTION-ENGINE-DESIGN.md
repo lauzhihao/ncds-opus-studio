@@ -138,7 +138,7 @@ RECIPE_REGISTRY: dict[str, Recipe]   # 015、figure_talk … 引擎层维护
 | 组件 | 裁定 | 说明 |
 |---|---|---|
 | web `_execute_{asr,rw,lines,storyboard,tts,image,render}` | **进引擎** | 全是生产步骤；render 早已共用 `render_015.run`。改成统一 step + 经 registry 派发 |
-| **沈括(采集)** / 鬼谷子(选题) / 柳永/吴道子/伯牙 | **进引擎（作为步骤执行者，全在卧龙麾下）** | 卧龙指挥的五个 agent 就是生产链的步骤 performer；recipe 按 id 晚绑定它们。沈括是**早期步骤**（对标账号入口的第一步），产物可复用（缓存/共享池，见 §8 入口点） |
+| **沈括(采集)** / 鬼谷子(选题) / 柳永/吴道子/伯牙 | **进引擎（作为步骤执行者，全在卧龙麾下）** | 卧龙指挥的五个 agent 就是生产链的步骤 performer；recipe 按 id 晚绑定它们。**沈括 = 统一"外部原料采购"边界**（对标账号→爬取采集 / 作品链接→单链 asr，都走它，对下游屏蔽来源），早期步骤、产物可复用（缓存/共享池，见 §8） |
 | `TaskStore` / `TaskRunner` / `EventBus`(SSE) | **进引擎** | 是统一 store/调度/事件的底层，扩展而非替换 |
 | `PipelineRunner` + `JobState` + `video-jobs/` | **退役** | 015 DAG 是一条 recipe 的特例；被 InstanceStore 的 recipe/steps 包容 |
 | **卧龙** | **保留为可插拔 driver** | 掌编排机械（派沈括→鬼谷子→柳永→…→render、状态推进/事件消费），**决策权归人**（走 review 路由→rounds_gate）；与 web 手动 driver 并列 |
@@ -172,8 +172,11 @@ idle → queued → running → draft_ready
 - **每步先出草稿**（`draft`），`intervention=None` 的步骤直接 `done`；有介入点的进 `awaiting_review`。
 - **web 介入 = `content_edit`**：改 `draft` 内容（beats / 文稿 / prompt），`draft_source="user"`，可触发该步重跑或直接定稿。
 - **app 介入 = `decision_only`**：`approved` / `rejected` + note，写 `review`，落 `label_store` 案卷（`reviewer=user` 才进训练集）。
-- **贵步骤闸门**：`expensive=true`（生图/tts/render）由 **driver** 在其前面插强制 `awaiting_review`——把低质内容挡在烧钱步骤之前（D4 的初衷）。闸门是 driver 策略，不是引擎硬规则（不同 recipe/round 可不同）。
-- **反馈回喂**：`review` + 定稿差异 → `label_store` → `retro` 学 rubric → 注入下一轮 `liuyong` brief / `prescreen`（§9）。
+- **闸门不止柳永——每个 agent 产出都能挂闸**（D4 本意）：柳永(成稿)、吴道子(分镜)、伯牙(声音)的产出都需可被人验收/打回，
+  尤其作为"挡在烧钱步骤前"的**强制闸**——生图（吴道子下游）、tts（伯牙）、render 是贵步骤，闸门插在它们**之前**，
+  把低质内容挡在烧钱之前。哪些步带 `intervention` / 哪些 `expensive` 由 **recipe 声明**，闸门**逻辑**由 driver 执行
+  （不同 recipe/round 可不同）。典型 015 链的闸门点：柳永后、吴道子后(生图前)、伯牙后(tts 后)、render 后。
+- **反馈回喂**：每个闸门的 `review` + 定稿差异 → `label_store` → `retro` 学 rubric → 注入下一轮 `liuyong` brief / `prescreen`（§9）。
 
 ---
 
@@ -237,13 +240,17 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 
 两个 driver 调同一套 `InstanceRunner.run_step(instance_id, step_id, inputs)`。这正是"一套 runtime + 可插拔编排策略"。
 
-**入口点随输入类型变（D2：用户给卧龙的输入决定从哪一步入场）**：
+**沈括 = 统一的"外部原料采购"边界**：凡是"从外面拿原料"都走沈括，他对下游屏蔽来源差异、只交付统一"原料"
+（转写稿/文章/对标数据），鬼谷子/柳永们不关心怎么拿到的。沈括按输入选**采集模式**：
 
-| 用户给的输入 | 卧龙从哪一步入场 | 链路 |
+| 用户给的输入 | 沈括的模式 | 之后 |
 |---|---|---|
-| **对标账号** | 沈括(采集) | 采集→选题→编剧→…→render（全链） |
-| **选题/一句话想法** | 柳永(编剧)（或先鬼谷子提炼） | 跳过采集 |
-| **作品链接** | asr（web 015 链的起点） | 链接→asr→rw→…→render |
+| **对标账号** | 爬取采集（下载+转写+截帧抠图，落共享池） | →鬼谷子(选题)→柳永→… |
+| **作品链接** | 单链 asr（只转写这一条；即旧 web 015 的 asr 节点收进沈括） | →柳永(改写/编剧)→… |
+| **选题/一句话想法** | 无（没有外部原料可采，跳过沈括） | 直接 →柳永(或先鬼谷子提炼) |
+
+> 即"链接→asr"这个裸节点不再独立存在，它是**沈括的单链模式**；底层仍调 core 的 asr 能力，但归属与对外契约
+> 统一在沈括。下游 agent 拿到的永远是"原料"，与来源解耦。
 
 > **沈括的"共享池"性质**：采一个对标账号的数据可复用于很多选题/作品，所以"采集"步骤**缓存感知**
 > （命中已采账号则复用，不重采）。它仍是卧龙麾下的生产步骤，只是产物落共享池（`state/benchmark`），
@@ -258,8 +265,8 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 
 **本设计如何补完**（这是统一引擎的副产品红利，不再需要单独的 job_driver 把卧龙焊到 015 pipeline 上）：
 
-1. **agent→render**：卧龙 driver 的 round line 沿全链
-   **沈括(采集)→鬼谷子(选题)→柳永(成稿)→〔人验收闸〕→吴道子(分镜)→伯牙(声音)→render**
+1. **agent→render**：卧龙 driver 的 round line 沿全链（闸门见 §4，挡在贵步骤前）
+   **沈括(采集)→鬼谷子(选题)→柳永(成稿)→〔闸〕→吴道子(分镜)→〔闸·生图前〕→伯牙(声音)→〔闸〕→render→〔闸〕**
    推进（入口随输入类型，见 §8）——今天断在"成稿"，本设计把后半段（分镜→声音→render）补成同一引擎的后续步骤，
    不需要第二套渲染管线。round line 的 `instance_id` 就是那条生产实例。
 2. **retro 学习**：`retro_trigger`（夜间窗口 + 样本闸）→ 读 `label_store` 案卷 + done 战报 → opus 学 rubric →
