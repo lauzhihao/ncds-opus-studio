@@ -1,74 +1,10 @@
-"""/wst —— 文生图（gpt-image-2）。
+"""DEPRECATED 转发 shim（P1.4）：本模块已迁至 ncds_opus_core.commands.wst。
 
-调用 gpt_image/generate.py 网关，返回生成图片的本地路径列表。
-飞书发送由调用方走 lark-cli，本模块不接入飞书。
+保留转发以不破坏 ncds_opus_factory.* 的现有 import；P5 清理时删除。
 """
 
-from __future__ import annotations
+import sys as _sys
 
-import argparse
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-from typing import Any, Callable
+from ncds_opus_core.commands import wst as _mod
 
-from ncds_opus_core.gpt_image import script_path as _gpt_image_script
-
-# gpt_image 网关已迁入 ncds_opus_core（P1.2）；按包内位置定位，不再 parents[3]
-IMAGE_GATEWAY = _gpt_image_script("generate.py")
-
-DEFAULT_TIMEOUT = int(os.getenv("NOF_WST_TIMEOUT", "600"))
-
-ProgressFn = Callable[[str], None]
-
-
-def _noop(_text: str) -> None:
-    return None
-
-
-def run(
-    prompt: str,
-    timeout_seconds: int = DEFAULT_TIMEOUT,
-    on_progress: ProgressFn = _noop,
-    extra_args: list[str] | None = None,
-) -> dict[str, Any]:
-    """生成图片，返回 {images: [...path], output_dir, raw}。"""
-    prompt = prompt.strip()
-    if not prompt:
-        raise ValueError("prompt 不能为空")
-    if not IMAGE_GATEWAY.exists():
-        raise RuntimeError(f"gpt-image 网关脚本未就绪: {IMAGE_GATEWAY}")
-
-    on_progress("正在执行文生图")
-    command = [sys.executable, str(IMAGE_GATEWAY), "--prompt", prompt, *(extra_args or [])]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "文生图失败").strip())
-
-    payload = json.loads(result.stdout or "{}")
-    images = payload.get("images") if isinstance(payload.get("images"), list) else []
-    return {
-        "images": [str(p) for p in images],
-        "output_dir": payload.get("output_dir"),
-        "raw": payload,
-    }
-
-
-def _cli(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="nof wst", description="文生图（gpt-image-2）")
-    parser.add_argument("--prompt", required=True)
-    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
-    args, unknown = parser.parse_known_args(argv)
-
-    def on_progress(text: str) -> None:
-        print(f"[progress] {text}", file=sys.stderr, flush=True)
-
-    result = run(prompt=args.prompt, timeout_seconds=args.timeout, on_progress=on_progress, extra_args=unknown)
-    print(json.dumps(result, ensure_ascii=False))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_cli())
+_sys.modules[__name__] = _mod
