@@ -1,0 +1,11 @@
+{
+  "name": "ncds-opus-core-runners",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node 侧 runner 的第三方依赖（render_runner 需 puppeteer）。asr/rw 的 rewrite 链全是 node: 内置，不需依赖。`npm install` 落 packages/core/node_modules，render_runner.mjs(core/commands/) ESM 向上解析到它。",
+  "dependencies": {
+    "puppeteer-core": "^21",
+    "puppeteer-screen-recorder": "^3"
+  }
+}
