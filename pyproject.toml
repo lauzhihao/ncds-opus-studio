@@ -40,8 +40,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
-# Monorepo workspace（详见 docs/MONOREPO-SPLIT-DESIGN.md）。
-# 本根包目前 = 未拆分的 factory 单体；packages/core、packages/studio 是 P0 空骨架。
-# factory 物理迁入 packages/factory/ 在 P2/P4，届时根包不再是 ncds-opus-factory。
+# Monorepo workspace。当前唯一独立子包 = packages/core（纯能力库）；本根包 = factory（含 server +
+# 生产引擎 server/engine/ + agents + web）。统一生产引擎方向见 docs/PRODUCTION-ENGINE-DESIGN.md。
+# （旧"三包对等拆分"已作废，packages/studio 空骨架已删。）
 [tool.uv.workspace]
 members = ["packages/*"]

@@ -52,7 +52,7 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 | Skills 说明 | `skills/*/SKILL.md` | 各 skill 的 frontmatter；不是可执行 entry point，只是文档。`skills/` 留 repo 根、不进任何包，env `NOF_VIDEO_PIPELINE_SCRIPT` 兜底 |
 | 配置示例 | `configs/openclaw-examples/` | `openclaw.example.json` 等示例（不进 runtime） |
 | 文档 | `docs/README.md`(索引) → `docs/PRODUCTION-ENGINE-DESIGN.md`(权威设计) / `docs/WOLONG-DESIGN.md`(卧龙/agents)；旧设计在 `docs/archive/` | 接手从 README 进；archive 是历史不当现状读 |
-| 删除候选 | repo 根 `pipelines/douyin_processing/` | 零消费者（DAG 类型已迁 core）；`packages/studio/`（旧拆分空骨架）—— 评估删除 |
+| 删除候选 | repo 根 `pipelines/douyin_processing/` | 零消费者（DAG 类型已迁 core）—— 评估删除 |
 | 产物（gitignored） | `state/`, `video-jobs/` | 任务产物、视频任务数据 |
 
 **边界规则**：
