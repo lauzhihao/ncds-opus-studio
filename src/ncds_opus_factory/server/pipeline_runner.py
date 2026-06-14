@@ -130,11 +130,19 @@ class PipelineRunner:
         # 绞杀者（E1-b2 #3）：注入的生产引擎 + 命中节点集。每 job 的引擎实例 iid 持久化在
         # JobState.engine_iid（不放内存，避免重启后重建孤儿实例）。
         self._engine: Any = None
-        # NOF_ENGINE_NODES=lines,storyboard,tts,image,render：这些节点的执行改走引擎 run_step
-        # （经 registry 派发到 pct015_* performer + 引擎状态机）。默认空 = 全走旧 _execute_*，零行为变化。
-        self._engine_nodes: set[str] = {
-            n.strip() for n in os.getenv("NOF_ENGINE_NODES", "").split(",") if n.strip()
-        }
+        # 本分支默认「全节点走生产引擎」（必走新版本）。NOF_ENGINE_NODES 可覆盖：
+        #   未设                       → 全 7 个可执行节点走引擎 run_step（默认，pct015_* performer）
+        #   "none"/"off"/"legacy"/"" → 全走旧 _execute_*（临时回旧画布调试用）
+        #   逗号列表(如 lines,render)   → 只这些节点走引擎，其余走旧
+        # 注：asr/rw 走引擎会丢 running 时的实时子进度（slice-1 未做步内增量），产物不受影响。
+        _all = {"asr", "rw", "lines", "storyboard", "tts", "image", "render"}
+        _env = os.getenv("NOF_ENGINE_NODES")
+        if _env is None:
+            self._engine_nodes: set[str] = set(_all)
+        elif _env.strip().lower() in {"", "none", "off", "legacy"}:
+            self._engine_nodes = set()
+        else:
+            self._engine_nodes = {n.strip() for n in _env.split(",") if n.strip()}
 
     def attach_engine(self, engine: Any) -> None:
         """注入生产引擎（InstanceRunner）。由 server/state.py 在两 runner 都建好后调，
@@ -1406,16 +1414,17 @@ class PipelineRunner:
                 # 模型映射 + gemini/codex 双模型并行，本机配置不全）。
                 item_status[str(idx)]["stage"] = "整理文章"
                 push_items()
-                on_progress(f"[{idx}/{len(urls)}] 调 opus 整理成文章")
                 article_path = item_dir / "article.md"
                 share = shares_by_url.get(url) or {}
                 try:
-                    await asyncio.to_thread(
+                    polished = await asyncio.to_thread(
                         _polish_transcript_with_opus,
                         transcript_path=Path(transcript_abs),
                         output_path=article_path,
                         title_hint=str(share.get("title") or share.get("author") or ""),
                     )
+                    on_progress(f"[{idx}/{len(urls)}] " + (
+                        "调 opus 整理成文章" if polished else "文章已是最新,跳过 opus"))
                     article_abs = str(article_path)
                 except Exception as exc:
                     on_progress(f"[{idx}/{len(urls)}] opus polish 失败：{exc}；fallback 到原始 transcript")
@@ -1903,7 +1912,7 @@ def _polish_transcript_with_opus(
     transcript_path: Path,
     output_path: Path,
     title_hint: str = "",
-) -> None:
+) -> bool:
     """调本机 opus launcher（Claude Opus 4.7）把语音转写原稿整理成 markdown 文章。
 
     透传到 claude CLI，参数参考远程 video_rewrite_runner.runClaudeCli：
@@ -1912,10 +1921,22 @@ def _polish_transcript_with_opus(
 
     Claude CLI 的 JSON 输出末行形如 {"type":"result","is_error":false,"result":"<markdown>"}。
     我们逐行扫描，取最后一条 type=result 的 payload。
+
+    幂等：返回 True=真调了 opus；False=命中缓存跳过。缓存键用「转写内容 + title_hint」的
+    sha256（不用 mtime —— video_pipeline 每次重转写会刷新 transcript mtime，但同音频转写文本
+    一致，哈希相同就不必再调一次 opus）。指纹落 sidecar ``<article>.src-sha256``。
     """
     text = transcript_path.read_text(encoding="utf-8").strip()
     if not text:
         raise RuntimeError(f"transcript empty: {transcript_path}")
+
+    src_key = hashlib.sha256((text + "\x00" + (title_hint or "")).encode("utf-8")).hexdigest()
+    sha_path = output_path.with_name(output_path.name + ".src-sha256")
+    if (output_path.is_file()
+            and output_path.read_text(encoding="utf-8").strip()
+            and sha_path.is_file()
+            and sha_path.read_text(encoding="utf-8").strip() == src_key):
+        return False  # 幂等命中：同转写+同标题已整理过，复用 article.md，不再调 opus
 
     hint = f"（参考标题：{title_hint}）" if title_hint else ""
     prompt = (
@@ -1976,6 +1997,8 @@ def _polish_transcript_with_opus(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(final_text + "\n", encoding="utf-8")
+    sha_path.write_text(src_key, encoding="utf-8")  # 记录本次 polish 的源指纹，供下次幂等命中
+    return True
 
 
 # ---------------------------------------------------------------------------

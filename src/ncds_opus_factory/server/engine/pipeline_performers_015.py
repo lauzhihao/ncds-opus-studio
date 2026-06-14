@@ -253,16 +253,17 @@ def run_asr_step(
                 raise RuntimeError(f"transcript 缺失或不存在: {transcript_abs}")
 
             # 文章整理：调本机 opus polish 原始 transcript 成 markdown 文章。
-            # 同 PipelineRunner._execute_asr，失败时 fallback 到 transcript 路径。
-            on_progress(f"[{idx}/{len(urls)}] 调 opus 整理成文章")
+            # 同 PipelineRunner._execute_asr，幂等命中则跳过 opus；失败时 fallback 到 transcript 路径。
             article_path = item_dir / "article.md"
             share = shares_by_url.get(url) or {}
             try:
-                _polish_transcript(
+                polished = _polish_transcript(
                     transcript_path=Path(transcript_abs),
                     output_path=article_path,
                     title_hint=str(share.get("title") or share.get("author") or ""),
                 )
+                on_progress(f"[{idx}/{len(urls)}] " + (
+                    "调 opus 整理成文章" if polished else "文章已是最新,跳过 opus"))
                 article_abs = str(article_path)
             except Exception as exc:
                 on_progress(
