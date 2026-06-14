@@ -912,12 +912,33 @@ class PipelineRunner:
         self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
 
     async def cancel_node(self, job_id: str, node_name: str) -> bool:
-        """取消正在跑的节点 task。返回是否真的取消了。"""
+        """取消节点。幂等：内存里没有活着的 task 也视为取消成功。
+
+        正常情况 cancel 内存里的 asyncio task（其 CancelledError 分支把节点回退到 idle）。
+        但 server 热重载/重启后 `_running_nodes` 会清空，而磁盘 pipeline_state.json 可能
+        残留 status=running 的"幽灵任务"——旧实现此时返回 False，前端永远卡 loading 且无从
+        取消。这里改为：内存无活 task 时，若磁盘仍 running/queued 就直接落盘 idle（与
+        CancelledError 分支一致，让 UI 回到可重跑），并一律返回 True。
+        """
         key = (job_id, node_name)
         task = self._running_nodes.get(key)
-        if task is None or task.done():
-            return False
-        task.cancel()
+        if task is not None and not task.done():
+            task.cancel()
+            return True
+        # 幽灵任务兜底：内存没句柄，直接重置磁盘上残留的 running/queued 状态。
+        try:
+            state = self._load(job_id)
+        except FileNotFoundError:
+            return True
+        n = state.nodes.get(node_name)
+        if n is not None and n.status in ("running", "queued"):
+            n.status = "idle"
+            n.error = "cancelled"
+            n.finished_at = time.time()
+            n.progress = ""
+            self._reset_node(n)
+            self._save(state)
+            self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
         return True
 
     async def _execute_real(self, job_id: str, node_name: str) -> None:

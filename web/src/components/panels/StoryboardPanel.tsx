@@ -184,9 +184,7 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
   );
 
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
-  if (status === 'failed' && nodeState.error) {
-    hint = { tone: 'error', text: `失败：${nodeState.error}` };
-  } else if (epErr) {
+  if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
   } else if (status === 'idle') {
     hint = { tone: 'info', text: '点击右上「开始分镜」，导演 agent 会切子场景并设计容器图与简笔画。' };

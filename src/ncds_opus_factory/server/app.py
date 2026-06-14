@@ -41,6 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from ncds_opus_factory.server.routes import accounts as accounts_routes
 from ncds_opus_factory.server.routes import artifacts as artifacts_routes
 from ncds_opus_factory.server.routes import commands as commands_routes
 from ncds_opus_factory.server.routes import instances as instances_routes
@@ -52,6 +53,7 @@ from ncds_opus_factory.server.routes import rounds as rounds_routes
 from ncds_opus_factory.server.routes import subscriptions as subscriptions_routes
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
+from ncds_opus_factory.server.routes import works as works_routes
 from ncds_opus_factory.server import rounds_gate
 from ncds_opus_factory.server.state import LABELS, RUNNER, STATE_DIR, STORE
 from ncds_opus_factory.server.subscriptions import subscription_loop, subscriptions_path
@@ -79,6 +81,7 @@ app.add_middleware(
 )
 
 app.include_router(commands_routes.router)
+app.include_router(accounts_routes.router)
 app.include_router(tasks_routes.router)
 app.include_router(instances_routes.router)
 app.include_router(subscriptions_routes.router)
@@ -89,6 +92,7 @@ app.include_router(artifacts_routes.router)
 app.include_router(pipelines_routes.router)
 app.include_router(preview_routes.router)
 app.include_router(mock_routes.router)
+app.include_router(works_routes.router)
 
 
 # ---------------------------------------------------------------------------

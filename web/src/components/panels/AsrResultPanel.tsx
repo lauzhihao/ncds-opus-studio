@@ -83,19 +83,11 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     }
   }
 
-  // 文章整理面板 play 按钮触发：直接启动 RW
-  const [advanceBusy, setAdvanceBusy] = useState(false);
-  async function doAdvanceToRw() {
-    setAdvanceBusy(true);
-    try {
-      await api.runNode(jobId, 'rw');
-      onAdvanced?.();
-    } catch (e) {
-      showToast('启动 RW 失败，请稍后再试');
-      console.error('[AsrResultPanel] 启动 RW 失败', e);
-    } finally {
-      setAdvanceBusy(false);
-    }
+  // 文章整理面板 play 按钮触发：agent 视角下交给鬼谷子选题（由鬼谷子 gate 触发柳永 rw），
+  // 这里不再直接跑 rw —— onAdvanced 由 AgentDrawer 映射成"推进到鬼谷子"。
+  const [advanceBusy] = useState(false);
+  function doAdvanceToRw() {
+    onAdvanced?.();
   }
 
   function renderActionBtn() {
@@ -144,9 +136,7 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
 
   // 统一提示 banner（标题上方，带色条）：idle/空产物时引导，failed 时显示错误
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
-  if (status === 'failed' && nodeState.error) {
-    hint = { tone: 'error', text: `失败：${nodeState.error}` };
-  } else if (items.length === 0 && status === 'idle') {
+  if (items.length === 0 && status === 'idle') {
     hint = { tone: 'info', text: '点击下方「开始转写」启动。' };
   } else if (items.length === 0 && status === 'done') {
     hint = { tone: 'info', text: '暂无产物。' };
@@ -325,7 +315,7 @@ function AsrItemRow({
             <button
               type="button"
               className="btn sm icon-only primary"
-              title="基于整理后的文章启动改写（RW）"
+              title="完成采集，交鬼谷子选题"
               disabled={advanceBusy || !body}
               onClick={onAdvanceToRw}
             >

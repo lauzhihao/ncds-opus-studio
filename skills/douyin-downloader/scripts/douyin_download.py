@@ -19,22 +19,25 @@ READ_TIMEOUT = 60
 
 TIKHUB_VIDEO_URL = "https://api.tikhub.io/api/v1/douyin/web/fetch_one_video"
 
-def load_config():
-    """加载配置文件"""
-    config_path = os.path.expanduser("~/.openclaw/config.json")
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            return json.load(f)
-    return {}
+def _read_dotenv_value(key):
+    """从仓库根 .env 读某 key（skills/<skill>/scripts/ 上三级 = 仓库根）。"""
+    env_file = Path(__file__).resolve().parents[3] / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith(key + "="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+    return None
 
 def get_token(token=None):
-    """获取TikHub Token"""
+    """获取 TikHub Token：入参 > 环境变量 TIKHUB_API_TOKEN > 仓库根 .env。
+
+    ~/.openclaw/config.json 已弃用——所有配置统一走环境变量 / .env。
+    """
     if token:
         return token
-    config = load_config()
-    token = config.get("tikhub_api_token")
+    token = os.environ.get("TIKHUB_API_TOKEN") or _read_dotenv_value("TIKHUB_API_TOKEN")
     if not token:
-        raise ValueError("❌ 缺少TikHub API Token\n\n请先配置：\n1. 访问 https://user.tikhub.io/register?referral_code=JtYTGCqJ 注册获取免费Token\n2. 在 ~/.openclaw/config.json 中添加:\n   {\"tikhub_api_token\": \"您的Token\"}")
+        raise ValueError("缺少 TIKHUB_API_TOKEN：请设环境变量，或写进仓库根 .env（模板见 .env.example）")
     return token
 
 def extract_modal_id(text):

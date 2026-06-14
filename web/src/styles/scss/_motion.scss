@@ -17,4 +17,25 @@
   .status-pill .dot,
   .pulse-soft,
   .react-flow__edge-path { animation: none !important; }
+
+  /* 例外：画布「执行中」的 spinner 与文字流光是功能性 loading 反馈（表示系统正在工作），
+     不随降级停住；改用更慢的节奏兼顾「减少动态效果」诉求。 */
+  .node .progress-line .spinner {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .node .progress-line .progress-text {
+    animation-duration: 2.6s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  /* 抽屉状态条：指示灯呼吸 + spinner 同属功能性反馈，降级下保留（节奏放缓）。 */
+  .node-status-bar::before {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .node-status-bar .nsb-icon.spin {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
+  }
 }

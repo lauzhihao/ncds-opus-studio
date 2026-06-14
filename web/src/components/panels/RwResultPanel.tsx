@@ -310,9 +310,7 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
     currentDraft.status !== undefined;
 
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
-  if (status === 'failed' && nodeState.error) {
-    hint = { tone: 'error', text: `失败：${nodeState.error}` };
-  } else if (drafts.length === 0 && status === 'idle') {
+  if (drafts.length === 0 && status === 'idle') {
     hint = { tone: 'info', text: '点击下方「开始改写」启动，顶级模型改写。' };
   }
 

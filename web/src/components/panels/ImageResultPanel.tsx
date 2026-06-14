@@ -184,9 +184,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
 
   // 提示 banner（标题上方，统一风格）：idle 引导，failed 报错，episode 加载失败
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
-  if (status === 'failed' && nodeState.error) {
-    hint = { tone: 'error', text: `失败：${nodeState.error}` };
-  } else if (epErr) {
+  if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
   } else if (status === 'idle') {
     hint = { tone: 'info', text: '点击右上「开始生图」启动，按 scene 批量图生图。' };

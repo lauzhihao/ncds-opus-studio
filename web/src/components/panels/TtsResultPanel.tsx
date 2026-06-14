@@ -219,9 +219,7 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
 
   // 提示 banner（标题上方，统一风格）
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
-  if (status === 'failed' && nodeState.error) {
-    hint = { tone: 'error', text: `失败：${nodeState.error}` };
-  } else if (epErr) {
+  if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
   } else if (status === 'idle') {
     hint = { tone: 'info', text: '点击下方「开始配音」启动，按 scene 整段合成。' };

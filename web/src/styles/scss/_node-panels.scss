@@ -262,6 +262,101 @@ textarea.code-pane.editable {
   color: var(--status-failed, #d1242f);
 }
 
+/* 抽屉顶部统一节点状态条：沿用 panel-hint 的直角 + 左色条风格（border-radius:0）。
+   左色条 = 状态指示灯：running/queued 呼吸、done/failed 静止。 */
+.node-status-bar {
+  position: relative;
+  margin-bottom: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  padding-left: calc(var(--s-3) + 3px);
+  border-radius: 0;
+  background: var(--bg-surface-2, rgba(127, 127, 127, 0.06));
+}
+.node-status-bar::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--status-idle);
+}
+.node-status-bar .nsb-main {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+.node-status-bar .nsb-icon { flex: 0 0 auto; }
+.node-status-bar .nsb-status { font-weight: 500; white-space: nowrap; }
+.node-status-bar .nsb-elapsed {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.node-status-bar .nsb-progress {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-status-bar.status-running { background: rgba(200, 133, 46, 0.08); }
+.node-status-bar.status-running::before { background: var(--status-running); }
+.node-status-bar.status-running .nsb-icon,
+.node-status-bar.status-running .nsb-status { color: var(--status-running); }
+
+.node-status-bar.status-queued { background: rgba(107, 138, 163, 0.08); }
+.node-status-bar.status-queued::before { background: var(--status-queued); }
+.node-status-bar.status-queued .nsb-icon,
+.node-status-bar.status-queued .nsb-status { color: var(--status-queued); }
+
+.node-status-bar.status-running::before,
+.node-status-bar.status-queued::before {
+  animation: nsb-breath 1.6s ease-in-out infinite;
+}
+
+.node-status-bar.status-done { background: rgba(74, 124, 89, 0.08); }
+.node-status-bar.status-done::before { background: var(--status-done); }
+.node-status-bar.status-done .nsb-icon,
+.node-status-bar.status-done .nsb-status { color: var(--status-done); }
+
+.node-status-bar.status-failed { background: rgba(184, 54, 42, 0.08); }
+.node-status-bar.status-failed::before { background: var(--status-failed); }
+.node-status-bar.status-failed .nsb-icon,
+.node-status-bar.status-failed .nsb-status { color: var(--status-failed); }
+
+.node-status-bar .nsb-fail { margin-top: var(--s-2); }
+.node-status-bar .nsb-error {
+  color: var(--status-failed);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.node-status-bar .nsb-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.node-status-bar .nsb-taskid { word-break: break-all; }
+.node-status-bar .nsb-copy { flex: 0 0 auto; margin-left: auto; }
+
+@keyframes nsb-breath {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.32; }
+}
+
 /* RW 抽屉：失败/不可用模型的 tab + 占位面板 */
 .asr-tab.failed {
   opacity: 0.55;

@@ -1,9 +1,8 @@
-// 画布页：vertical DAG + 节点抽屉 + SSE 实时状态。
-// 状态管理细节：
-//   - 节点 position：受 React Flow 自管控（useNodesState + onNodesChange），
-//     拖动后不会被后端 job 状态覆盖。
-//   - 节点 data.state：每次 SSE 推到新 job 时 patch 进对应节点的 data。
-//   - 首次加载时按拓扑层级算垂直布局。
+// 画布页（agent 视角重构）：6 个有序 agent 节点 + 卧龙总览条 + agent 抽屉 + SSE 实时状态。
+//
+// 底层仍是一条 015 recipe 的 job（input→asr→rw→lines→storyboard→tts→image→preview→
+// render→download）；这里把这些 engine 节点按 agent 分组重新呈现为 6 个有序 agent。
+// agent 节点是纯前端分组，操作仍打到底层 engine 节点（见 components/AgentDrawer）。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -19,50 +18,46 @@ import ReactFlow, {
   type NodeMouseHandler,
   type ReactFlowInstance,
 } from 'reactflow';
-import { ArrowLeft, Hash, Loader2 } from 'lucide-react';
+import { ArrowLeft, Crown, Hash, Loader2 } from 'lucide-react';
 
 import { api } from '../api/client';
 import { useToast } from '../components/Toast';
-import type { NodeState, PipelineDef, PipelineNodeDef } from '../api/types';
+import type { JobState, NodeStatus, PipelineDef } from '../api/types';
 import { useJobStream } from '../hooks/useJobStream';
-import { NodeCard, type NodeCardData } from '../components/NodeCard';
-import { NodeDrawer } from '../components/NodeDrawer';
+import { AgentCard, type AgentCardData } from '../components/AgentCard';
+import { AgentDrawer } from '../components/AgentDrawer';
 import { PulseEdge } from '../components/PulseEdge';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
+import { AGENTS, agentIndex, agentProgressText, agentStatus, type AgentId } from '../config/agents';
 
-const NODE_TYPES = { card: NodeCard };
+const NODE_TYPES = { card: AgentCard };
 const EDGE_TYPES = { pulse: PulseEdge };
 
-// —— 节点拓扑序 → zigzag 两列错开布局（奇偶左右）
-// 节点放大到 1.5×（min 330px / max 390px）后，错位距离和行间距也按比例放大避免重叠。
-function computeVerticalLayout(pipeline: PipelineDef): Record<string, { x: number; y: number }> {
-  // 收紧行距与列偏移：原 280/280 让 10 节点纵向铺到 2520px、左右各空 1/3，
-  // fitView 后文字被压到不可读。降到 200/160 后总高约 1800px，整图入屏后仍可辨认。
-  const ROW = 200;
-  const COL_OFFSET = 160;
+// 6 个 agent 的 zigzag 两列错开布局（沿用旧画布的 ROW/COL）。
+const ROW = 200;
+const COL_OFFSET = 160;
+function computeAgentLayout(): Record<string, { x: number; y: number }> {
   const result: Record<string, { x: number; y: number }> = {};
-  pipeline.nodes.forEach((nd, i) => {
-    const left = i % 2 === 0;
-    result[nd.name] = {
-      x: left ? -COL_OFFSET : COL_OFFSET,
-      y: i * ROW,
-    };
+  AGENTS.forEach((a, i) => {
+    result[a.id] = { x: i % 2 === 0 ? -COL_OFFSET : COL_OFFSET, y: i * ROW };
   });
   return result;
+}
+
+function agentPosKey(jobId: string): string {
+  return `nof:agentpos:${jobId}`;
 }
 
 export function JobCanvasPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const nav = useNavigate();
-  const { showToast } = useToast();
   const [pipeline, setPipeline] = useState<PipelineDef | null>(null);
-  const [openNode, setOpenNode] = useState<string | null>(null);
+  const [openAgent, setOpenAgent] = useState<AgentId | null>(null);
   const { job, connected } = useJobStream(jobId);
 
-  // React Flow 自管节点/边状态；拖动靠 onNodesChange 写回内部 state
-  const [nodes, setNodes, onNodesChange] = useNodesState<NodeCardData>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<AgentCardData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const initializedFor = useRef<string | null>(null);
+  const initialized = useRef(false);
   const rfRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
@@ -70,127 +65,110 @@ export function JobCanvasPage() {
     api.getPipeline(job.pipeline_id).then(setPipeline).catch(console.error);
   }, [job?.pipeline_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleRun = useCallback(
-    async (nodeName: string) => {
-      if (!jobId) return;
-      try {
-        await api.runNode(jobId, nodeName);
-      } catch (e: unknown) {
-        showToast(`触发「${nodeName}」失败，请稍后再试`);
-        console.error('[JobCanvasPage] runNode 失败', nodeName, e);
-      }
-    },
-    [jobId, showToast],
+  // 鬼谷子选题"已确认"= 柳永(rw) 已起步（确认选题即触发 rw）。可靠且响应式，无需 localStorage。
+  const angleConfirmed = useMemo(
+    () => ['queued', 'running', 'done'].includes(job?.nodes.rw?.status ?? 'idle'),
+    [job?.nodes.rw?.status],
   );
 
-  // —— 首次（或 pipeline 变化）：构建节点 + 边 + 初始布局
+  // —— 首次：构建 6 个 agent 节点 + 串行连线 + 初始布局
   useEffect(() => {
-    if (!pipeline || !job) return;
-    if (initializedFor.current === pipeline.id) return;
-    initializedFor.current = pipeline.id;
+    if (!job || initialized.current) return;
+    initialized.current = true;
 
-    const layout = computeVerticalLayout(pipeline);
-    // 如果老的 node_positions 不能覆盖当前 schema 全部节点（升级过 pipeline），整体丢弃，避免布局错位
-    const positions = job.node_positions ?? {};
-    const schemaMatch = pipeline.nodes.every((n) => positions[n.name] != null);
-    const newNodes: Node<NodeCardData>[] = pipeline.nodes.map((nd, i) => {
-      const override = schemaMatch ? positions[nd.name] : undefined;
-      const pos = override ?? layout[nd.name] ?? { x: 0, y: i * 160 };
-      return {
-        id: nd.name,
-        type: 'card',
-        position: pos,
-        data: {
-          def: nd,
-          state: job.nodes[nd.name] ?? defaultIdleState(nd),
-          index: i,
-          onOpen: () => setOpenNode(nd.name),
-        },
-        draggable: true,
-      };
-    });
+    const layout = computeAgentLayout();
+    let saved: Record<string, { x: number; y: number }> = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(agentPosKey(jobId!)) || '{}');
+    } catch { /* ignore */ }
+
+    const newNodes: Node<AgentCardData>[] = AGENTS.map((a, i) => ({
+      id: a.id,
+      type: 'card',
+      position: saved[a.id] ?? layout[a.id] ?? { x: 0, y: i * ROW },
+      data: {
+        agent: a,
+        status: agentStatus(a, job.nodes, { angleConfirmed }),
+        progress: agentProgressText(a, job.nodes),
+        index: i,
+        isFirst: i === 0,
+        isLast: i === AGENTS.length - 1,
+        onOpen: () => setOpenAgent(a.id),
+      },
+      draggable: true,
+    }));
 
     const newEdges: Edge[] = [];
-    for (const nd of pipeline.nodes) {
-      for (const dep of nd.deps) {
-        newEdges.push({
-          id: `${dep}__${nd.name}`,
-          source: dep,
-          target: nd.name,
-          // 自定义 pulse edge：底层常态线 + animated 时顶层一段光带从 source 滑向 target
-          type: 'pulse',
-          animated: isEdgeFlowing(job.nodes[nd.name]?.status),
-          style: { stroke: 'url(#opus-gradient)' },
-        });
-      }
+    for (let i = 1; i < AGENTS.length; i++) {
+      newEdges.push({
+        id: `${AGENTS[i - 1].id}__${AGENTS[i].id}`,
+        source: AGENTS[i - 1].id,
+        target: AGENTS[i].id,
+        type: 'pulse',
+        animated: false,
+        style: { stroke: 'url(#opus-gradient)' },
+      });
     }
-    // edges 必须在 nodes DOM 渲染并被 React Flow 测量过之后再设，
-    // 否则首次 mount 时拿不到节点真实宽高 → handle 位置算不出 → 边不画。
     setNodes(newNodes);
     requestAnimationFrame(() => setEdges(newEdges));
-  }, [pipeline, job, handleRun, setNodes, setEdges]);
+  }, [job, jobId, angleConfirmed, setNodes, setEdges]);
 
-  // —— nodes 填入后用 fitView 把整条 pipeline 收进视口：给用户一个「全流程概览」，
-  // 不再硬编码 setCenter(0, 280)（会把视口卡在第 2 个节点、START 落在屏外、且与 ROW 耦合）。
+  // —— fitView 收进视口
   useEffect(() => {
     if (nodes.length === 0 || !rfRef.current) return;
     const t = setTimeout(() => {
       rfRef.current?.fitView({ padding: 0.18, maxZoom: 0.85, duration: 240 });
     }, 60);
     return () => clearTimeout(t);
-  }, [pipeline?.id, nodes.length === 0]);
+  }, [nodes.length === 0]);
 
-  // —— job 状态变化（SSE 推 / refresh）：仅 patch 节点的 data.state 与 edge animated，不动 position
+  // —— job 状态变化：patch agent 聚合状态 + edge animated
   useEffect(() => {
-    if (!job || initializedFor.current !== pipeline?.id) return;
+    if (!job || !initialized.current) return;
     setNodes((cur) =>
       cur.map((n) => {
-        const ns = job.nodes[n.id];
-        if (!ns) return n;
-        return { ...n, data: { ...n.data, state: ns } };
+        const a = AGENTS.find((x) => x.id === n.id);
+        if (!a) return n;
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            status: agentStatus(a, job.nodes, { angleConfirmed }),
+            progress: agentProgressText(a, job.nodes),
+          },
+        };
       }),
     );
     setEdges((cur) =>
-      cur.map((e) => ({
-        ...e,
-        animated: isEdgeFlowing(job.nodes[e.target]?.status),
-        style: { stroke: 'url(#opus-gradient)' },
-      })),
+      cur.map((e) => {
+        const a = AGENTS.find((x) => x.id === e.target);
+        const st = a ? agentStatus(a, job.nodes, { angleConfirmed }) : 'idle';
+        return { ...e, animated: st === 'running' || st === 'queued', style: { stroke: 'url(#opus-gradient)' } };
+      }),
     );
-  }, [job, pipeline?.id, setNodes, setEdges]);
+  }, [job, angleConfirmed, setNodes, setEdges]);
 
-  // —— 拖动结束写回后端
+  // —— 拖动写 localStorage（agent id 不是 engine 节点，不走后端 position 接口）
   const onNodeDragStop: NodeMouseHandler = useCallback(
     (_e, node) => {
       if (!jobId) return;
-      api.updateNodePosition(jobId, node.id, node.position.x, node.position.y).catch(console.error);
+      try {
+        const cur = JSON.parse(localStorage.getItem(agentPosKey(jobId)) || '{}');
+        cur[node.id] = { x: node.position.x, y: node.position.y };
+        localStorage.setItem(agentPosKey(jobId), JSON.stringify(cur));
+      } catch { /* ignore */ }
     },
     [jobId],
   );
 
-  const stats = useMemo(() => computeStats(job), [job]);
-
-  // 节点抽屉锁定：节点已 done 且其下游节点已被触发(queued/running/done)且未彻底失败 →
-  // 锁住该节点抽屉（防误触重跑冲掉下游产物）；下游彻底失败 或 下游还没触发(idle) → 不锁。
-  // 含 input(START)：START 永远 done，下游是 asr —— asr 一旦触发(queued/running/done)
-  // 即锁住 START，防止同一作品被重复启动；asr 失败或未启动则不锁。output 节点不参与。
-  const lockedForOpen = useMemo(() => {
-    if (!openNode || !job || !pipeline) return false;
-    const nd = pipeline.nodes.find((n) => n.name === openNode);
-    if (!nd || nd.kind === 'output') return false;
-    if (job.nodes[openNode]?.status !== 'done') return false;
-    const succ = pipeline.nodes.find((n) => n.deps.includes(openNode));
-    if (!succ) return false;
-    const ss = job.nodes[succ.name]?.status;
-    return ss === 'queued' || ss === 'running' || ss === 'done';
-  }, [openNode, job, pipeline]);
+  const overview = useMemo(() => computeOverview(job, angleConfirmed), [job, angleConfirmed]);
 
   if (!jobId) {
     return (
       <div className="page" style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', gap: 'var(--s-3)' }}>
         <span className="dim-mono">缺少作品 ID</span>
         <button className="btn ghost sm" onClick={() => nav('/')}>
-          <ArrowLeft size={14} strokeWidth={1.6} /> 返回模板中心
+          <ArrowLeft size={14} strokeWidth={1.6} /> 返回任务列表
         </button>
       </div>
     );
@@ -200,7 +178,7 @@ export function JobCanvasPage() {
     <div className="canvas-page">
       <div className="topbar">
         <button className="btn ghost sm" onClick={() => nav('/')}>
-          <ArrowLeft size={14} strokeWidth={1.6} /> 模板中心
+          <ArrowLeft size={14} strokeWidth={1.6} /> 任务列表
         </button>
         <div className="brand">
           <EditableMark jobId={jobId} value={job?.title ?? `作品 ${jobId.slice(0, 6)}`} />
@@ -216,24 +194,39 @@ export function JobCanvasPage() {
           <span className="dot" />
           {connected ? 'LIVE' : 'OFFLINE'}
         </span>
-        <span className="dim-mono">
-          {stats.done}/{stats.total} done · {stats.running} running
-        </span>
         <ThemeSwitcher />
       </div>
 
+      {/* 卧龙总览条：统领全局（聚合进度 + 当前阶段 + 进入按钮） */}
+      <div className={`wolong-bar status-${overview.status}`}>
+        <span className="wolong-id">
+          <Crown size={15} strokeWidth={1.7} /> 卧龙
+          <span className="dim-mono">统领全局</span>
+        </span>
+        <div className="wolong-track">
+          {AGENTS.map((a) => {
+            const st = job ? agentStatus(a, job.nodes, { angleConfirmed }) : 'idle';
+            return <span key={a.id} className={`wolong-pip status-${st}`} title={`${a.name} · ${a.role}`} />;
+          })}
+        </div>
+        <span className="wolong-stat dim-mono">
+          {overview.done}/{AGENTS.length} 阶段 · {overview.label}
+        </span>
+        {overview.current && (
+          <button className="btn primary sm" onClick={() => setOpenAgent(overview.current!)}>
+            进入 {AGENTS[agentIndex(overview.current)].name}
+          </button>
+        )}
+      </div>
+
       <div className="canvas-frame">
-        {(!job || !pipeline || nodes.length === 0) && (
+        {(!job || nodes.length === 0) && (
           <div className="canvas-loading" role="status" aria-live="polite">
             <Loader2 size={20} strokeWidth={2} className="spin" />
-            <span className="dim-mono">{!job ? '连接中…' : '加载节点图…'}</span>
+            <span className="dim-mono">{!job ? '连接中…' : '加载 agent 图…'}</span>
           </div>
         )}
-        {/* SVG defs：连线用 Google 蓝/红/黄 三色纵向渐变 */}
-        <svg
-          aria-hidden
-          style={{ position: 'absolute', width: 0, height: 0, top: 0, left: 0, pointerEvents: 'none' }}
-        >
+        <svg aria-hidden style={{ position: 'absolute', width: 0, height: 0, top: 0, left: 0, pointerEvents: 'none' }}>
           <defs>
             <linearGradient id="opus-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
               <stop offset="0%" stopColor="#4285F4" />
@@ -265,34 +258,42 @@ export function JobCanvasPage() {
         </ReactFlow>
       </div>
 
-      {openNode && job && pipeline && (
-        <NodeDrawer
+      {openAgent && job && pipeline && (
+        <AgentDrawer
+          key={openAgent}
           jobId={jobId}
-          nodeDef={pipeline.nodes.find((n) => n.name === openNode)!}
-          nodeState={job.nodes[openNode] ?? defaultIdleState(pipeline.nodes.find((n) => n.name === openNode)!)}
-          siblingNodes={job.nodes}
-          locked={lockedForOpen}
-          onClose={() => setOpenNode(null)}
-          onRun={() => handleRun(openNode)}
+          agent={AGENTS[agentIndex(openAgent)]}
+          job={job}
+          pipeline={pipeline}
+          angleConfirmed={angleConfirmed}
+          onClose={() => setOpenAgent(null)}
+          onAdvanceAgent={(next) => setOpenAgent(next)}
         />
       )}
     </div>
   );
 }
 
-// edge "正在流动" 的判定：上游已 done，下游 queued 或 running，意味着数据正在流过这条边。
-function isEdgeFlowing(targetStatus: string | undefined): boolean {
-  return targetStatus === 'queued' || targetStatus === 'running';
-}
-
-function computeStats(job: { nodes: Record<string, NodeState> } | null) {
-  if (!job) return { done: 0, running: 0, total: 0 };
-  const vals = Object.values(job.nodes);
-  return {
-    done: vals.filter((n) => n.status === 'done').length,
-    running: vals.filter((n) => n.status === 'running').length,
-    total: vals.length,
-  };
+// 卧龙总览聚合：完成阶段数 / 整体状态 / 当前应进入的 agent。
+function computeOverview(job: JobState | null, angleConfirmed: boolean): {
+  done: number;
+  status: NodeStatus;
+  label: string;
+  current: AgentId | null;
+} {
+  if (!job) return { done: 0, status: 'idle', label: '连接中', current: null };
+  const sts = AGENTS.map((a) => agentStatus(a, job.nodes, { angleConfirmed }));
+  const done = sts.filter((s) => s === 'done').length;
+  let status: NodeStatus = 'idle';
+  if (sts.some((s) => s === 'failed')) status = 'failed';
+  else if (sts.some((s) => s === 'running' || s === 'queued')) status = 'running';
+  else if (done === AGENTS.length) status = 'done';
+  const label =
+    status === 'failed' ? '有阶段失败' : status === 'done' ? '已完成' : status === 'running' ? '进行中' : '待开始';
+  // 当前阶段：首个未完成的 agent（失败的也算"需处理"）。
+  const idx = sts.findIndex((s) => s !== 'done');
+  const current = idx >= 0 ? AGENTS[idx].id : null;
+  return { done, status, label, current };
 }
 
 function EditableMark({ jobId, value }: { jobId: string; value: string }) {
@@ -347,17 +348,4 @@ function EditableMark({ jobId, value }: { jobId: string; value: string }) {
       }}
     />
   );
-}
-
-function defaultIdleState(nd: PipelineNodeDef): NodeState {
-  return {
-    name: nd.name,
-    status: 'idle',
-    started_at: null,
-    finished_at: null,
-    progress: '',
-    outputs: {},
-    error: null,
-    task_id: null,
-  };
 }

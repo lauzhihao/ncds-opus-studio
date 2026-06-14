@@ -17,7 +17,8 @@ def test_simplify_aweme():
         "statistics": {"digg_count": 100, "comment_count": 5, "share_count": 2, "collect_count": 9},
     }
     assert tikhub_client.simplify_aweme(a) == {
-        "aweme_id": "123", "desc": "测试", "digg": 100, "comment": 5, "share": 2, "collect": 9, "create": 1700,
+        "aweme_id": "123", "desc": "测试", "digg": 100, "comment": 5, "share": 2, "collect": 9,
+        "create": 1700, "cover_url": "",  # 无 video 字段 -> 封面回退空串
     }
 
 
@@ -49,80 +50,177 @@ def test_fetch_user_posts_paging(monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_read_dashscope_key_env(monkeypatch):
     monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test")
-    assert shenkuo._read_dashscope_key() == "sk-test"
+    assert shenkuo.capabilities.read_dashscope_key() == "sk-test"
 
 
 # --------------------------------------------------------------------------- #
-# collect_one 幂等
+# collect_one：产物按 平台+作品id 落作品仓库 state/works/{platform}/{aweme_id}/
 # --------------------------------------------------------------------------- #
+def _works_env(tmp_path, monkeypatch):
+    """works 仓库根随 NOF_STATE_DIR -> tmp;COLLECTED(历史抠图根)也指 tmp,离线隔离。"""
+    monkeypatch.setenv("NOF_STATE_DIR", str(tmp_path / "state" / "tasks"))
+    monkeypatch.setattr(shenkuo, "COLLECTED", tmp_path / "figure_collected")
+
+
+def _fake_frames(v, od, mf):
+    od.mkdir(parents=True, exist_ok=True)
+    f = od / "frame_001.jpg"
+    f.write_bytes(b"J")
+    return [f]
+
+
+def _fake_cut(frames, od, **kw):
+    od.mkdir(parents=True, exist_ok=True)
+    c = od / "frame_001.png"
+    c.write_bytes(b"P")
+    return [c]
+
+
 def test_collect_one_idempotent(tmp_path, monkeypatch):
-    monkeypatch.setattr(shenkuo, "COLLECTED", tmp_path / "collected")
-    author_dir = tmp_path / "author_x"
-    author_dir.mkdir()
+    """作品仓库里产物齐全 -> 全 cached、不调任何真函数。"""
+    _works_env(tmp_path, monkeypatch)
     aid = "999"
-    # 预置全部产物 -> 应全 cached、不调任何真函数
-    (author_dir / f"{aid}.mp4").write_bytes(b"x")
-    (author_dir / f"{aid}.paraformer.json").write_text("{}", encoding="utf-8")
-    (author_dir / f"{aid}.txt").write_text("t", encoding="utf-8")
-    fdir = author_dir / aid / "frames"
-    fdir.mkdir(parents=True)
-    (fdir / "frame_001.jpg").write_bytes(b"x")
-    cdir = tmp_path / "collected" / aid
-    cdir.mkdir(parents=True)
-    (cdir / "frame_001.png").write_bytes(b"x")
+    wdir = shenkuo.works_repo.work_dir("douyin", aid)
+    (wdir / "video.mp4").write_bytes(b"x")
+    (wdir / "asr.paraformer.json").write_text("{}", encoding="utf-8")
+    (wdir / "asr.txt").write_text("t", encoding="utf-8")
+    (wdir / "asr.clean.txt").write_text("clean", encoding="utf-8")
+    adir = wdir / "audio"
+    adir.mkdir()
+    for n in ("original.mp3", "vocals.mp3", "bgm.mp3"):
+        (adir / n).write_bytes(b"a")
+    (wdir / "frames").mkdir()
+    (wdir / "frames" / "frame_001.jpg").write_bytes(b"x")
+    (wdir / "cutouts").mkdir()
+    (wdir / "cutouts" / "frame_001.png").write_bytes(b"x")
+    (wdir / "comments.json").write_text(json.dumps({"items": []}), encoding="utf-8")
 
     def boom(*a, **k):
         raise AssertionError("幂等应跳过,不该调用")
 
     monkeypatch.setattr(shenkuo.tikhub_client, "fetch_video_url", boom)
     monkeypatch.setattr(shenkuo.tikhub_client, "download_video", boom)
-    monkeypatch.setattr(shenkuo, "_transcribe", boom)
-    monkeypatch.setattr(shenkuo, "_extract_frames", boom)
-    monkeypatch.setattr(shenkuo, "_cutout", boom)
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_top_comments", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "transcribe", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "extract_frames", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "cutout", boom)
 
+    author_dir = tmp_path / "author_x"
+    author_dir.mkdir()
     entry = shenkuo.collect_one(aid, author_dir)
     assert entry["status"]["download"] == "cached"
     assert entry["status"]["transcribe"] == "cached"
-    assert len(entry["frames"]) == 1
-    assert len(entry["cutouts"]) == 1
+    assert entry["status"]["comments"] == "cached"
+    assert len(entry["frames"]) == 1 and len(entry["cutouts"]) == 1
+    # manifest 落盘,products 指向作品仓库
+    m = shenkuo.works_repo.load_manifest("douyin", aid)
+    assert m and m["products"]["asr"]["txt"].endswith("asr.txt")
 
 
 def test_collect_one_fresh(tmp_path, monkeypatch):
-    monkeypatch.setattr(shenkuo, "COLLECTED", tmp_path / "collected")
+    """首采:产物落作品仓库 state/works/douyin/{aid}/ + 写 manifest。"""
+    _works_env(tmp_path, monkeypatch)
     author_dir = tmp_path / "author_x"
     author_dir.mkdir()
+    aid = "123"
 
-    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_video_url", lambda aid, token=None: "http://v/x.mp4")
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_video_url", lambda a, token=None: "http://v/x.mp4")
 
     def fake_dl(url, out, **k):
         out.write_bytes(b"MP4")
         return str(out)
 
     monkeypatch.setattr(shenkuo.tikhub_client, "download_video", fake_dl)
-    monkeypatch.setattr(shenkuo, "_transcribe", lambda v, op: ({"task": "x"}, "转写文案"))
+    monkeypatch.setattr(shenkuo.capabilities, "transcribe", lambda v, op: ({"task": "x"}, "转写文案"))
+    monkeypatch.setattr(shenkuo.capabilities, "separate_audio", lambda *a, **k: {})  # 跳过 ffmpeg/demucs
+    monkeypatch.setattr(shenkuo.capabilities, "clean_transcript", lambda raw, op=shenkuo._noop: None)
+    monkeypatch.setattr(shenkuo.capabilities, "extract_frames", _fake_frames)
+    monkeypatch.setattr(shenkuo.capabilities, "cutout", _fake_cut)
 
-    def fake_frames(v, od, mf):
-        od.mkdir(parents=True, exist_ok=True)
-        f = od / "frame_001.jpg"
-        f.write_bytes(b"J")
-        return [f]
-
-    def fake_cut(frames, od, **kw):
-        od.mkdir(parents=True, exist_ok=True)
-        c = od / "frame_001.png"
-        c.write_bytes(b"P")
-        return [c]
-
-    monkeypatch.setattr(shenkuo, "_extract_frames", fake_frames)
-    monkeypatch.setattr(shenkuo, "_cutout", fake_cut)
-
-    entry = shenkuo.collect_one("123", author_dir, meta={"desc": "d", "digg": 99})
+    entry = shenkuo.collect_one(aid, author_dir, meta={"desc": "d", "digg": 99}, top_comments=0)
+    wdir = shenkuo.works_repo.work_dir("douyin", aid)
     assert entry["status"]["download"] == "ok"
     assert entry["status"]["transcribe"] == "ok"
     assert entry["digg"] == 99
-    assert (author_dir / "123.paraformer.json").exists()
-    assert (author_dir / "123.txt").read_text(encoding="utf-8") == "转写文案"
+    assert (wdir / "asr.paraformer.json").exists()
+    assert (wdir / "asr.txt").read_text(encoding="utf-8") == "转写文案"
     assert len(entry["frames"]) == 1 and len(entry["cutouts"]) == 1
+    m = shenkuo.works_repo.load_manifest("douyin", aid)
+    assert m["status"]["download"] == "ok" and m["products"]["video"]
+
+
+def test_collect_one_adopts_legacy(tmp_path, monkeypatch):
+    """历史 author_dir 产物原地兼容:软链入仓库、就地复用,不搬字节、不重采。"""
+    _works_env(tmp_path, monkeypatch)
+    aid = "777"
+    author_dir = tmp_path / "author_legacy"
+    author_dir.mkdir()
+    (author_dir / f"{aid}.mp4").write_bytes(b"x")
+    (author_dir / f"{aid}.paraformer.json").write_text("{}", encoding="utf-8")
+    (author_dir / f"{aid}.txt").write_text("legacy", encoding="utf-8")
+    (author_dir / f"{aid}.clean.txt").write_text("legacy-clean", encoding="utf-8")
+    lfr = author_dir / aid / "frames"
+    lfr.mkdir(parents=True)
+    (lfr / "frame_001.jpg").write_bytes(b"x")
+    lcut = tmp_path / "figure_collected" / aid
+    lcut.mkdir(parents=True)
+    (lcut / "frame_001.png").write_bytes(b"x")
+    ladir = author_dir / aid / "audio"
+    ladir.mkdir(parents=True)
+    for n in ("original.mp3", "vocals.mp3", "bgm.mp3"):
+        (ladir / n).write_bytes(b"a")
+
+    def boom(*a, **k):
+        raise AssertionError("应复用历史产物,不该重采")
+
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_video_url", boom)
+    monkeypatch.setattr(shenkuo.tikhub_client, "download_video", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "transcribe", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "extract_frames", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "cutout", boom)
+
+    entry = shenkuo.collect_one(aid, author_dir, top_comments=0)
+    assert entry["status"]["download"] == "cached"
+    assert entry["status"]["transcribe"] == "cached"
+    wdir = shenkuo.works_repo.work_dir("douyin", aid)
+    assert (wdir / "video.mp4").is_symlink()  # 软链,字节仍在旧位置
+    assert (wdir / "asr.txt").read_text(encoding="utf-8") == "legacy"
+
+
+def test_collect_one_shared_across_authors(tmp_path, monkeypatch):
+    """同一作品出现在不同对标号:第二个对标号全部命中作品仓库,不重采。"""
+    _works_env(tmp_path, monkeypatch)
+    aid = "555"
+    a1 = tmp_path / "author_1"
+    a1.mkdir()
+    a2 = tmp_path / "author_2"
+    a2.mkdir()
+
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_video_url", lambda a, token=None: "http://v/x.mp4")
+    monkeypatch.setattr(shenkuo.tikhub_client, "download_video",
+                        lambda url, out, **k: out.write_bytes(b"MP4"))
+    monkeypatch.setattr(shenkuo.capabilities, "transcribe", lambda v, op: ({"t": 1}, "文案"))
+    monkeypatch.setattr(shenkuo.capabilities, "separate_audio", lambda *a, **k: {})
+    monkeypatch.setattr(shenkuo.capabilities, "clean_transcript", lambda raw, op=shenkuo._noop: None)
+    monkeypatch.setattr(shenkuo.capabilities, "extract_frames", _fake_frames)
+    monkeypatch.setattr(shenkuo.capabilities, "cutout", _fake_cut)
+
+    e1 = shenkuo.collect_one(aid, a1, meta={"desc": "d"}, top_comments=0)
+    assert e1["status"]["download"] == "ok" and e1["status"]["transcribe"] == "ok"
+
+    def boom(*a, **k):
+        raise AssertionError("跨对标号同作品应命中缓存,不该重采")
+
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_video_url", boom)
+    monkeypatch.setattr(shenkuo.tikhub_client, "download_video", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "transcribe", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "extract_frames", boom)
+    monkeypatch.setattr(shenkuo.capabilities, "cutout", boom)
+
+    e2 = shenkuo.collect_one(aid, a2, meta={"desc": "d"}, top_comments=0)
+    assert e2["status"]["download"] == "cached"
+    assert e2["status"]["transcribe"] == "cached"
+    assert len(e2["frames"]) == 1 and len(e2["cutouts"]) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -142,7 +240,7 @@ def test_run_author_picks_top_by_digg(tmp_path, monkeypatch):
     seen: list[str] = []
 
     def fake_collect(aid, ad, meta=None, max_frames=8, engine="threshold",
-                     top_comments=20, on_progress=shenkuo._noop):
+                     top_comments=20, platform="douyin", on_progress=shenkuo._noop):
         seen.append(aid)
         return {"aweme_id": aid, "digg": (meta or {}).get("digg"), "status": {"download": "ok"}}
 
@@ -168,10 +266,10 @@ def test_crop_stage_and_threshold_cutout():
     arr[40:70, 80:120] = (10, 10, 10)  # 中间一块黑剪影
     im = Image.fromarray(arr, "RGB")
 
-    crop = shenkuo._crop_stage(im)
+    crop = shenkuo.capabilities.crop_stage(im)
     assert crop.size == (int(200 * 0.96) - int(200 * 0.04), int(100 * 0.82) - int(100 * 0.13))
 
-    rgba, ratio = shenkuo._threshold_cutout(im)
+    rgba, ratio = shenkuo.capabilities.threshold_cutout(im)
     assert rgba.mode == "RGBA"
     assert 0.0 < ratio < 0.3  # 黑块占小部分:有前景有背景
 
@@ -189,7 +287,7 @@ def test_cutout_filters_solid_frames(tmp_path):
     content = tmp_path / "content.jpg"
     Image.fromarray(arr, "RGB").save(content)
 
-    cuts = shenkuo._cutout([black, content], tmp_path / "out", engine="threshold")
+    cuts = shenkuo.capabilities.cutout([black, content], tmp_path / "out", engine="threshold")
     names = [c.name for c in cuts]
     assert "content.png" in names
     assert "black.png" not in names  # 纯色过场被过滤

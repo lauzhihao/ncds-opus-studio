@@ -74,6 +74,52 @@ def _parse_opus_json(raw: str) -> Any:
     return json.loads(cleaned)
 
 
+def _opus_json_with_retry(
+    user_prompt: str,
+    system_prompt: str,
+    on_progress: Callable[[str], None],
+    *,
+    parse: Callable[[str], Any] | None = None,
+    model_id: str = "claude-opus-4-7",
+    max_attempts: int = 3,
+    retry_hint: str = "",
+) -> Any:
+    """调 opus 出结构化结果，解析失败就带纠正提示重试。
+
+    opus 偶发在字符串值里塞未转义字符（典型：中文内容里的英文双引号），
+    导致单行 JSON 解析在中段炸（``Expecting ',' delimiter``）。这里不做正则硬修
+    （怕改坏中文正文），改用 LLM 自纠：把上次报错回传，要求只输出合法 JSON 并转义特殊字符。
+
+    ``parse`` 默认 :func:`_parse_opus_json`（lines 用）；storyboard 传
+    ``parse_director_output`` 的偏函数。``retry_hint`` 追加进纠正提示说明所需结构。
+    只捕获 ``parse`` 抛的 ``ValueError``（含 ``json.JSONDecodeError``）/ ``RuntimeError`` 来重试；
+    ``_opus_structure`` 自身的启动器错误（如 401）在 try 外，立即上抛、不重试。
+    """
+    parse = parse or _parse_opus_json
+    last_exc: Exception | None = None
+    last_raw = ""
+    prompt = user_prompt
+    for attempt in range(1, max_attempts + 1):
+        last_raw = _opus_structure(prompt, system_prompt, model_id)
+        try:
+            return parse(last_raw)
+        except (ValueError, RuntimeError) as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                on_progress(f"opus 输出无法解析（第 {attempt}/{max_attempts} 次）：{exc}；带纠正提示重试…")
+            # 纠正提示：始终基于原始 user_prompt 重建，避免多轮叠加污染。
+            prompt = (
+                user_prompt
+                + "\n\n[严格要求] 上一次输出无法解析（报错："
+                + f"{exc}）。只输出一个合法的 JSON 对象，禁止任何代码块/解释/前后缀；"
+                + '字符串值内的英文双引号必须转义为 \\", 反斜杠转义为 \\\\, 换行转义为 \\n。'
+                + (("\n" + retry_hint) if retry_hint else "")
+            )
+    raise RuntimeError(
+        f"opus 输出无法解析（重试 {max_attempts} 次仍失败）：{last_exc}；tail={last_raw.strip()[-300:]}"
+    )
+
+
 def _episode_path(job_dir: Path) -> Path:
     return job_dir / "02_rw" / "episode.json"
 
@@ -408,11 +454,7 @@ def run_lines_step(
 
     system_prompt, user_prompt = _build_lines_prompt(draft)
     on_progress("调 opus 结构化为 beats…")
-    raw = _opus_structure(user_prompt, system_prompt)
-    try:
-        parsed = _parse_opus_json(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"opus 输出非法 JSON：{exc}") from exc
+    parsed = _opus_json_with_retry(user_prompt, system_prompt, on_progress)
 
     beats = parsed.get("beats") if isinstance(parsed, dict) else None
     meta_in = parsed.get("meta") if isinstance(parsed, dict) else None
@@ -493,8 +535,11 @@ def run_storyboard_step(
         palette=palette,
     )
     on_progress(f"调 director agent 分镜（{len(beats_in)} beats）…")
-    raw = _opus_structure(user_prompt, system_prompt)
-    scene_by_beat, scenes = storyboard_director.parse_director_output(raw, beats_raw)
+    scene_by_beat, scenes = _opus_json_with_retry(
+        user_prompt, system_prompt, on_progress,
+        parse=lambda raw: storyboard_director.parse_director_output(raw, beats_raw),
+        retry_hint="JSON 必须含 scenes{} 与 sceneMap{} 两个键，scenes 的每个值含 prompt 字段。",
+    )
 
     for i, b in enumerate(beats_raw, start=1):
         b["scene"] = scene_by_beat.get(i, b.get("scene") or "")

@@ -119,7 +119,41 @@ def test_load_sanitizes_hand_edited_file(tmp_path: Path):
     )
     cfg = load_subscriptions(p)
     assert cfg["interval_hours"] > 0
-    assert cfg["authors"] == [{"sec_uid": "S1", "note": None, "enabled": True}]
+    assert cfg["authors"] == [
+        {"sec_uid": "S1", "note": None, "enabled": True, "platform": "douyin", "interval_hours": None}
+    ]
+
+
+def test_tick_respects_per_account_interval(tmp_path: Path):
+    """per-account interval_hours 优先于全局：账号设 1h，上次刷新 2h 前 -> 该派（全局即便很大也不挡）。"""
+    p = tmp_path / "subs.json"
+    save_subscriptions(p, {"interval_hours": 24, "authors": [
+        {"sec_uid": "S1", "enabled": True, "platform": "douyin", "interval_hours": 1},
+    ]})
+    store = TaskStore(tmp_path / "tasks")
+    done = store.create("shenkuo", {"author": "S1", "refresh_only": True}, source="cron")
+    store.update_status(done.task_id, "completed")
+    from datetime import datetime, timedelta
+    m = store.get_meta(done.task_id)
+    m.created_at = (datetime.now() - timedelta(hours=2)).isoformat()
+    store._write_meta(m)
+    # 全局 24h 会挡，但账号自己设 1h，2h 前的刷新已过期 -> 应派
+    n = asyncio.run(run_subscription_tick(StubRunner(), store, p))
+    assert n == 1
+
+
+def test_tick_skips_non_douyin_platform(tmp_path: Path):
+    """TikTok 等非抖音平台暂不接入采集 -> tick 跳过,不派沈括(免堆失败 cron)。"""
+    p = tmp_path / "subs.json"
+    save_subscriptions(p, {"authors": [
+        {"sec_uid": "DY", "enabled": True, "platform": "douyin"},
+        {"sec_uid": "TT", "enabled": True, "platform": "tiktok"},
+    ]})
+    store = TaskStore(tmp_path / "tasks")
+    runner = StubRunner()
+    n = asyncio.run(run_subscription_tick(runner, store, p))
+    assert n == 1
+    assert runner.calls[0][1] == {"author": "DY", "refresh_only": True}
 
 
 @pytest.fixture()

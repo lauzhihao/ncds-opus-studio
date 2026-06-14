@@ -1,10 +1,14 @@
 // 极简 fetch 封装：所有路径相对 /，由 Vite 在 dev 时 proxy，prod 走同源 FastAPI。
 import type {
+  AccountPost,
+  AccountResolveResult,
   Episode,
   JobState,
   JobSummary,
   ParsedShare,
   PipelineDef,
+  SubscriptionsConfig,
+  WorkResolveResult,
 } from './types';
 
 async function get<T>(path: string): Promise<T> {
@@ -43,6 +47,15 @@ export const api = {
   listPipelines: () => get<{ pipelines: PipelineDef[] }>('/pipelines'),
   getPipeline: (id: string) => get<PipelineDef>(`/pipelines/${id}`),
   listJobs: () => get<{ jobs: JobSummary[] }>('/jobs'),
+  // 长期任务：监控的对标账号 + 某账号的作品列表
+  getSubscriptions: () => get<SubscriptionsConfig>('/subscriptions'),
+  putSubscriptions: (cfg: SubscriptionsConfig) => put<SubscriptionsConfig>('/subscriptions', cfg),
+  getAccountPosts: (secUid: string) =>
+    get<{ sec_uid: string; posts: AccountPost[] }>(`/accounts/${encodeURIComponent(secUid)}/posts`),
+  // 从抖音主页分享链接/口令解析出账号（sec_uid + 昵称）
+  resolveAccount: (text: string) => post<AccountResolveResult>('/accounts/resolve', { text }),
+  // 从抖音作品分享链接/口令解析出作品卡（封面/标题/话题/数据/作者）；后端带缓存+锁
+  resolveWork: (text: string) => post<WorkResolveResult>('/works/resolve', { text }),
   // mock 开关：URL 带 ?mock=1 时种一个 015 素材的 mock 作品（开发预览用）
   ensureMock: () => post<{ job_id: string; pipeline_id: string }>('/mock/ensure'),
   getJob: (id: string) => get<JobState>(`/jobs/${id}`),

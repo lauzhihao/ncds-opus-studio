@@ -5,7 +5,10 @@
 .canvas-page {
   height: 100vh;
   display: grid;
-  grid-template-rows: 56px 1fr;
+  /* topbar / wolong-bar / 画布 三行；之前只有 56px 1fr 两行，wolong-bar 吃掉 1fr 被拉伸，
+     画布落到隐式第三行、溢出窗口底部看不到底。auto 让 wolong-bar 取自然高度，画布占满剩余 1fr。 */
+  grid-template-rows: 56px auto 1fr;
+  padding-bottom: var(--s-4);          /* 画布底部与窗口底保持间距 */
 }
 .canvas-frame {
   position: relative;
@@ -217,4 +220,30 @@
   animation: spin 0.9s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* 执行中文字：高光带从左到右流过字形（与 spinner 转动呼应），形成「飘动 + 脉冲染色」。
+   渐变两端为常态 running 色、中段提亮，用 background-clip:text 把高光裁进文字。 */
+.node .progress-line .progress-text {
+  background-image: linear-gradient(
+    90deg,
+    var(--status-running) 0%,
+    var(--status-running) 40%,
+    #ffe1ad 50%,
+    var(--status-running) 60%,
+    var(--status-running) 100%
+  );
+  background-size: 200% 100%;
+  /* repeat（非 no-repeat）：两端同为 running 橙、平铺后底色始终铺满文字，
+     高光带循环扫过不再出现「文字消失」的空档。动画平移恰好一个贴图宽度(200%)，无缝衔接。 */
+  background-repeat: repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: progress-text-flow 1.8s linear infinite;
+}
+@keyframes progress-text-flow {
+  from { background-position: 200% 0; }
+  to   { background-position: 0% 0; }
+}
 

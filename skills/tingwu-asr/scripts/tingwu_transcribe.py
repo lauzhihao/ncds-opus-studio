@@ -6,18 +6,24 @@ import dashscope
 from dashscope import Files
 from dashscope.audio.asr import Transcription
 
-def load_config():
-    config_path = os.path.expanduser("~/.openclaw/config.json")
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            return json.load(f)
-    return {}
+def _read_dotenv_value(key):
+    """从仓库根 .env 读某 key（skills/<skill>/scripts/ 上四级 = 仓库根）。"""
+    base = os.path.abspath(__file__)
+    for _ in range(4):
+        base = os.path.dirname(base)
+    env_file = os.path.join(base, ".env")
+    if os.path.exists(env_file):
+        with open(env_file, encoding="utf-8") as f:
+            for line in f:
+                if line.strip().startswith(key + "="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+    return None
 
 def get_api_key():
-    config = load_config()
-    api_key = config.get("dashscope_api_key")
+    """DashScope key：环境变量 DASHSCOPE_API_KEY > 仓库根 .env（~/.openclaw 已弃用）。"""
+    api_key = os.environ.get("DASHSCOPE_API_KEY") or _read_dotenv_value("DASHSCOPE_API_KEY")
     if not api_key:
-        raise ValueError("❌ 缺少 DashScope API Key\n\n请先配置：\n1. 访问阿里云控制台获取 DashScope API Key\n2. 在 ~/.openclaw/config.json 中添加:\n   {\"dashscope_api_key\": \"您的密钥\"}")
+        raise ValueError("缺少 DASHSCOPE_API_KEY：请设环境变量，或写进仓库根 .env（模板见 .env.example）")
     return api_key
 
 def upload_file(file_path):

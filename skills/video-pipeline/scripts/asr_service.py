@@ -131,11 +131,13 @@ def load_openclaw_config() -> dict:
 def load_dashscope_key() -> str | None:
     if os.environ.get("DASHSCOPE_API_KEY"):
         return os.environ.get("DASHSCOPE_API_KEY")
-    config_path = os.path.expanduser("~/.openclaw/config.json")
-    if not os.path.exists(config_path):
-        return None
-    with open(config_path, encoding="utf-8") as handle:
-        return json.load(handle).get("dashscope_api_key")
+    # ~/.openclaw 已弃用：回退读仓库根 .env（统一走环境变量 / .env）
+    env_file = Path(__file__).resolve().parents[3] / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("DASHSCOPE_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+    return None
 
 
 def load_runtime_config() -> dict[str, Any]:

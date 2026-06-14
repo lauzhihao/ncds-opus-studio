@@ -6,7 +6,7 @@
 //          用户改坏命名约定）；chapter 字段保留写回不暴露。
 // 防抖保存：beats 数组变化 600ms 后整段写回 episode.json（仅 replace beats[]，保留
 //          scenes/audio/fonts 等其他字段）。
-// 下一步：「用此台词稿 · 下一步」flush 草稿后 runNode('tts')。
+// 下一步：「用此台词稿 · 下一步」flush 草稿后 runNode('storyboard')。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Play, Plus, RefreshCw, Square, Trash2 } from 'lucide-react';
@@ -24,7 +24,7 @@ interface Props {
   onAdvanced?: () => void;
 }
 
-const NEXT_NODE = 'tts';
+const NEXT_NODE = 'storyboard';   // lines 之后是 storyboard（分镜），不是 tts；tts 依赖 storyboard
 const EPISODE_RELPATH = '02_rw/episode.json';
 
 interface Beat {
@@ -175,8 +175,8 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      showToast('启动 TTS 失败，请稍后再试');
-      console.error('[LinesPanel] 启动 TTS 失败', e);
+      showToast('启动分镜失败，请稍后再试');
+      console.error('[LinesPanel] 启动分镜失败', e);
     } finally {
       setAdvanceBusy(false);
     }
@@ -224,9 +224,7 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
 
   // 提示 banner（标题上方，统一风格）：idle 引导，failed 报错，加载失败提示
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
-  if (status === 'failed' && nodeState.error) {
-    hint = { tone: 'error', text: `失败：${nodeState.error}` };
-  } else if (loadErr) {
+  if (loadErr) {
     hint = { tone: 'error', text: `加载失败：${loadErr}` };
   } else if (status === 'idle') {
     hint = { tone: 'info', text: '点击下方「加载台词」启动，AI 自动切分字幕。' };
@@ -275,7 +273,7 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
             <button
               type="button"
               className="btn sm icon-only primary"
-              title="用此台词稿 · 下一步（启动 TTS）"
+              title="用此台词稿 · 下一步（启动分镜）"
               disabled={advanceBusy || actionBusy || status !== 'done' || beats.length === 0}
               onClick={doAdvance}
             >

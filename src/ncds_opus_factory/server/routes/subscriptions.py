@@ -30,6 +30,19 @@ class SubscriptionAuthor(BaseModel):
     sec_uid: str
     note: str | None = None
     enabled: bool = True
+    # 平台：douyin（默认，沈括可采集）/ tiktok（可监控展示，采集暂未接入）
+    platform: str = "douyin"
+    # 每账号更新频率(小时)；None=用全局 interval_hours
+    interval_hours: float | None = None
+    # 展示快照：新增时由 /accounts/resolve 结果带入，卡片直接显示 + 复用（避免重复打 TikHub）
+    nickname: str | None = None
+    avatar: str | None = None
+    unique_id: str | None = None
+    follower_count: int | None = None
+    like_count: int | None = None
+    works_count: int | None = None
+    # 我方最后一次拉取该账号档案的 unix 秒（用于卡片"最近更新 X前"）
+    refreshed_at: float | None = None
 
 
 class SubscriptionsConfig(BaseModel):

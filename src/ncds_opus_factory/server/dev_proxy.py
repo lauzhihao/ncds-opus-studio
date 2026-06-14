@@ -47,7 +47,10 @@ def build_router(vite_base: str | None = None) -> APIRouter:
         vite_base = f"http://127.0.0.1:{port}"
     base = vite_base.rstrip("/")
     ws_base = base.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-    client = httpx.AsyncClient(base_url=base, timeout=None)
+    # trust_env=False：只反代本机 vite,绝不读 env 代理(HTTP(S)_PROXY/ALL_PROXY)——
+    # 否则环境里的 SOCKS 代理会让 httpx 构造时崩(需 socksio)或把 localhost 流量错误塞进代理。
+    # 不影响 server 其它需要走代理的外部调用(各自独立 client)。
+    client = httpx.AsyncClient(base_url=base, timeout=None, trust_env=False)
 
     router = APIRouter()
 

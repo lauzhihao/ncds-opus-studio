@@ -74,6 +74,42 @@ def test_run_lines_step_missing_draft_raises(tmp_path: Path):
         perf.run_lines_step(_noop, job_dir=str(tmp_path / "job"))
 
 
+# 缺逗号 → json.loads 抛 "Expecting ',' delimiter"（复刻线上 opus 偶发的非法 JSON）
+_BAD_LINES_JSON = '{"meta": {"title": "x"}, "beats": [{"zh": "第一句" "en": ""}]}'
+
+
+def test_run_lines_step_retries_bad_json_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """opus 第一次出非法 JSON，带纠正提示重试后出合法 JSON → lines 成功。"""
+    calls = {"n": 0}
+
+    def flaky_opus(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-7") -> str:
+        calls["n"] += 1
+        return _BAD_LINES_JSON if calls["n"] == 1 else _LINES_JSON
+
+    monkeypatch.setattr(perf, "_opus_structure", flaky_opus)
+    jd = tmp_path / "job"
+    (jd / "02_rw").mkdir(parents=True)
+    (jd / "02_rw" / "draft.md").write_text("# 草稿\n\n正文。", encoding="utf-8")
+
+    out = perf.run_lines_step(_noop, job_dir=str(jd))
+    assert calls["n"] == 2                       # 确实重试了一次
+    assert out["beats_count"] == 3
+
+
+def test_run_lines_step_raises_after_max_attempts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """opus 始终出非法 JSON → 重试耗尽抛 RuntimeError（带 tail 便于排查）。"""
+    monkeypatch.setattr(
+        perf, "_opus_structure",
+        lambda u, s, m="claude-opus-4-7": _BAD_LINES_JSON,
+    )
+    jd = tmp_path / "job"
+    (jd / "02_rw").mkdir(parents=True)
+    (jd / "02_rw" / "draft.md").write_text("# 草稿\n\n正文。", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="重试 3 次仍失败"):
+        perf.run_lines_step(_noop, job_dir=str(jd))
+
+
 # --------------------------------------------------------------------------- #
 # B2) storyboard performer：真实算法 + director 桩 → 回填 scene + 写 scenes{}
 # --------------------------------------------------------------------------- #
@@ -96,6 +132,35 @@ def test_run_storyboard_step_fills_scenes(tmp_path: Path, monkeypatch: pytest.Mo
     got = json.loads((jd / "02_rw" / "episode.json").read_text(encoding="utf-8"))
     assert set(got["scenes"]) == {"s1", "s2"}
     assert [b["scene"] for b in got["beats"]] == ["s1", "s1", "s2"]   # sceneMap 回填
+
+
+# 缺逗号 + 缺 sceneMap → parse_director_output 抛 → 触发重试
+_BAD_DIRECTOR_JSON = '{"scenes": {"s1": {"prompt": "x" "group": "g1"}}}'
+
+
+def test_run_storyboard_step_retries_bad_json_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """director opus 第一次出非法 JSON，带纠正提示重试后出合法分镜 → storyboard 成功。"""
+    calls = {"n": 0}
+
+    def flaky_opus(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-7") -> str:
+        calls["n"] += 1
+        return _BAD_DIRECTOR_JSON if calls["n"] == 1 else _DIRECTOR_JSON
+
+    monkeypatch.setattr(perf, "_opus_structure", flaky_opus)
+    jd = tmp_path / "job"
+    (jd / "02_rw").mkdir(parents=True)
+    ep = {
+        "meta": {"title": "T"}, "image": {}, "visual": {},
+        "beats": [{"zh": "一", "en": "", "scene": ""},
+                  {"zh": "二", "en": "", "scene": ""},
+                  {"zh": "三", "en": "", "scene": ""}],
+        "scenes": {},
+    }
+    (jd / "02_rw" / "episode.json").write_text(json.dumps(ep, ensure_ascii=False), encoding="utf-8")
+
+    out = perf.run_storyboard_step(_noop, job_dir=str(jd))
+    assert calls["n"] == 2                       # 确实重试了一次
+    assert out["scenes_count"] == 2
 
 
 # --------------------------------------------------------------------------- #

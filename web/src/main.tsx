@@ -2,7 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
-import { TemplatesPage } from './routes/TemplatesPage';
+import { HomePage } from './routes/HomePage';
+import { AccountWorksPage } from './routes/AccountWorksPage';
 import { JobCanvasPage } from './routes/JobCanvasPage';
 import { ToastProvider } from './components/Toast';
 import { applyThemeFromStorage } from './hooks/useTheme';
@@ -21,7 +22,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <Routes>
-          <Route path="/" element={<TemplatesPage />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/accounts/:secUid" element={<AccountWorksPage />} />
           <Route path="/jobs/:jobId" element={<JobCanvasPage />} />
         </Routes>
       </BrowserRouter>

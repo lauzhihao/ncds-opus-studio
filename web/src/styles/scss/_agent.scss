@@ -1,0 +1,652 @@
+/* Agent 视角重构新增样式：卧龙总览条 / 抽屉成员步进 / 选题面板 / 通用命令步 /
+   任务视角页签 / 临时任务新建框。沿用既有 token。 */
+
+/* 全局旋转工具：项目里 className="spin" 此前只在个别作用域才有动画（如 .tpl-running-mask .spin），
+   补一个全局规则，让所有 Loader2 spinner 都能转（@keyframes spin 在 _canvas.scss 已定义）。 */
+.spin { animation: spin 0.9s linear infinite; }
+
+/* 对标账号卡：作者数据（粉丝/获赞/作品）一行小字 */
+.account-stats {
+  display: flex; gap: var(--s-4);
+  margin: 6px 0 2px;
+  font-size: var(--text-xs); color: var(--ink-3);
+  b { color: var(--ink-1); font-weight: 600; margin-right: 2px; }
+}
+
+/* 账号卡：最近更新（我方拉取时间）—— 定位到作者信息区右上角 */
+/* 账号卡没有顶部封面，需让 body 填满卡片(grid 等高拉伸出来的)高度，footer 才能真正沉底。 */
+.account-card { display: flex; flex-direction: column; }
+.account-card .body {
+  position: relative;
+  flex: 1;                         /* 撑满 .tpl-card 拉伸出来的高度，否则 footer 下方留一片空白 */
+  display: flex; flex-direction: column; gap: var(--s-2);
+  padding-bottom: var(--s-3);      /* 收紧底部留白 */
+}
+/* footer 沉到卡片底部：grid 等高拉伸时把多余高度让给数据行与分割线之间，
+   分割线随之下移到接近底部，footer 下方不再留一片空白。
+   选择器须 .account-card .body .footer（特异性对齐 .tpl-card .body .footer 才能压过其 margin-top）。 */
+.account-card .body .footer { margin-top: auto; }
+.account-updated {
+  display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+  font-size: var(--text-2xs); color: var(--ink-3);
+}
+.account-card .account-updated {
+  position: absolute;
+  top: var(--s-4); right: var(--s-4);
+}
+
+/* 账号卡：去掉顶部封面图，作者头像移入信息区、放名字+ID 左侧横排。
+   头像直径 ≈ 名字行高(text-lg×1.3) + 间距(2px) + ID 行高(text-sm×1.4) ≈ 44px，
+   使头像与右侧两行文字等高对齐。 */
+.account-card .account-head {
+  display: flex; align-items: center; gap: var(--s-3);
+}
+.account-card .account-avatar {
+  flex-shrink: 0;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--bg-surface-2);
+}
+.account-card .account-avatar-fallback {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-3);
+}
+.account-card .account-avatar-mark {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm); font-weight: 600; letter-spacing: 0.04em;
+}
+.account-card .account-ident {
+  flex: 1; min-width: 0;             /* min-width:0 让两行文字 ellipsis 生效 */
+  display: flex; flex-direction: column; gap: 2px;
+  padding-right: 76px;              /* 给右上角"最近更新"chip 留位 */
+}
+.account-card .account-ident .name {
+  line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.account-card .account-uid {
+  font-size: var(--text-sm); line-height: 1.4; color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 平台标签：用主题色，不同平台不同颜色（抖音红 / TikTok 蓝，取自画布渐变色） */
+.platform-badge {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center;
+  font-size: var(--text-2xs); font-weight: 500;
+  padding: 1px 8px; border-radius: 999px;
+  border: 1px solid currentColor;
+
+  &.douyin { color: #ea4335; background: rgba(234, 67, 53, 0.09); }
+  &.tiktok { color: #4285f4; background: rgba(66, 133, 244, 0.09); }
+}
+
+/* 作品卡：四项数据（赞/评论/转发/收藏）带图标一行 */
+.post-stats {
+  display: flex; flex-wrap: wrap; gap: var(--s-3);
+  margin: 4px 0 2px;
+  font-size: var(--text-xs); color: var(--ink-3);
+  span { display: inline-flex; align-items: center; gap: 3px; }
+}
+
+/* 作品列表底部：与页面留白 + 分割线 */
+.works-foot-divider {
+  height: 1px;
+  background: var(--border, var(--bg-overlay));
+  margin: var(--s-6) var(--s-6) calc(var(--s-6) * 2);
+}
+
+/* 作品列表顶部：作者信息条（头像 + 平台/监控/更新 + 数据 + 取消关注） */
+.works-author-header {
+  display: flex; align-items: center; gap: var(--s-4);
+  margin: var(--s-4) var(--s-6) 0;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--border, var(--bg-overlay));
+  border-radius: var(--r-2);
+  background: var(--bg-surface);
+
+  .spacer { flex: 1; }
+  .wah-avatar {
+    width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
+    border: 1px solid var(--bg-overlay);
+  }
+  .wah-info { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .wah-tags { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+  .wah-name { font-size: var(--text-base); font-weight: 600; color: var(--ink-1); margin-right: 2px; }
+  .wah-uid-row { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+  .wah-uid { font-size: var(--text-2xs); color: var(--ink-3); word-break: break-all; }
+  .wah-unfollow {
+    flex-shrink: 0;
+    &:hover { color: var(--status-failed); border-color: var(--status-failed); }
+  }
+}
+
+/* —— 卧龙总览条 —— */
+.wolong-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-2) var(--s-4);
+  margin: 0 var(--s-4);
+  border: 1px solid var(--bg-overlay);
+  border-radius: var(--r-1);
+  background: var(--bg-surface);
+
+  &.status-running { border-color: var(--status-running); }
+  &.status-failed { border-color: var(--status-failed); }
+  &.status-done { border-color: var(--status-done); }
+
+  .wolong-id {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: var(--ink-1);
+    white-space: nowrap;
+
+    .dim-mono { font-weight: 400; margin-left: 4px; }
+  }
+
+  .wolong-track {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .wolong-pip {
+    width: 12px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--ink-3);
+    opacity: 0.45;
+
+    &.status-done { background: var(--status-done); opacity: 1; }
+    &.status-running,
+    &.status-queued { background: var(--status-running); opacity: 1; }
+    &.status-failed { background: var(--status-failed); opacity: 1; }
+  }
+
+  .wolong-stat { white-space: nowrap; }
+  .spacer { flex: 1; }
+}
+
+/* —— 抽屉内成员步进 chips（agent 状态监控面板） —— */
+.agent-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--bg-overlay);
+
+  .agent-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--bg-overlay);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+
+    &:hover { border-color: var(--accent); }
+    &.active {
+      border-color: var(--accent);
+      color: var(--ink-1);
+      background: var(--accent-tint);
+    }
+
+    .step-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--ink-3);
+
+      &.status-done { background: var(--status-done); }
+      &.status-running,
+      &.status-queued { background: var(--status-running); }
+      &.status-failed { background: var(--status-failed); }
+    }
+  }
+}
+
+.agent-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* —— 通用 panel 容器（GuiguziPanel / StepRunPanel 用） —— */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-4);
+}
+
+.panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.panel-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+.panel-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  padding-top: var(--s-2);
+}
+
+/* —— 鬼谷子选题 —— */
+.guiguzi-sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.guiguzi-source {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: 6px 10px;
+  border: 1px solid var(--bg-overlay);
+  border-radius: var(--r-1);
+  background: var(--bg-surface);
+
+  .guiguzi-source-title { color: var(--ink-1); font-size: var(--text-sm); }
+}
+.guiguzi-angle {
+  width: 100%;
+  resize: vertical;
+  padding: var(--s-3);
+  border: 1px solid var(--bg-overlay);
+  border-radius: var(--r-1);
+  background: var(--bg-input);
+  color: var(--ink-1);
+  font: inherit;
+  line-height: 1.5;
+}
+
+/* —— 通用命令步面板 —— */
+.step-run-panel {
+  .step-run-status {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    flex-wrap: wrap;
+
+    .progress-line { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+  }
+  .step-run-artifacts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+  }
+}
+
+/* —— 任务视角页签 —— */
+.task-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-left: var(--s-5);
+
+  .task-tab {
+    padding: 5px 12px;
+    border-radius: var(--r-1);
+    color: var(--ink-3);
+    text-decoration: none;
+    font-size: var(--text-sm);
+    transition: color 0.15s, background 0.15s;
+
+    &:hover { color: var(--ink-1); }
+    &.active {
+      color: var(--ink-1);
+      background: var(--accent-tint);
+    }
+  }
+}
+
+/* —— 临时任务新建框 —— */
+.temp-create {
+  display: flex;
+  gap: var(--s-2);
+  margin-bottom: var(--s-5);
+
+  .temp-create-input {
+    flex: 1;
+    padding: var(--s-3);
+    border: 1px solid var(--bg-overlay);
+    border-radius: var(--r-1);
+    background: var(--bg-input);
+    color: var(--ink-1);
+    font: inherit;
+
+    &:focus { outline: none; border-color: var(--accent); }
+  }
+}
+
+/* badge 的暂停态（账号卡） */
+.badge.dim { opacity: 0.55; }
+
+/* —— 首页：分区折叠 + 虚线新增框 —— */
+.card-section {
+  margin-bottom: var(--s-6);
+
+  .section-toggle {
+    margin-left: var(--s-3);
+    padding: 2px 10px;
+    border: 1px solid var(--border, var(--bg-overlay));
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+
+    &:hover { border-color: var(--accent); color: var(--ink-1); }
+  }
+}
+
+.add-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-1);
+  /* 缩小到约作品卡的 70%：不被 grid 拉伸到整行高，固定较小尺寸并在格内居中 */
+  height: 200px;
+  width: 70%;
+  min-width: 196px;
+  align-self: center;
+  justify-self: center;
+  border: 2px dashed var(--border-strong, var(--ink-3));
+  border-radius: var(--r-4, var(--r-2));
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.15s;
+
+  &:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-tint);
+    transform: translateY(-2px);
+  }
+
+  .add-card-label { font-size: var(--text-xs); }
+}
+
+/* —— 弹窗（复用 .modal-backdrop 居中遮罩） —— */
+.modal-dialog {
+  /* 放大约 1.5×（440 → 680）并适当加宽以容纳横向结果卡 */
+  width: min(680px, 94vw);
+  background: var(--bg-surface);
+  border: 1px solid var(--border, var(--bg-overlay));
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow-4, 0 12px 40px rgba(0, 0, 0, 0.25));
+  overflow: hidden;
+
+  .modal-head {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-4) var(--s-5);
+    border-bottom: 1px solid var(--bg-overlay);
+
+    .title { margin: 0; font-size: var(--text-lg, 1.05rem); font-weight: 600; color: var(--ink-1); flex: 1; }
+  }
+
+  .modal-body { padding: var(--s-5); }
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+
+  .modal-field { display: flex; flex-direction: column; gap: 6px; }
+  .modal-label { font-size: var(--text-sm); color: var(--ink-2); }
+  .modal-input {
+    width: 100%;
+    padding: var(--s-3);
+    border: 1px solid var(--bg-overlay);
+    border-radius: var(--r-1);
+    background: var(--bg-input);
+    color: var(--ink-1);
+    font: inherit;
+    resize: vertical;
+
+    &:focus { outline: none; border-color: var(--accent); }
+  }
+  .modal-err { color: var(--status-failed); font-size: var(--text-sm); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: var(--s-2); }
+
+  /* 解析出的账号预览卡：单行 —— 头像 | 昵称/uid | 数据 | 频率+删除 */
+  .resolved-account {
+    position: relative;
+    padding: var(--s-3) var(--s-4);
+    border: 1px solid var(--bg-overlay);
+    border-radius: var(--r-2);
+    background: var(--bg-surface);
+
+    /* 网格固定各区宽度：头像 | 身份(1fr) | 数据 | 频率+删除 —— 跨卡片垂直对齐 */
+    .resolved-row {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr) 196px 92px;
+      align-items: center;
+      gap: var(--s-4);
+    }
+
+    /* loading：遮罩层 + 居中 spinner（解析完成后整行替换为正常卡片） */
+    .resolved-mask {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--r-2);
+      background: color-mix(in srgb, var(--bg-surface) 60%, transparent);
+      color: var(--accent);
+    }
+    .skeleton,
+    .skeleton-bar {
+      background: var(--bg-overlay);
+      animation: skeleton-pulse 1.2s ease-in-out infinite;
+    }
+    /* 头像 skeleton 保持圆形（.resolved-avatar 的 50% 由元素自身保留） */
+    .skeleton-bar { height: 12px; border-radius: 6px; }
+    .skeleton-bar.sm { height: 9px; margin-top: 8px; }
+
+    .resolved-avatar {
+      width: 52px; height: 52px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
+      border: 1px solid var(--bg-overlay);
+    }
+
+    /* 身份块：昵称 + @uid（grid 第 2 列，min-width:0 才能让昵称截断生效） */
+    .resolved-meta { min-width: 0; }
+    .resolved-name {
+      display: flex; align-items: center; gap: var(--s-2); min-width: 0;
+      font-size: var(--text-base); font-weight: 600; color: var(--ink-1);
+    }
+    .resolved-nick {
+      min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; /* 超长截断为 … */
+    }
+    .resolved-uid {
+      font-size: var(--text-2xs); color: var(--ink-3);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* 数据：固定列（196px）内三组竖排小数居中，跨卡片对齐 */
+    .resolved-stats {
+      display: flex; gap: var(--s-3);
+      justify-content: center;
+      span { display: flex; flex-direction: column; align-items: center; line-height: 1.2; min-width: 52px; }
+      b { font-size: var(--text-base); font-weight: 600; color: var(--ink-1); }
+      i { font-style: normal; font-size: var(--text-2xs); color: var(--ink-3); margin-top: 2px; }
+    }
+
+    /* 频率下拉 + 删除按钮（频率在删除左侧，靠右对齐）；删除 hover 变红 */
+    .resolved-controls {
+      display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2);
+      .btn.icon-only:hover { color: var(--status-failed); border-color: var(--status-failed); }
+    }
+  }
+
+  /* 解析出的作品预览卡（临时任务"智能解析"）：封面 | 标题/话题/数据 +（右下）作者/关注ta；删除在右上角。
+     与 .resolved-account 同弹窗体系，左封面右信息；skeleton/mask 本卡自带。 */
+  .resolved-work {
+    position: relative;
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: var(--s-3);
+    align-items: start;
+    padding: var(--s-3);
+    border: 1px solid var(--bg-overlay);
+    border-radius: var(--r-2);
+    background: var(--bg-surface);
+
+    .resolved-work-cover {
+      width: 64px; height: 85px;            /* 抖音竖版 3:4 缩略 */
+      object-fit: cover; border-radius: var(--r-1);
+      background: var(--bg-surface-2); flex-shrink: 0;
+    }
+    .resolved-work-cover-empty {
+      display: flex; align-items: center; justify-content: center; color: var(--ink-3);
+    }
+
+    .resolved-work-meta {
+      min-width: 0; display: flex; flex-direction: column; gap: 5px;
+      min-height: 85px;        /* 与封面等高，配合数据行 margin-top:auto 让数据沉到封面下边框对齐 */
+    }
+    .resolved-work-title {
+      padding-right: 28px;                  /* 避让右上角删除按钮 */
+      font-size: var(--text-sm); font-weight: 600; color: var(--ink-1); line-height: 1.4;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .resolved-work-tags {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      .work-tag {
+        font-size: var(--text-2xs); color: var(--accent);
+        background: var(--accent-tint); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
+      }
+    }
+    /* 数据行：四项互动数据(左) + 作者信息&关注ta(右,居右,同一行)；
+       margin-top:auto 沉到 meta 底部，使文字底线与封面下边框对齐。 */
+    .resolved-work-statrow {
+      display: flex; align-items: center; gap: var(--s-3); margin-top: auto;
+    }
+    .resolved-work-stats {
+      flex-shrink: 0;
+      display: flex; flex-wrap: wrap; gap: var(--s-3);
+      span { display: inline-flex; align-items: baseline; gap: 3px; }
+      b { font-size: var(--text-sm); font-weight: 600; color: var(--ink-1); }
+      i { font-style: normal; font-size: var(--text-2xs); color: var(--ink-3); }
+    }
+    .resolved-work-side {
+      margin-left: auto; min-width: 0;
+      display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2);
+      /* 关注ta 按钮：ghost 默认 border 透明、不够明显，这里补一道边框 */
+      .btn { border-color: var(--border); }
+      .btn:hover:not(:disabled) { border-color: var(--border-strong); }
+    }
+    .resolved-work-author {
+      display: flex; align-items: center; gap: 6px; min-width: 0;
+      .rwa-avatar {
+        width: 20px; height: 20px; border-radius: 50%; object-fit: cover;
+        flex-shrink: 0; border: 1px solid var(--bg-overlay);
+      }
+      .rwa-name {
+        min-width: 0; font-size: var(--text-2xs); color: var(--ink-2);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+    }
+
+    /* 删除按钮：右上角 */
+    .resolved-work-del {
+      position: absolute; top: var(--s-3); right: var(--s-3);
+      &:hover { color: var(--status-failed); border-color: var(--status-failed); }
+    }
+
+    /* loading：cover/文字骨架 + 遮罩 spinner（本卡自带，不依赖 .resolved-account 作用域） */
+    .skeleton { background: var(--bg-overlay); animation: skeleton-pulse 1.2s ease-in-out infinite; }
+    .skeleton-bar {
+      height: 12px; border-radius: 6px;
+      background: var(--bg-overlay); animation: skeleton-pulse 1.2s ease-in-out infinite;
+    }
+    .skeleton-bar.sm { height: 9px; margin-top: 8px; }
+    .resolved-mask {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: var(--r-2);
+      background: color-mix(in srgb, var(--bg-surface) 60%, transparent);
+      color: var(--accent);
+    }
+  }
+}
+
+/* —— Radix Select（@radix-ui/react-select）皮肤：用本项目 token，跟自定义风格一致。
+   Content 经 Radix portal 到 body，故这些选择器必须是全局（不能嵌在 .modal-form 里）。 —— */
+.ui-select-trigger {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--bg-overlay);
+  border-radius: var(--r-1);
+  background: var(--bg-input);
+  color: var(--ink-1);
+  font: inherit; font-size: var(--text-sm); line-height: 1;
+  cursor: pointer; white-space: nowrap;
+  transition: border-color 0.15s;
+
+  &:hover { border-color: var(--accent); }
+  &:focus-visible { outline: none; border-color: var(--accent); }
+  &[data-state='open'] { border-color: var(--accent); }
+  /* 箭头：贴住文字右侧、垂直居中；展开旋转 */
+  .ui-select-caret {
+    display: inline-flex; align-items: center; flex-shrink: 0;
+    color: var(--ink-3); transition: transform 0.15s;
+  }
+  &[data-state='open'] .ui-select-caret { transform: rotate(180deg); }
+}
+
+.ui-select-menu {
+  min-width: var(--radix-select-trigger-width);
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border, var(--bg-overlay));
+  border-radius: var(--r-1);
+  box-shadow: var(--shadow-4, 0 10px 30px rgba(0, 0, 0, 0.22));
+  z-index: 9999;
+}
+.ui-select-option {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
+  padding: 6px 10px; border-radius: 6px;
+  font-size: var(--text-sm); color: var(--ink-1);
+  cursor: pointer; white-space: nowrap; user-select: none; outline: none;
+
+  &[data-highlighted] { background: var(--accent-tint); }
+  &[data-state='checked'] { color: var(--accent); }
+  .ui-select-check { display: inline-flex; color: var(--accent); }
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}

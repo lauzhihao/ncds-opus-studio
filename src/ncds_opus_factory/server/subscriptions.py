@@ -67,11 +67,35 @@ def load_subscriptions(path: Path) -> dict[str, Any]:
         if not sec_uid:
             continue
         note = a.get("note")
-        authors.append({
+        platform = str(a.get("platform") or "douyin").strip().lower() or "douyin"
+        # 每账号更新频率(小时)；None=用全局 interval_hours。非法/<=0 回退 None。
+        ih_raw = a.get("interval_hours")
+        try:
+            interval_hours = float(ih_raw) if ih_raw is not None else None
+            if interval_hours is not None and interval_hours <= 0:
+                interval_hours = None
+        except (TypeError, ValueError):
+            interval_hours = None
+        author = {
             "sec_uid": sec_uid,
             "note": note if isinstance(note, str) else None,
             "enabled": bool(a.get("enabled", True)),
-        })
+            "platform": platform,
+            "interval_hours": interval_hours,
+        }
+        # 展示快照（present-only：保持手编文件干净、老 author 不被注入 null）
+        for k in ("nickname", "avatar", "unique_id"):
+            v = a.get(k)
+            if isinstance(v, str) and v:
+                author[k] = v
+        for k in ("follower_count", "like_count", "works_count"):
+            v = a.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                author[k] = int(v)
+        ra = a.get("refreshed_at")
+        if isinstance(ra, (int, float)) and not isinstance(ra, bool):
+            author["refreshed_at"] = float(ra)
+        authors.append(author)
     return {"interval_hours": interval, "authors": authors}
 
 
@@ -91,10 +115,11 @@ async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path
     - cron 配额桶耗尽 -> 整轮停止(别制造注定 failed 的任务行去打扰 Leader)。
     """
     cfg = load_subscriptions(path)
-    authors = [a for a in cfg["authors"] if a["enabled"]]
+    # 只对抖音作者派沈括刷新；TikTok 等其它平台采集暂未接入，跳过以免堆失败 cron 任务。
+    authors = [a for a in cfg["authors"] if a["enabled"] and a.get("platform", "douyin") == "douyin"]
     if not authors:
         return 0
-    interval_s = cfg["interval_hours"] * 3600
+    global_interval_h = cfg["interval_hours"]
     # 一次扫描建索引,不要每作者全表扫(O(N作者×M任务×2次文件读)纯浪费)
     active: set[str] = set()
     last_created: dict[str, str] = {}
@@ -117,7 +142,8 @@ async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path
         last = last_created.get(sec_uid)
         if last:
             try:
-                # 0.9 容差:循环自身的调度抖动不该把整轮顺延
+                # per-account 频率优先,回退全局；0.9 容差:循环调度抖动不该把整轮顺延
+                interval_s = float(author.get("interval_hours") or global_interval_h) * 3600
                 if (now - datetime.fromisoformat(last)).total_seconds() < interval_s * 0.9:
                     continue
             except ValueError:
@@ -144,7 +170,14 @@ async def subscription_loop(runner: TaskRunner, store: TaskStore, path: Path) ->
             n = await run_subscription_tick(runner, store, path)
             if n:
                 logger.info("[subscriptions] 本轮派发 %d 个刷新任务", n)
-            interval = max(0.25, float(load_subscriptions(path).get("interval_hours", _DEFAULT_INTERVAL_HOURS)))
+            # tick 间隔取「全局 + 各账号 per-account 频率」的最小值，保证最快的账号也能按时刷新
+            cfg = load_subscriptions(path)
+            candidates = [float(cfg.get("interval_hours", _DEFAULT_INTERVAL_HOURS))]
+            candidates += [
+                a["interval_hours"] for a in cfg["authors"]
+                if a.get("enabled") and a.get("platform", "douyin") == "douyin" and a.get("interval_hours")
+            ]
+            interval = max(0.25, min(candidates))
             await asyncio.sleep(interval * 3600)
         except asyncio.CancelledError:
             raise

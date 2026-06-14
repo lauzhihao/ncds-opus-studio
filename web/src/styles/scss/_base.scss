@@ -11,7 +11,12 @@ html, body, #root {
   margin: 0;
 }
 
-html { -webkit-text-size-adjust: 100%; }
+html {
+  -webkit-text-size-adjust: 100%;
+  /* 始终预留滚动条槽：Radix/弹窗开合时会锁滚动（react-remove-scroll），
+     否则滚动条出现/消失会让居中弹窗左右/上下位移（"跳动"）。 */
+  scrollbar-gutter: stable;
+}
 
 body {
   font-family: var(--font-sans);

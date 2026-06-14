@@ -27,6 +27,8 @@ DOWNLOAD_RETRIES = 3
 API_BASE = "https://api.tikhub.io/api/v1/douyin/web"
 ONE_VIDEO_URL = f"{API_BASE}/fetch_one_video"
 USER_POSTS_URL = f"{API_BASE}/fetch_user_post_videos"
+DOUYIN_PROFILE_URL = f"{API_BASE}/handler_user_profile"
+TIKTOK_PROFILE_URL = "https://api.tikhub.io/api/v1/tiktok/web/fetch_user_profile"
 # 评论接口走 app/v3(与上面的 web base 不同);实测每页硬上限 20 条,count 调大无效
 COMMENTS_URL = "https://api.tikhub.io/api/v1/douyin/app/v3/fetch_video_comments"
 COMMENTS_PAGE_SIZE = 20
@@ -82,6 +84,13 @@ def fetch_user_posts_page(
 def simplify_aweme(aweme: dict) -> dict[str, Any]:
     """TikHub aweme -> all_posts.json 精简条目(鬼谷子格式)。"""
     st = aweme.get("statistics") or {}
+    video = aweme.get("video") or {}
+    cover_url = ""
+    for key in ("cover", "origin_cover", "cover_original_scale"):
+        urls = (video.get(key) or {}).get("url_list") or []
+        if urls:
+            cover_url = urls[0]
+            break
     return {
         "aweme_id": str(aweme.get("aweme_id") or ""),
         "desc": aweme.get("desc") or "",
@@ -90,6 +99,7 @@ def simplify_aweme(aweme: dict) -> dict[str, Any]:
         "share": st.get("share_count", 0),
         "collect": st.get("collect_count", 0),
         "create": aweme.get("create_time", 0),
+        "cover_url": cover_url,
     }
 
 
@@ -147,6 +157,157 @@ def resolve_aweme_id(aweme: str) -> str | None:
     return m.group(1) if m else None
 
 
+_SECUID_RE = r"(MS4w[A-Za-z0-9_-]+)"
+
+
+def resolve_sec_uid(text: str) -> str | None:
+    """把「抖音主页分享链接 / 口令 / 完整 user URL / 裸 sec_uid」统一解析成 sec_user_id。
+
+    支持三种来源:
+      - 完整主页 URL：``www.douyin.com/user/MS4w...?...`` → 直接抠 ``/user/<sec_uid>``
+      - 分享短链/口令：``长按复制...查看TA的更多作品 https://v.douyin.com/XXX/`` → 跟随重定向再抠
+      - 裸 sec_uid（MS4w 开头）
+    解析不出返回 None,调用方报清楚。
+    """
+    s = (text or "").strip()
+    # 裸 sec_uid
+    if re.fullmatch(_SECUID_RE, s):
+        return s
+    # 文本里直接含 /user/<sec_uid>
+    m = re.search(r"/user/" + _SECUID_RE, s)
+    if m:
+        return m.group(1)
+    # 抽 URL,跟随短链重定向到完整主页 URL 再抠
+    m = re.search(r"https?://\S+", s)
+    if not m:
+        return None
+    url = m.group(0).rstrip("。，,)）]】\"'")
+    try:
+        resp = requests.get(url, headers={"User-Agent": _UA},
+                            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), allow_redirects=True)
+        final = resp.url
+    except requests.RequestException:
+        final = url
+    m = (re.search(r"/user/" + _SECUID_RE, final)
+         or re.search(r"sec_uid=" + _SECUID_RE, final)
+         or re.search(r"sec_user_id=" + _SECUID_RE, final))
+    return m.group(1) if m else None
+
+
+def fetch_user_nickname(sec_uid: str, token: str | None = None) -> str:
+    """best-effort 取作者昵称（拉 1 条作品从原始 author 里读）；失败返回空串。"""
+    try:
+        aweme_list, _, _ = fetch_user_posts_page(sec_uid, count=1, token=token)
+        if aweme_list:
+            return (aweme_list[0].get("author") or {}).get("nickname") or ""
+    except Exception:  # noqa: BLE001 — 昵称只是展示用,失败不阻塞
+        pass
+    return ""
+
+
+# --------------------------------------------------------------------------- #
+# 用户主页档案（跨平台：抖音 / TikTok）—— 新增对标号时展示昵称/头像/粉丝/获赞/作品数
+# --------------------------------------------------------------------------- #
+def _pick_avatar(user: dict, keys: list[str]) -> str:
+    """从 user 的若干头像字段里取一个 URL。兼容抖音(dict{url_list})与 TikTok(str)。"""
+    for k in keys:
+        v = user.get(k)
+        if isinstance(v, dict):
+            ul = v.get("url_list") or []
+            if ul:
+                return ul[0]
+        elif isinstance(v, str) and v.startswith("http"):
+            return v
+    return ""
+
+
+def _empty_profile(platform: str, sec_uid: str = "", unique_id: str = "") -> dict[str, Any]:
+    return {
+        "platform": platform, "sec_uid": sec_uid, "nickname": "", "unique_id": unique_id,
+        "avatar": "", "follower_count": 0, "like_count": 0, "works_count": 0,
+    }
+
+
+def fetch_douyin_profile(sec_uid: str, token: str | None = None) -> dict[str, Any] | None:
+    """抖音用户主页档案 -> 归一化 {platform,sec_uid,nickname,unique_id,avatar,follower/like/works}。"""
+    token = get_token(token)
+    resp = requests.get(f"{DOUYIN_PROFILE_URL}?sec_user_id={sec_uid}",
+                        headers=_headers(token), timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+    resp.raise_for_status()
+    user = ((resp.json().get("data") or {}).get("user")) or {}
+    if not user:
+        return None
+    return {
+        "platform": "douyin",
+        "sec_uid": user.get("sec_uid") or sec_uid,
+        "nickname": user.get("nickname") or "",
+        "unique_id": str(user.get("unique_id") or user.get("short_id") or ""),
+        "avatar": _pick_avatar(user, ["avatar_168x168", "avatar_300x300", "avatar_thumb", "avatar_medium"]),
+        "follower_count": int(user.get("follower_count") or 0),
+        "like_count": int(user.get("total_favorited") or 0),
+        "works_count": int(user.get("aweme_count") or 0),
+    }
+
+
+def fetch_tiktok_profile(unique_id: str, token: str | None = None) -> dict[str, Any] | None:
+    """TikTok 用户主页档案（按 uniqueId/handle）-> 归一化结构（同抖音字段名）。"""
+    token = get_token(token)
+    resp = requests.get(f"{TIKTOK_PROFILE_URL}?uniqueId={unique_id}",
+                        headers=_headers(token), timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+    resp.raise_for_status()
+    info = (resp.json().get("data") or {}).get("userInfo") or {}
+    user = info.get("user") or {}
+    stats = info.get("stats") or info.get("statsV2") or {}
+    if not user:
+        return None
+    return {
+        "platform": "tiktok",
+        "sec_uid": user.get("secUid") or "",
+        "nickname": user.get("nickname") or user.get("uniqueId") or "",
+        "unique_id": user.get("uniqueId") or unique_id,
+        "avatar": _pick_avatar(user, ["avatarThumb", "avatarMedium", "avatarLarger"]),
+        "follower_count": int(stats.get("followerCount") or 0),
+        "like_count": int(stats.get("heartCount") or stats.get("heart") or 0),
+        "works_count": int(stats.get("videoCount") or 0),
+    }
+
+
+def resolve_tiktok_handle(text: str) -> str | None:
+    """从 TikTok 主页链接/短链解析出 @handle（uniqueId）。非 TikTok 返回 None。"""
+    s = (text or "").strip()
+    m = re.search(r"tiktok\.com/@([A-Za-z0-9_.\-]+)", s)
+    if m:
+        return m.group(1)
+    # vt./vm.tiktok.com 短链 -> 跟随重定向到 /@handle
+    m = re.search(r"https?://(?:vt|vm)\.tiktok\.com/\S+", s)
+    if m:
+        url = m.group(0).rstrip("。，,)）]】\"'")
+        try:
+            resp = requests.get(url, headers={"User-Agent": _UA},
+                                timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), allow_redirects=True)
+            m2 = re.search(r"tiktok\.com/@([A-Za-z0-9_.\-]+)", resp.url)
+            if m2:
+                return m2.group(1)
+        except requests.RequestException:
+            pass
+    return None
+
+
+def fetch_account_profile(text: str, token: str | None = None) -> dict[str, Any] | None:
+    """统一入口：从分享链接/口令/handle 判平台并拉主页档案（归一化）。解析不出返回 None。
+
+    先判 TikTok（tiktok.com/@handle 或 vt/vm 短链），否则走抖音（resolve_sec_uid + handler_user_profile）。
+    注意 TikTok 的 secUid 也以 MS4w 开头但与抖音命名空间不同，必须靠 URL 域名区分，故先判 TikTok。
+    """
+    handle = resolve_tiktok_handle(text)
+    if handle:
+        return fetch_tiktok_profile(handle, token) or _empty_profile("tiktok", unique_id=handle)
+    sec_uid = resolve_sec_uid(text)
+    if sec_uid:
+        return fetch_douyin_profile(sec_uid, token) or _empty_profile("douyin", sec_uid=sec_uid)
+    return None
+
+
 def fetch_video_url(aweme_id: str, token: str | None = None) -> str | None:
     """aweme_id -> 无水印播放地址。"""
     token = get_token(token)
@@ -192,6 +353,47 @@ def extract_meta(detail: dict) -> dict[str, Any]:
         "share": st.get("share_count", 0),
         "collect": st.get("collect_count", 0),
         "cover_url": cover_url,
+    }
+
+
+def extract_work_card(detail: dict) -> dict[str, Any]:
+    """aweme_detail -> 临时任务"智能解析"作品卡。
+
+    复用 extract_meta 的标题/话题/四项互动数据/封面,额外把 author 从昵称字符串
+    扩成 {platform,sec_uid,nickname,unique_id,avatar} —— 「关注ta」需要 sec_uid
+    才能把作者加入对标订阅(复用 /accounts 的展示快照形状)。
+    """
+    meta = extract_meta(detail)
+    desc = detail.get("desc") or ""
+    # 话题：text_extra 的 hashtag_name 为主 + desc 里正则抽取的话题补充并去重(保序)
+    # —— 有些作品 text_extra 不全会漏标签(如末尾的 #教育)，用 desc 文本兜底补回。
+    hashtags = list(meta["hashtags"])
+    seen = set(hashtags)
+    for tag in re.findall(r"#([^\s#]+)", desc):
+        if tag and tag not in seen:
+            seen.add(tag)
+            hashtags.append(tag)
+    # 标题去掉 #话题(话题已由 hashtags 单独展示，避免标题里重复)，并规整移除后多余的空白(含全角空格)
+    title = re.sub(r"#[^\s#]+", "", desc)
+    title = re.sub(r"[ \t　]{2,}", " ", title).strip()
+    author = detail.get("author") or {}
+    return {
+        "title": title,
+        "hashtags": hashtags,
+        "digg": meta["digg"],
+        "comment": meta["comment"],
+        "share": meta["share"],
+        "collect": meta["collect"],
+        "cover_url": meta["cover_url"],
+        "author": {
+            "platform": "douyin",
+            "sec_uid": author.get("sec_uid") or "",
+            "nickname": author.get("nickname") or "",
+            "unique_id": str(author.get("unique_id") or author.get("short_id") or ""),
+            "avatar": _pick_avatar(
+                author, ["avatar_168x168", "avatar_300x300", "avatar_thumb", "avatar_medium"]
+            ),
+        },
     }
 
 

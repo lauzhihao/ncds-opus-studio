@@ -133,6 +133,79 @@ export interface ParsedShare {
   tags: string[];
 }
 
+// —— 任务视角导航（长期任务 = 对标账号 → 作品） ——
+
+// 监控的对标账号（沈括订阅配置，GET /subscriptions）。
+export interface SubscriptionAuthor {
+  sec_uid: string;
+  note?: string | null;
+  enabled: boolean;
+  platform?: string; // 'douyin' | 'tiktok'，默认 douyin
+  // 展示快照（新增时由 /accounts/resolve 带入；卡片直接显示）
+  nickname?: string | null;
+  avatar?: string | null;
+  unique_id?: string | null;
+  follower_count?: number | null;
+  like_count?: number | null;
+  works_count?: number | null;
+  refreshed_at?: number | null; // 我方最后一次拉取的 unix 秒
+}
+
+export interface SubscriptionsConfig {
+  interval_hours: number;
+  authors: SubscriptionAuthor[];
+}
+
+// POST /accounts/resolve 的结果：从抖音/TikTok 分享链接解析出的账号档案。
+export interface AccountResolveResult {
+  platform: string; // 'douyin' | 'tiktok'
+  sec_uid: string;
+  nickname: string;
+  unique_id: string; // 抖音号 / TikTok handle
+  avatar: string;
+  follower_count: number;
+  like_count: number;
+  works_count: number;
+}
+
+// POST /works/resolve 的结果：从抖音作品分享链接解析出的作品卡（临时任务"智能解析"）。
+export interface WorkResolveResult {
+  platform: string; // 'douyin'
+  aweme_id: string;
+  share_url: string;
+  title: string; // 作品标题（desc）
+  hashtags: string[];
+  // 四项互动数据（抖音不公开播放量）
+  digg: number;
+  comment: number;
+  share: number;
+  collect: number;
+  cover_url: string;
+  // 作者档案：「关注ta」据此加入对标订阅
+  author: {
+    platform: string;
+    sec_uid: string;
+    nickname: string;
+    unique_id: string;
+    avatar: string;
+  };
+  cached: boolean; // true=命中本地缓存（未打 TikHub）
+}
+
+// 某对标账号的一条作品（GET /accounts/{sec_uid}/posts）。
+export interface AccountPost {
+  aweme_id: string;
+  desc: string;
+  digg: number;
+  comment: number;
+  share: number;
+  collect: number;
+  create: number;
+  cover_url: string;
+  share_url: string;
+  collected: boolean;
+}
+
 // SSE 事件 payload
 export type StreamEvent =
   | { type: 'snapshot'; job_id: string; state: JobState }
