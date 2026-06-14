@@ -23,6 +23,7 @@ from typing import Any, Callable
 from ncds_opus_core.runners import runner_path
 from ncds_opus_factory.common import ai_taste, quality_rubric, rubric_store
 from ncds_opus_factory.common.node_runtime import resolve_node
+from ncds_opus_factory.common.opus_cli import call_opus
 
 ROOT = Path(__file__).resolve().parents[3]
 # rewrite 引擎已迁入 ncds_opus_core.runners（P1.6）；用 core 定位器取，不再从 repo 根拼 scripts/
@@ -40,8 +41,12 @@ def _build_job_id() -> str:
     return f"OGV_{int(time.time() * 1000)}_{secrets.token_hex(3)}"
 
 
-def _purge_ai_taste(text: str, report: dict, shim: Path, env: dict, timeout_seconds: int) -> str:
-    """把质检命中的 AI 味句式甩回模型(走 scodex shim)消除,返回改写后的全文。"""
+def _purge_ai_taste(text: str, report: dict, env: dict, timeout_seconds: int) -> str:
+    """把质检命中的 AI 味句式甩回模型消除,返回改写后的全文。
+
+    原走 scodex shim(codex gpt-5.5),codex 订阅失效后改调 opus(claude-opus-4-8 + effort max)。
+    注意:柳永主链(content_rewrite_runner.mjs)仍由 codex 驱动,该 .mjs 引擎层未迁(见 run())。
+    """
     lines: list[str] = []
     for h in report.get("density", []):
         lines.append(f'- "{h["rule"]}" 出现 {h["count"]} 次,例:{h.get("samples")}')
@@ -57,22 +62,7 @@ def _purge_ai_taste(text: str, report: dict, shim: Path, env: dict, timeout_seco
         "- 只输出改写后的全文,不要解释、不要标题、不要 markdown\n\n"
         "【原稿】\n" + text
     )
-    cmd = [str(shim), "-a", "never", "exec", "--skip-git-repo-check", "--ephemeral",
-           "-s", "read-only", "-m", "gpt-5.5", "--json", prompt]
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=env, timeout=timeout_seconds, text=True, capture_output=True)
-    out = ""
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        item = obj.get("item") or {}
-        if obj.get("type") == "item.completed" and item.get("type") == "agent_message":
-            out = item.get("text", "") or out
-    return out.strip()
+    return call_opus(prompt, timeout_seconds=timeout_seconds, env=env).strip()
 
 
 def run(
@@ -159,7 +149,7 @@ def run(
         while report["verdict"] == "fail" and rounds < 2:
             rounds += 1
             on_progress(f"  AI 味超标,打回重写第 {rounds} 轮...")
-            new_text = _purge_ai_taste(d["text"], report, shim, env, timeout_seconds)
+            new_text = _purge_ai_taste(d["text"], report, env, timeout_seconds)
             if not new_text or len(new_text) < 200:
                 on_progress("  重写未返回有效稿,保留上一版")
                 break

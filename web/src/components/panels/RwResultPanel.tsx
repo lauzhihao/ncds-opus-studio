@@ -67,12 +67,77 @@ const NEXT_NODE = 'lines';
 
 // RW 体裁选项（对应飞书 /rw -p 参数）。freestyle = 无固定提示词，模型自由发挥。
 const RW_PROFILES: { id: string; label: string }[] = [
+  { id: 'douyin_cog', label: '抖音口播' },
   { id: 'toutiao', label: '头条图文' },
   { id: 'caijing', label: '抖音财经' },
   { id: 'jitang', label: '心灵鸡汤' },
   { id: 'freestyle', label: '自由发挥' },
 ];
-const DEFAULT_RW_PROFILE = 'freestyle';
+const DEFAULT_RW_PROFILE = 'douyin_cog';
+
+const RUBRIC_DIMS = ['节奏', '真实性', '精炼度', '直接性', '信任度'];
+
+// 柳永质检报告：AI 味 verdict + rubric 5 维度评分（对齐 app liuyong 详情页 _QCReport）。
+// 质检字段（qc/qc_rubric）由后端质检闸门产出；还在后台跑时字段未到，整块不渲染。
+function QcReport({ draft }: { draft?: RwDraft }) {
+  if (!draft || draft.status !== 'success') return null;
+  const qc = draft.qc;
+  const rub = draft.qc_rubric;
+  if (!qc && !rub) return null;
+  const pass = qc?.verdict === 'pass';
+  return (
+    <div
+      className="rw-qc-report"
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 'var(--s-3)',
+        alignItems: 'center',
+        padding: '8px 10px',
+        margin: 'var(--s-3) 0',
+        border: '1px solid var(--line, rgba(0,0,0,0.08))',
+        borderRadius: 8,
+        fontSize: 'var(--text-xs)',
+      }}
+    >
+      {qc?.verdict && (
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            fontWeight: 600,
+            color: pass ? '#3aa55d' : '#e5484d',
+          }}
+        >
+          {pass ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+          AI 味 {pass ? '通过' : '仍超标'}
+        </span>
+      )}
+      {rub?.available ? (
+        <>
+          <span style={{ fontWeight: 600 }}>
+            质量分 {rub.total}/50{rub.grade ? ` · ${rub.grade}` : ''}
+          </span>
+          <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', color: 'var(--ink-2)' }}>
+            {RUBRIC_DIMS.map((d) => (
+              <span key={d}>
+                {d} {rub.dims?.[d] ?? '-'}
+              </span>
+            ))}
+          </span>
+        </>
+      ) : rub ? (
+        <span className="dim-mono">质量分跳过（{rub.skipped}）</span>
+      ) : null}
+      {rub?.issues && rub.issues.length > 0 && (
+        <span className="dim-mono" title={rub.issues.join('；')} style={{ width: '100%' }}>
+          建议：{rub.issues.slice(0, 3).join('；')}
+        </span>
+      )}
+    </div>
+  );
+}
 
 // 模型展示名按 model_id 在前端映射 —— label 是展示层，改这里立即对所有 job（含历史 job）
 // 生效，不依赖后端 outputs 里存的旧 label。outputs.label 仅作未知 id 的兜底。
@@ -395,6 +460,7 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
               <Play size={12} strokeWidth={2} fill="currentColor" />
             </button>
           </nav>
+          <QcReport draft={currentDraft} />
           {loading ? (
             <div className="article-pane dim-mono">加载中…</div>
           ) : (

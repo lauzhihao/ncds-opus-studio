@@ -22,14 +22,11 @@ import hashlib
 import json
 import logging
 import os
-import subprocess
-from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from ncds_opus_factory.common.opus_cli import call_opus
 
-ROOT = Path(__file__).resolve().parents[3]
-SHIM = ROOT / "scripts" / "codex_scodex_shim.sh"
+logger = logging.getLogger(__name__)
 
 def _env_int(name: str, default: int) -> int:
     """env 解析容错:非法值回退默认并告警——坏 env 不能变成 import 期启动单点。"""
@@ -118,28 +115,13 @@ def _extract_verdict(raw: str) -> dict[str, str] | None:
 
 
 def _scodex_judge(prompt: str, timeout_seconds: int) -> str:
-    """走 scodex shim 调 codex,返回 agent_message 文本（仿 guiguzi._scodex）。"""
+    """调 opus 返回判官文本（仿 guiguzi._scodex）。原走 scodex shim(codex gpt-5.5),codex 订阅
+    失效后改 opus(claude-opus-4-8 + effort max)。NOF_PRESCREEN_FAKE_JUDGE 仍短路假判官（E2E 冒烟）。"""
     fake = os.environ.get("NOF_PRESCREEN_FAKE_JUDGE", "").strip()
     if fake:
         pred = "rejected" if fake == "rejected" else "approved"
         return json.dumps({"prediction": pred, "reason": "E2E 冒烟假判官固定输出"})
-    cmd = [str(SHIM), "-a", "never", "exec", "--skip-git-repo-check", "--ephemeral",
-           "-s", "read-only", "-m", "gpt-5.5", "--json", prompt]
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=os.environ.copy(),
-                          timeout=timeout_seconds, text=True, capture_output=True)
-    out = ""
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        item = obj.get("item") or {}
-        if obj.get("type") == "item.completed" and item.get("type") == "agent_message":
-            out = item.get("text", "") or out
-    return out.strip()
+    return call_opus(prompt, timeout_seconds=timeout_seconds)
 
 
 # 模块级函数属性:测试 monkeypatch 注入假判官

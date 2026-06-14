@@ -55,8 +55,26 @@ export interface JobSummary {
   running_node?: string | null;
 }
 
+// 柳永质检：ai_taste（AI 味）报告，对齐后端 ai_taste.scan（打回重写后的终判）。
+export interface RwQcAiTaste {
+  verdict?: 'pass' | 'fail';
+  summary?: string;
+  density?: unknown[];
+}
+
+// 柳永质检：quality_rubric（opus 5 维度质量分），对齐后端 quality_rubric.score。
+export interface RwQcRubric {
+  available?: boolean;
+  skipped?: string;
+  total?: number; // 满分 50
+  grade?: string;
+  dims?: Record<string, number>; // 节奏/真实性/精炼度/直接性/信任度
+  issues?: string[];
+}
+
 // RW 节点 outputs.drafts 中的一条；与 pipeline_runner._execute_rw 输出对齐。
 // 4 模型并行后，失败/不可用的也保留在列表中（status='failed' + reason）。
+// 柳永质检闸门产出 qc（AI 味终判）+ qc_rubric（5 维度质量分）。
 export interface RwDraft {
   model_id: string;
   label: string;
@@ -64,6 +82,8 @@ export interface RwDraft {
   reason?: string | null;
   draft_relpath: string | null;
   episode_relpath: string | null;
+  qc?: RwQcAiTaste;
+  qc_rubric?: RwQcRubric;
 }
 
 // LINES 节点 outputs；与 pipeline_runner._mock_outputs("lines") 对齐。
@@ -120,6 +140,36 @@ export interface AsrItem {
   author: string;
   transcript_relpath: string;
   article_relpath: string;
+  error?: string | null;
+}
+
+// 高赞评论（沈括采集，对齐 app ShenkuoComment）。
+export interface ShenkuoComment {
+  nickname?: string;
+  text?: string;
+  digg?: number;
+  ip?: string;
+}
+
+// 沈括采集单条作品产物（ASR 节点 outputs.collected[]，对齐 app ShenkuoEntry / 后端 collect_one entry）。
+// 沈括统一走采集后，画布「开始创作」即触发 collect_one：快采出 文案/评论/播放数据/封面，
+// 音轨（original/vocals/bgm）与抠图由后台第二趟补（字段后到）。媒体相对路径走 /artifacts/files/。
+export interface ShenkuoEntry {
+  index?: number;
+  url?: string;
+  aweme_id?: string;
+  desc?: string; // 作品文案/标题
+  digg?: number;
+  author?: string;
+  hashtags?: string[];
+  stats?: Record<string, number>; // digg/comment/share/collect（抖音不公开播放量）
+  cover?: string; // 封面相对路径
+  text?: string; // 提取文案（清洗稿，内嵌）
+  top_comments?: ShenkuoComment[]; // 高赞评论（>10 赞，按赞排序）
+  audio?: Record<string, string>; // original/vocals/bgm 相对路径（后台补）
+  frames?: string[];
+  cutouts?: string[]; // 抠图相对路径（后台补）
+  status?: Record<string, string>; // download/transcribe/audio/cutout/comments -> ok/cached/error:*
   error?: string | null;
 }
 

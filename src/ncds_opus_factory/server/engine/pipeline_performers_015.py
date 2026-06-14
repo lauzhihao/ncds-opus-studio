@@ -43,6 +43,8 @@ from ncds_opus_factory.server.pipeline_runner import (
     _rebuild_tts_items_015,
     _run_tts_gen_015,
     _run_video_pipeline,
+    _rw_source_text,
+    _apply_rw_qc,
 )
 
 # 外部副作用调用的 seam（subprocess / node / gpt-image）：默认走真实 helper，测试 monkeypatch。
@@ -59,7 +61,7 @@ _polish_transcript = _polish_transcript_with_opus
 _invoke_rw = _invoke_rw_candidate
 
 
-def _opus_structure(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-7") -> str:
+def _opus_structure(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-8") -> str:
     """opus 结构化调用的间接层：默认走真实 opus 启动器；测试 monkeypatch 成桩。"""
     return _call_opus_for_rw(user_prompt, system_prompt, model_id)
 
@@ -80,7 +82,7 @@ def _opus_json_with_retry(
     on_progress: Callable[[str], None],
     *,
     parse: Callable[[str], Any] | None = None,
-    model_id: str = "claude-opus-4-7",
+    model_id: str = "claude-opus-4-8",
     max_attempts: int = 3,
     retry_hint: str = "",
 ) -> Any:
@@ -337,22 +339,10 @@ def run_rw_step(
     rw_root = jd / "02_rw"
     rw_root.mkdir(parents=True, exist_ok=True)
 
-    # 拼 sourceText：asr 各条 article（opus 整理后的文章）拼起来。
-    sections: list[str] = []
-    for it in asr_items:
-        relpath = it.get("article_relpath") or it.get("transcript_relpath")
-        if not relpath:
-            continue
-        p = jd / relpath
-        if not p.is_file():
-            continue
-        sections.append(
-            f"## 来源 {it.get('index')} - {it.get('title') or ''}\n\n"
-            f"{p.read_text(encoding='utf-8').strip()}"
-        )
-    source_text = "\n\n---\n\n".join(sections).strip()
+    # 拼 sourceText：沈括采集的清洗稿 text（缺失回退 legacy article 文件）。
+    source_text = _rw_source_text(asr_items, jd)
     if not source_text:
-        raise RuntimeError("asr 文章稿全部为空，无法 rw")
+        raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
     effective_profile = profile if profile is not None else DEFAULT_RW_PROFILE
     system_prompt, user_prompt = _build_rw_prompt(effective_profile, source_text)
@@ -405,7 +395,14 @@ def run_rw_step(
                 )
             except BaseException as exc:  # noqa: BLE001
                 res = exc
-            return make_draft(cand, res)
+            draft = make_draft(cand, res)
+            if draft.get("status") == "success":
+                # 柳永质检闸门：ai_taste 打回重写 + rubric 评分（与 _execute_rw 一致）。
+                try:
+                    draft.update(await asyncio.to_thread(_apply_rw_qc, rw_root / cand["id"], cand["id"], on_progress))
+                except Exception as exc:  # noqa: BLE001 — 质检失败不拖垮出稿
+                    on_progress(f"  [{cand['id']}] 质检异常（不影响稿件）: {exc}")
+            return draft
 
         return list(await asyncio.gather(*[run_one(c) for c in MODEL_CANDIDATES]))
 

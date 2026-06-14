@@ -47,12 +47,12 @@ export const AGENTS: AgentDef[] = [
   {
     id: 'shenkuo',
     name: '沈括',
-    role: '采集 · 转写入库',
-    description: '抓取源作品并转写成文，作为创作素材。',
+    role: '采集供料',
+    description: '采集对标作品的文案/评论/音轨/数据，作为创作素材。',
     icon: Radar,
     members: [
       { node: 'input', label: '采集源' },
-      { node: 'asr', label: '转写入库' },
+      { node: 'asr', label: '采集成果' },
     ],
   },
   {

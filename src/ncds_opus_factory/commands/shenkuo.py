@@ -82,6 +82,7 @@ def collect_one(
     aweme_id: str, author_dir: Path, meta: dict | None = None,
     max_frames: int = 8, engine: str = "threshold", top_comments: int = 20,
     platform: str = "douyin", on_progress: ProgressFn = _noop,
+    do_audio: bool = True, do_frames: bool = True,
 ) -> dict[str, Any]:
     meta = meta or {}
     entry: dict[str, Any] = {
@@ -269,7 +270,14 @@ def collect_one(
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_comments = ex.submit(branch_comments) if top_comments > 0 else None
         if branch_download():
-            for f in [ex.submit(branch_transcribe), ex.submit(branch_audio), ex.submit(branch_frames)]:
+            # web 画布分两趟:首趟快采(do_audio/do_frames=False)出文案/评论让下游 rw 先走,
+            # 音轨分离(Demucs)/抠图重活由后台第二趟补 —— collect_one 幂等,已采支线自动跳过。
+            futures = [ex.submit(branch_transcribe)]
+            if do_audio:
+                futures.append(ex.submit(branch_audio))
+            if do_frames:
+                futures.append(ex.submit(branch_frames))
+            for f in futures:
                 f.result()
         if f_comments is not None:
             f_comments.result()

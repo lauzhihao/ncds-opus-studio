@@ -4,9 +4,9 @@
 
 设计原则(和柳永/伯牙对仗):
 - 不生成、不下载素材。人物剪影一律从**用户维护的本地库**(assets/figure_lib)里「按语义选用」。
-- 分工:codex 只做导演判断(切句 + 概括每句语义/强调词);**选剪影/图标/动效走规则打分**
+- 分工:opus 只做导演判断(切句 + 概括每句语义/强调词);**选剪影/图标/动效走规则打分**
   (确定性、可解释、库扩了自动覆盖)。和伯牙 select_bgm/plan_sfx 一样"接口稳定,后续可换 LLM"。
-- 硬闸门:beat 的 zh 拼起来必须≈原稿(不丢句/不改词),不过线就把 codex 打回重切一次。
+- 硬闸门:beat 的 zh 拼起来必须≈原稿(不丢句/不改词),不过线就把 opus 打回重切一次。
 - 产物 = 一个可直接渲染的 figure_talk 实例(beats.js/json + storyboard.json + beats.qc.json + 复制好素材)。
 
 输入:柳永成稿(纯文字口播 .md / 或直接传文本)。
@@ -22,17 +22,17 @@ import os
 import re
 import secrets
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ncds_opus_factory.common.opus_cli import call_opus
+
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_LIBRARY = ROOT / "assets" / "figure_lib"
 TEMPLATE_DIR = ROOT / "src" / "ncds_opus_factory" / "templates" / "figure_talk"
 ICONS_JS = ROOT / "src" / "ncds_opus_factory" / "templates" / "stickman" / "icons.js"
-SHIM = ROOT / "scripts" / "codex_scodex_shim.sh"
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("NOF_WUDAOZI_TIMEOUT", "600"))
 
 # 赛道词表(从 storyboard 的 tag 里粗猜 scene,给 select_figure 当线索;和 boya._guess_scene 对仗)。
@@ -58,7 +58,7 @@ def read_script(script_path: str | Path | None = None, script_text: str | None =
     """读柳永稿,返回 (正文, 标题提示)。
 
     柳永稿格式:首个非空行是标题,其后空行再正文。把标题单独抽出当 title 提示,
-    正文(剥 markdown # 标题/空行)用于 codex 切句 + 不丢句校验 —— 标题不计入正文,避免被读两遍。
+    正文(剥 markdown # 标题/空行)用于 opus 切句 + 不丢句校验 —— 标题不计入正文,避免被读两遍。
     """
     if script_text is not None:
         text = script_text
@@ -129,7 +129,7 @@ def load_icons_catalog(icons_js: Path = ICONS_JS) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
-# codex 分镜(切句 + 概括语义;唯一的 LLM 步骤,走 scodex shim)
+# opus 分镜(切句 + 概括语义;唯一的 LLM 步骤)。原走 codex(scodex shim),订阅失效后改 opus
 # --------------------------------------------------------------------------- #
 def _build_prompt(script_body: str, title_hint: str, extra_warning: str = "") -> str:
     hint = f"\n建议标题(可参考/改写,<=14字):{title_hint}\n" if title_hint else "\n"
@@ -166,7 +166,7 @@ def _extract_json_array(text: str) -> list[dict]:
         text = text[i : j + 1]
     data = json.loads(text)
     if not isinstance(data, list):
-        raise ValueError("codex 输出不是 JSON 数组")
+        raise ValueError("opus 输出不是 JSON 数组")
     return data
 
 
@@ -178,27 +178,14 @@ def storyboard_via_codex(
     extra_warning: str = "",
     on_progress: ProgressFn = _noop,
 ) -> list[dict]:
-    """调 codex(gpt-5.5,走 scodex shim)切句分镜,返回 storyboard 列表。复刻 liuyong 的 shim 调用法。"""
+    """调 opus 切句分镜,返回 storyboard 列表。
+
+    原走 codex(gpt-5.5,scodex shim);codex 订阅失效后改调本机 opus(claude-opus-4-8 + effort max)。
+    函数名保留 storyboard_via_codex 不变(run() 与测试按名引用)。call_opus 空输出即抛,无需再判空。
+    """
     prompt = _build_prompt(script_body, title_hint, extra_warning)
-    cmd = [str(SHIM), "-a", "never", "exec", "--skip-git-repo-check", "--ephemeral",
-           "-s", "read-only", "-m", "gpt-5.5", "--json", prompt]
-    env = os.environ.copy()
-    on_progress("吴道子调 codex 分镜中...")
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=env, timeout=timeout_seconds, text=True, capture_output=True)
-    out = ""
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        item = obj.get("item") or {}
-        if obj.get("type") == "item.completed" and item.get("type") == "agent_message":
-            out = item.get("text", "") or out
-    if not out:
-        raise RuntimeError(f"codex 无 agent_message 输出(code={proc.returncode}); stderr: {proc.stderr[-400:]}")
+    on_progress("吴道子调 opus 分镜中...")
+    out = call_opus(prompt, timeout_seconds=timeout_seconds)
     return _extract_json_array(out)
 
 
@@ -296,7 +283,7 @@ def _guess_scene(storyboard: list[dict]) -> str | None:
 def build_beats(
     storyboard: list[dict], library: list[dict], catalog: list[dict], scene: str | None
 ) -> tuple[list[dict], list[dict]]:
-    """把 codex 分镜 + 规则选用组装成渲染用 beats 和带 reason 的 storyboard 明细。"""
+    """把 opus 分镜 + 规则选用组装成渲染用 beats 和带 reason 的 storyboard 明细。"""
     beats: list[dict] = []
     detail: list[dict] = []
     for i, sb in enumerate(storyboard):
@@ -400,9 +387,9 @@ def run(
     qc = check_coverage(beats, body)
     on_progress(f"分镜 {len(beats)} 句 · 不丢句校验 {qc['verdict']}(ratio={qc['ratio']}) · scene={scene or '-'}")
 
-    # 硬闸门 fail -> 打回重切一次(把丢字情况喂回 codex)
+    # 硬闸门 fail -> 打回重切一次(把丢字情况喂回 opus)
     if qc["verdict"] == "fail":
-        on_progress("不丢句校验 fail,打回 codex 重切一次...")
+        on_progress("不丢句校验 fail,打回 opus 重切一次...")
         storyboard = storyboard_via_codex(
             body, title_hint, timeout_seconds=timeout_seconds,
             extra_warning=f"上次切句后字符覆盖率仅 {qc['ratio']},说明丢了句或改了字。务必逐字不漏地切分原稿。",

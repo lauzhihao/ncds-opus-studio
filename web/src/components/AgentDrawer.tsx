@@ -16,7 +16,7 @@ import {
   type AgentId,
 } from '../config/agents';
 import { NodeStatusBar } from './NodeStatusBar';
-import { AsrResultPanel } from './panels/AsrResultPanel';
+import { ShenkuoCollectPanel } from './panels/ShenkuoCollectPanel';
 import { GenericNodePanel } from './panels/GenericNodePanel';
 import { GuiguziPanel } from './panels/GuiguziPanel';
 import { ImageResultPanel } from './panels/ImageResultPanel';
@@ -153,7 +153,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
         );
       case 'asr':
         return (
-          <AsrResultPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('asr')} />
+          <ShenkuoCollectPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('asr')} />
         );
       case 'guiguzi':
         return <GuiguziPanel jobId={jobId} job={job} onConfirmed={() => advance('guiguzi')} />;

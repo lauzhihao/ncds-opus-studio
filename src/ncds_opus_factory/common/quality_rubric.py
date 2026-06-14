@@ -20,7 +20,7 @@ import shutil
 import subprocess
 from typing import Any
 
-OPUS_MODEL = "claude-opus-4-7"
+OPUS_MODEL = "claude-opus-4-8"
 DEFAULT_TIMEOUT_SECONDS = 600
 DIMENSIONS: tuple[str, ...] = ("节奏", "真实性", "精炼度", "直接性", "信任度")
 
@@ -155,6 +155,7 @@ def _call_opus_judge(prompt: str, timeout_seconds: int) -> str:
         "-p", prompt,
         "--output-format", "json",
         "--model", OPUS_MODEL,
+        "--effort", "max",
         "--permission-mode", "bypassPermissions",
         "--tools", "",
         "--no-session-persistence",

@@ -25,6 +25,13 @@ def _noop(_t: str) -> None:
     return None
 
 
+@pytest.fixture(autouse=True)
+def _stub_rw_qc(monkeypatch: pytest.MonkeyPatch):
+    """rw 质检闸门（ai_taste + quality_rubric 调 opus）默认 stub 掉：这些 step 测试只验
+    出稿编排，质检逻辑由 test_shenkuo_collect 等专门覆盖；避免真调 opus 拖慢 / 依赖环境。"""
+    monkeypatch.setattr(perf, "_apply_rw_qc", lambda *a, **k: {})
+
+
 # opus 桩：按 system_prompt 区分 lines（脚本结构化）vs storyboard（director）。
 _LINES_JSON = json.dumps({
     "meta": {"title": "测试标题", "subtitle": "", "tags": ["t1"]},
@@ -671,51 +678,31 @@ def _seed_asr_items(jd: Path, items_data: list[dict]) -> list[dict[str, Any]]:
     return items
 
 
-def test_run_rw_step_partial_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """部分成功：opus 成功、gpt5/_ModelUnavailable、gemini_local/_ModelUnavailable、deepseek 普通异常。
-
-    验证：drafts 状态对、draft.md 写盘、success_count 准确。
-    """
+def test_run_rw_step_single_deepseek_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """MODEL_CANDIDATES 现仅剩 deepseek：deepseek 成功 → 1 稿 success、draft.md 写盘、
+    success/candidate count 均为 1（原 4 模型并行已裁成 deepseek 单候选）。"""
     jd = tmp_path / "job1"
     asr_items = _seed_asr_items(jd, [{"content": "测试素材文章。"}])
 
-    # stub_invoke 按模型 id 返回不同结果
     async def stub_invoke(cand, user_prompt, system_prompt, on_progress, on_status=None):
-        mid = cand["id"]
-        if mid == "opus":
-            return "# 改写稿 A\n\n正文内容。"
-        if mid == "gpt5":
-            from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
-            raise MU("本机未安装 scodex")
-        if mid == "gemini_local":
-            from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
-            raise MU("~/.gemini/g.sh 未安装")
-        # deepseek → 普通异常（非 _ModelUnavailable）
-        raise RuntimeError("deepseek API timeout")
+        assert cand["id"] == "deepseek"          # 候选只剩 deepseek
+        return "# 改写稿 D\n\n正文内容。"
 
     monkeypatch.setattr(perf, "_invoke_rw", stub_invoke)
+    # 质检闸门走真 ai_taste/quality_rubric 会调 opus（慢/依赖环境）；本测试只验出稿编排，跳过质检。
+    monkeypatch.setattr(perf, "_apply_rw_qc", lambda *a, **k: {})
 
     out = perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items)
 
     assert out["success_count"] == 1
-    assert out["candidate_count"] == 4
-    assert out["profile"] == "freestyle"        # DEFAULT_RW_PROFILE 的具体值，非同义反复
+    assert out["candidate_count"] == 1
+    assert out["profile"] == "douyin_cog"        # DEFAULT_RW_PROFILE 的具体值，非同义反复
 
     drafts = {d["model_id"]: d for d in out["drafts"]}
-    # opus 成功，draft.md 写盘
-    assert drafts["opus"]["status"] == "success"
-    assert drafts["opus"]["draft_relpath"] == "02_rw/opus/draft.md"
-    assert (jd / "02_rw" / "opus" / "draft.md").is_file()
-    assert "改写稿 A" in (jd / "02_rw" / "opus" / "draft.md").read_text(encoding="utf-8")
-
-    # gpt5 / gemini_local → failed（_ModelUnavailable 包成 failed，不算普通 failed）
-    assert drafts["gpt5"]["status"] == "failed"
-    assert "不可用" in drafts["gpt5"]["reason"]
-    assert drafts["gemini_local"]["status"] == "failed"
-
-    # deepseek 普通异常 → failed
-    assert drafts["deepseek"]["status"] == "failed"
-    assert "timeout" in drafts["deepseek"]["reason"]
+    assert drafts["deepseek"]["status"] == "success"
+    assert drafts["deepseek"]["draft_relpath"] == "02_rw/deepseek/draft.md"
+    assert (jd / "02_rw" / "deepseek" / "draft.md").is_file()
+    assert "改写稿 D" in (jd / "02_rw" / "deepseek" / "draft.md").read_text(encoding="utf-8")
 
 
 def test_run_rw_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -738,8 +725,8 @@ def test_run_rw_step_profile_passed_through(tmp_path: Path, monkeypatch: pytest.
     asr_items = _seed_asr_items(jd, [{"content": "内容。"}])
 
     async def stub_one_ok(cand, user_prompt, system_prompt, on_progress, on_status=None):
-        if cand["id"] == "opus":
-            return "# 仅 opus 成功\n\n正文。"
+        if cand["id"] == "deepseek":
+            return "# 仅 deepseek 成功\n\n正文。"
         from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
         raise MU("跳过")
 
@@ -757,7 +744,7 @@ def test_run_rw_step_codeblock_stripped(tmp_path: Path, monkeypatch: pytest.Monk
     raw_with_fence = "```json\n# 被包裹的改写稿\n\n正文。\n```"
 
     async def stub_fence(cand, user_prompt, system_prompt, on_progress, on_status=None):
-        if cand["id"] == "opus":
+        if cand["id"] == "deepseek":
             return raw_with_fence
         from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
         raise MU("skip")
@@ -766,7 +753,7 @@ def test_run_rw_step_codeblock_stripped(tmp_path: Path, monkeypatch: pytest.Monk
 
     out = perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items)
     assert out["success_count"] == 1
-    draft_content = (jd / "02_rw" / "opus" / "draft.md").read_text(encoding="utf-8")
+    draft_content = (jd / "02_rw" / "deepseek" / "draft.md").read_text(encoding="utf-8")
     # ``` 包裹应被去掉
     assert "```" not in draft_content
     assert "被包裹的改写稿" in draft_content

@@ -1,25 +1,23 @@
 """/guiguzi —— 鬼谷子:选题官 agent。
 
 不靠 LLM 凭空想选题(那又是 AI 味),而是**从真爆款数据里提炼母题,迁移成本赛道的新选题**。
-输入对标号的作品数据(downloader 拉的 all_posts.json)→ 筛 top 爆款 → scodex 提炼母题 +
+输入对标号的作品数据(downloader 拉的 all_posts.json)→ 筛 top 爆款 → opus 提炼母题 +
 迁移成目标赛道新选题(自动避开已发过的)→ 按爆款潜力排序,产出选题库。
 
-选题库 top 几条可直接喂给柳永(liuyong)出脚本。复用 scodex(走 codex_scodex_shim.sh),不碰飞书。
+选题库 top 几条可直接喂给柳永(liuyong)出脚本。调 opus(原 scodex/codex 已弃用),不碰飞书。
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_factory.common import topic_store
+from ncds_opus_factory.common.opus_cli import call_opus
 
-ROOT = Path(__file__).resolve().parents[3]
-SHIM = ROOT / "scripts" / "codex_scodex_shim.sh"
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("NOF_SCOUT_TIMEOUT", "900"))
 
 # 选题公式(来自 douyin_cog 内核,见 scripts/douyin_cog_kernel.mjs)
@@ -56,23 +54,9 @@ def _classify(desc: str) -> str:
 
 
 def _scodex(prompt: str, env: dict, timeout_seconds: int) -> str:
-    """走 scodex shim 调 codex,返回 agent_message 文本。"""
-    cmd = [str(SHIM), "-a", "never", "exec", "--skip-git-repo-check", "--ephemeral",
-           "-s", "read-only", "-m", "gpt-5.5", "--json", prompt]
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=env, timeout=timeout_seconds, text=True, capture_output=True)
-    out = ""
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        item = obj.get("item") or {}
-        if obj.get("type") == "item.completed" and item.get("type") == "agent_message":
-            out = item.get("text", "") or out
-    return out.strip()
+    """调 opus 返回文本。原走 scodex shim(codex gpt-5.5),codex 订阅失效后改 opus
+    (claude-opus-4-8 + effort max)。函数名/签名保留(run() 与测试 monkeypatch 按名引用)。"""
+    return call_opus(prompt, timeout_seconds=timeout_seconds, env=env)
 
 
 def _parse_topics(text: str) -> list[dict[str, Any]]:
@@ -121,7 +105,7 @@ def run(
         "对标 top 爆款:\n" + bench_list
     )
 
-    on_progress(f"鬼谷子: 读 {len(top)} 条对标爆款({category}),生成选题中(scodex)...")
+    on_progress(f"鬼谷子: 读 {len(top)} 条对标爆款({category}),生成选题中(opus)...")
     env = os.environ.copy()
     raw = _scodex(prompt, env, timeout_seconds)
     topics = _parse_topics(raw)

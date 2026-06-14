@@ -127,6 +127,8 @@ class PipelineRunner:
         self.video_jobs_dir.mkdir(parents=True, exist_ok=True)
         self.bus = EventBus()
         self._running_nodes: dict[tuple[str, str], asyncio.Task[Any]] = {}
+        # asr（沈括采集）快采 done 后，后台补音轨/抠图的 enrich task（按 job_id；重跑 asr cancel 旧的）。
+        self._enrich_tasks: dict[str, asyncio.Task[Any]] = {}
         # 绞杀者（E1-b2 #3）：注入的生产引擎 + 命中节点集。每 job 的引擎实例 iid 持久化在
         # JobState.engine_iid（不放内存，避免重启后重建孤儿实例）。
         self._engine: Any = None
@@ -571,17 +573,11 @@ class PipelineRunner:
         if asr_node is None or asr_node.status != "done":
             raise ValueError("asr node not done; cannot rewrite")
         job_dir = self.video_jobs_dir / job_id
-        sections: list[str] = []
-        for it in (asr_node.outputs or {}).get("items") or []:
-            relpath = it.get("article_relpath") or it.get("transcript_relpath")
-            if relpath and (job_dir / relpath).is_file():
-                sections.append(
-                    f"## 来源 {it.get('index')} - {it.get('title') or ''}\n\n"
-                    f"{(job_dir / relpath).read_text(encoding='utf-8').strip()}"
-                )
-        source_text = "\n\n---\n\n".join(sections).strip()
+        asr_out = asr_node.outputs or {}
+        asr_items = list(asr_out.get("collected") or asr_out.get("items") or [])
+        source_text = _rw_source_text(asr_items, job_dir)
         if not source_text:
-            raise RuntimeError("asr 文章稿全部为空，无法 rw")
+            raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
         profile = (state.node_configs.get("rw") or {}).get("profile", DEFAULT_RW_PROFILE)
         system_prompt, user_prompt = _build_rw_prompt(profile, source_text)
@@ -988,15 +984,17 @@ class PipelineRunner:
         self._save(state)
         self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
-        if self._engine is not None and node_name in self._engine_nodes:
-            # 绞杀者：该节点改走生产引擎执行（JobState 仍是 facade 真相源）
+        if self._engine is not None and node_name in self._engine_nodes and node_name != "asr":
+            # 绞杀者：该节点改走生产引擎执行（JobState 仍是 facade 真相源）。
+            # asr 例外：沈括采集要 mid-run 增量 outputs（collected 渐进推送）+ 节点 done 后台补
+            # 音轨/抠图，引擎 slice-1 不支持步内增量，故 asr 固定走 legacy 采集 _execute_asr_collect。
             outputs = await self._execute_via_engine(job_id, node_name)
         elif node_name == "tts":
             outputs = await self._execute_tts(job_id)
         elif node_name == "image":
             outputs = await self._execute_image(job_id)
         elif node_name == "asr":
-            outputs = await self._execute_asr(job_id)
+            outputs = await self._execute_asr_collect(job_id)
         elif node_name == "rw":
             outputs = await self._execute_rw(job_id)
         elif node_name == "lines":
@@ -1016,6 +1014,10 @@ class PipelineRunner:
         n.outputs = outputs
         self._save(state)
         self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+
+        # 沈括采集快采 done 后，后台补 Demucs 音轨分离 + 抠图（重活，不阻塞下游 rw）。
+        if node_name == "asr":
+            self._spawn_asr_enrich(job_id)
 
     async def _execute_via_engine(self, job_id: str, node_name: str) -> dict[str, Any]:
         """绞杀者（E1-b2 #3）：该节点的执行改走生产引擎 ``run_step``——经合并 registry 派发到
@@ -1320,8 +1322,132 @@ class PipelineRunner:
     # ------------------------------------------------------------
     # 真接入：asr 节点
     # ------------------------------------------------------------
+    def _spawn_asr_enrich(self, job_id: str) -> None:
+        """asr 快采 done 后，后台补 Demucs 音轨分离 + 抠图（_push_outputs_patch 增量推）。
+        重跑 asr 前先 cancel 旧 enrich task，避免两趟竞态写 outputs.collected。"""
+        old = self._enrich_tasks.get(job_id)
+        if old is not None and not old.done():
+            old.cancel()
+        self._enrich_tasks[job_id] = asyncio.create_task(self._enrich_asr_collected(job_id))
+
+    async def _enrich_asr_collected(self, job_id: str) -> None:
+        """后台第二趟采集：对 asr.outputs.collected 每条作品 collect_one(do_audio/do_frames=True)
+        补音轨/抠图（transcribe/comments 已 cached 跳过），字段级合并回 collected 并增量推送。
+        失败不影响主链路（快采产物已能驱动下游 rw）。"""
+        from ncds_opus_factory.commands import shenkuo
+
+        try:
+            state = self._load(job_id)
+        except FileNotFoundError:
+            return
+        asr = state.nodes.get("asr")
+        if asr is None:
+            return
+        collected = list((asr.outputs or {}).get("collected") or [])
+        if not collected:
+            return
+        collect_dir = self.video_jobs_dir / job_id / "01_collect"
+
+        def on_progress(text: str) -> None:
+            self._push_progress(job_id, "asr", text)
+
+        for entry in collected:
+            if entry.get("error") or not entry.get("aweme_id"):
+                continue
+            try:
+                full = await asyncio.to_thread(
+                    shenkuo.collect_one, entry["aweme_id"], collect_dir,
+                    meta={}, on_progress=on_progress,
+                    do_audio=True, do_frames=True,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 后台补失败不影响主链路
+                on_progress(f"[{entry.get('index')}] 音轨/抠图后台补失败（不影响主链路）：{exc}")
+                continue
+            # 字段级合并：保留快采的展示字段（desc/stats/text/top_comments/cover），补重活产物。
+            entry["audio"] = full.get("audio")
+            entry["frames"] = full.get("frames")
+            entry["cutouts"] = full.get("cutouts")
+            entry["status"] = {**entry.get("status", {}), **full.get("status", {})}
+            self._push_outputs_patch(job_id, "asr", "collected", collected)
+            on_progress(f"[{entry.get('index')}] 音轨/抠图已补齐")
+
+    async def _execute_asr_collect(self, job_id: str) -> dict[str, Any]:
+        """沈括采集（统一走 collect_one 快采趟）：对 inputs.urls 每条作品解析 aweme_id →
+        取展示元数据 → collect_one(do_audio/do_frames=False) 只跑下载+转写+清洗+评论，
+        产出可让下游 rw 先走的 text + 抽屉先展示的文案/评论/播放数据/封面。重活（Demucs
+        音轨分离 / 抠图）由本节点 done 后台 _enrich_asr_collected 补（见 _execute_real）。
+
+        outputs.collected = [entry...]（对齐 app ShenkuoEntry：aweme_id/desc/digg/stats/
+        top_comments/cover/hashtags/text/audio?/cutouts?/frames?/status + index/url/error）。
+        collect_one 幂等 + works_repo 缓存：app/订阅采过的作品直接命中、秒出。
+        """
+        from ncds_opus_factory.commands import shenkuo
+        from ncds_opus_factory.common import tikhub_client
+
+        state = self._load(job_id)
+        urls = list(state.inputs.get("urls") or [])
+        if not urls:
+            urls = [s["url"] for s in (state.inputs.get("shares") or [])
+                    if isinstance(s, dict) and isinstance(s.get("url"), str) and s["url"].strip()]
+        if not urls:
+            raise ValueError("inputs.urls is empty; paste media links into the INPUT node first")
+
+        job_dir = self.video_jobs_dir / job_id
+        collect_dir = job_dir / "01_collect"  # author_dir 占位（collect_one 仅用它做历史软链兼容）
+        collect_dir.mkdir(parents=True, exist_ok=True)
+
+        def on_progress(text: str) -> None:
+            self._push_progress(job_id, "asr", text)
+
+        collected_by_idx: dict[int, dict[str, Any]] = {}
+
+        def push_collected() -> None:
+            ordered = [collected_by_idx[k] for k in sorted(collected_by_idx)]
+            self._push_outputs_patch(job_id, "asr", "collected", ordered)
+
+        for idx, url in enumerate(urls, start=1):
+            on_progress(f"[{idx}/{len(urls)}] 解析作品链接")
+            try:
+                aweme_id = tikhub_client.resolve_aweme_id(url)
+                if not aweme_id:
+                    raise RuntimeError(f"解析不出 aweme_id（仅支持抖音链接/口令）：{url}")
+                meta: dict[str, Any] = {}
+                try:
+                    meta = tikhub_client.extract_meta(tikhub_client.fetch_one_video_detail(aweme_id))
+                except Exception as exc:  # noqa: BLE001 — 元数据失败不阻塞主链路
+                    on_progress(f"[{idx}/{len(urls)}] 元数据获取失败（不阻塞）：{exc}")
+                entry = await asyncio.to_thread(
+                    shenkuo.collect_one, aweme_id, collect_dir,
+                    meta=meta, on_progress=on_progress,
+                    do_audio=False, do_frames=False,
+                )
+                entry["index"] = idx
+                entry["url"] = url
+                collected_by_idx[idx] = entry
+                push_collected()
+                on_progress(f"[{idx}/{len(urls)}] 采集完成（文案/评论/数据）")
+            except Exception as exc:  # noqa: BLE001 — 单条失败不拖垮整批
+                msg = str(exc)
+                first = msg.splitlines()[0] if msg.splitlines() else "未知错误"
+                on_progress(f"[{idx}/{len(urls)}] 失败：{first}")
+                collected_by_idx[idx] = {
+                    "index": idx, "url": url, "aweme_id": "", "status": {}, "error": msg,
+                }
+                push_collected()
+                continue
+
+        collected = [collected_by_idx[k] for k in sorted(collected_by_idx)]
+        succeeded = [e for e in collected if not e.get("error")]
+        if not succeeded:
+            raise RuntimeError(f"全部 {len(urls)} 个作品采集失败，详见各作品状态")
+        return {"collected": collected, "collect_dir": str(collect_dir)}
+
     async def _execute_asr(self, job_id: str) -> dict[str, Any]:
-        """串行跑 inputs.urls 里每条媒体链接，只跑 video_pipeline.py 转写 + 清洗稿。
+        """[legacy] 旧转写实现（video_pipeline + opus 文章）。沈括统一走采集后由
+        _execute_asr_collect 取代；保留以便 NOF_ENGINE_NODES=legacy 回退或临时切回转写模式。
+        串行跑 inputs.urls 里每条媒体链接，只跑 video_pipeline.py 转写 + 清洗稿。
         填 items[]（front-end 两 tab：听写稿 / 文章解析）。精华稿（highlight）已
         从 asr 节点剥离 —— "爆款精华"现在由 rw 节点的 4 模型并行改写承担。
 
@@ -1542,30 +1668,19 @@ class PipelineRunner:
         asr_node = state.nodes.get("asr")
         if asr_node is None or asr_node.status != "done":
             raise ValueError("asr node not done; run asr first")
-        items = list((asr_node.outputs or {}).get("items") or [])
-        if not items:
-            raise ValueError("asr.outputs.items is empty; nothing to rewrite")
+        asr_out = asr_node.outputs or {}
+        asr_items = list(asr_out.get("collected") or asr_out.get("items") or [])
+        if not asr_items:
+            raise ValueError("asr outputs empty; nothing to rewrite")
 
         job_dir = self.video_jobs_dir / job_id
         rw_root = job_dir / "02_rw"
         rw_root.mkdir(parents=True, exist_ok=True)
 
-        # 拼 sourceText：asr 各条 article（opus 整理后的文章）拼起来
-        sections: list[str] = []
-        for it in items:
-            relpath = it.get("article_relpath") or it.get("transcript_relpath")
-            if not relpath:
-                continue
-            p = job_dir / relpath
-            if not p.is_file():
-                continue
-            sections.append(
-                f"## 来源 {it.get('index')} - {it.get('title') or ''}\n\n"
-                f"{p.read_text(encoding='utf-8').strip()}"
-            )
-        source_text = "\n\n---\n\n".join(sections).strip()
+        # 拼 sourceText：沈括采集的清洗稿 text（缺失回退 legacy article 文件）
+        source_text = _rw_source_text(asr_items, job_dir)
         if not source_text:
-            raise RuntimeError("asr 文章稿全部为空，无法 rw")
+            raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
         profile = (state.node_configs.get("rw") or {}).get("profile", DEFAULT_RW_PROFILE)
         system_prompt, user_prompt = _build_rw_prompt(profile, source_text)
@@ -1628,7 +1743,14 @@ class PipelineRunner:
                 res: Any = await _invoke_rw_candidate(cand, user_prompt, system_prompt, on_progress, push_status)
             except BaseException as exc:  # noqa: BLE001 — 失败/不可用都收进 draft
                 res = exc
-            drafts_by_id[cand["id"]] = make_draft(cand, res)
+            draft = make_draft(cand, res)
+            if draft.get("status") == "success":
+                # 柳永质检闸门：ai_taste 打回重写 + rubric 评分（同 liuyong.py）。同步 helper 放 to_thread。
+                try:
+                    draft.update(await asyncio.to_thread(_apply_rw_qc, rw_root / cand["id"], cand["id"], on_progress))
+                except Exception as exc:  # noqa: BLE001 — 质检失败不拖垮出稿
+                    on_progress(f"  [{cand['id']}] 质检异常（不影响稿件）: {exc}")
+            drafts_by_id[cand["id"]] = draft
             push_drafts()  # 这个模型一好就立即渲染到前端
 
         await asyncio.gather(*[run_one(c) for c in MODEL_CANDIDATES])
@@ -1676,7 +1798,7 @@ class PipelineRunner:
         system_prompt, user_prompt = _build_lines_prompt(draft)
         on_progress("调 opus 结构化为 beats…")
         raw = await asyncio.to_thread(
-            _call_opus_for_rw, user_prompt, system_prompt, "claude-opus-4-7"
+            _call_opus_for_rw, user_prompt, system_prompt, "claude-opus-4-8"
         )
 
         # 解析 JSON（容忍 ```json ... ``` 包裹）
@@ -1777,7 +1899,7 @@ class PipelineRunner:
         )
         on_progress(f"调 director agent 分镜（{len(beats_in)} beats）…")
         raw = await asyncio.to_thread(
-            _call_opus_for_rw, user_prompt, system_prompt, "claude-opus-4-7"
+            _call_opus_for_rw, user_prompt, system_prompt, "claude-opus-4-8"
         )
 
         scene_by_beat, scenes = storyboard_director.parse_director_output(raw, beats_raw)
@@ -1967,10 +2089,10 @@ def _polish_transcript_with_opus(
     output_path: Path,
     title_hint: str = "",
 ) -> bool:
-    """调本机 opus launcher（Claude Opus 4.7）把语音转写原稿整理成 markdown 文章。
+    """调本机 opus launcher（Claude Opus 4.8）把语音转写原稿整理成 markdown 文章。
 
     透传到 claude CLI，参数参考远程 video_rewrite_runner.runClaudeCli：
-      claude -p <prompt> --output-format json --model claude-opus-4-7
+      claude -p <prompt> --output-format json --model claude-opus-4-8
              --permission-mode bypassPermissions --tools '' --no-session-persistence
 
     Claude CLI 的 JSON 输出末行形如 {"type":"result","is_error":false,"result":"<markdown>"}。
@@ -2013,7 +2135,8 @@ def _polish_transcript_with_opus(
         launcher, "launch", "--no-resume", "--",
         "-p", prompt,
         "--output-format", "json",
-        "--model", "claude-opus-4-7",
+        "--model", "claude-opus-4-8",
+        "--effort", "max",
         "--permission-mode", "bypassPermissions",
         "--tools", "",
         "--no-session-persistence",
@@ -2060,15 +2183,15 @@ def _polish_transcript_with_opus(
 # ---------------------------------------------------------------------------
 
 # 4 模型 candidate 表。runner 决定调用方式：
-#   - opus    : `opus launch -- ...` 透传到 claude CLI（Claude Opus 4.7）
+#   - opus    : `opus launch -- ...` 透传到 claude CLI（Claude Opus 4.8）
 #   - scodex  : `scodex launch -- ...` 透传到 codex CLI（GPT-5.5）
 #   - gemini  : `~/.gemini/g.sh` —— 本机未安装则直接标"模型不可用"
 #   - deepseek: HTTP POST 到 deepseek API —— 需 DEEPSEEK_API_KEY，未设则标"模型不可用"
 # label 仅作展示兜底（前端 MODEL_LABELS 优先）；runner/model 是真实调用，保持不动。
+# rw 候选模型。原为 4 模型并行（opus/gpt5-codex/gemini/deepseek），现按需求只保留 deepseek
+# 单模型出稿（codex 订阅失效 + 用户指定只留 deepseek）。runner 派发见 _invoke_rw_candidate。
+# label 沿用"改写方案 D"与前端 MODEL_LABELS[deepseek] 对齐（单候选时前端只渲染这一个 tab）。
 MODEL_CANDIDATES: list[dict[str, str]] = [
-    {"id": "opus",         "label": "改写方案 A",  "runner": "opus",         "model": "claude-opus-4-7"},
-    {"id": "gpt5",         "label": "改写方案 B",  "runner": "scodex",       "model": "gpt-5.5"},
-    {"id": "gemini_local", "label": "改写方案 C",  "runner": "gemini_local", "model": ""},
     {"id": "deepseek",     "label": "改写方案 D",  "runner": "deepseek",     "model": "deepseek-v4-pro"},
 ]
 
@@ -2160,6 +2283,7 @@ def _call_opus_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> st
         "-p", user_prompt,
         "--output-format", "json",
         "--model", model_id,
+        "--effort", "max",
         "--permission-mode", "bypassPermissions",
         "--tools", "",
         "--no-session-persistence",
@@ -2313,12 +2437,15 @@ def _call_deepseek_for_rw(user_prompt: str, system_prompt: str, model_id: str) -
         "Authorization": f"Bearer {api_key}",
     }
     try:
-        resp = httpx.post(
-            "https://api.deepseek.com/chat/completions",
-            json=body,
-            headers=headers,
-            timeout=900.0,
-        )
+        # DeepSeek 是域内 API：trust_env=False 显式绕过环境里的 SOCKS/HTTP 代理（如 10808），
+        # 既不依赖 httpx 的 socksio 扩展，也避免域内流量被绕到国外出口（慢/被拒）。
+        # 对标 commands/rw.py 给飞书域名设 NO_PROXY 的既有做法。
+        with httpx.Client(trust_env=False, timeout=900.0) as client:
+            resp = client.post(
+                "https://api.deepseek.com/chat/completions",
+                json=body,
+                headers=headers,
+            )
     except httpx.HTTPError as exc:
         raise RuntimeError(f"deepseek HTTP error: {exc}") from exc
     if resp.status_code >= 400:
@@ -2346,6 +2473,7 @@ def _call_deepseek_for_rw(user_prompt: str, system_prompt: str, model_id: str) -
 # 复刻 scripts/rewrite_profiles.mjs 各 profile 的 draft prompt 精华，但统一要求输出
 # markdown 文章（RW 抽屉通读 + LINES 再切 beats）。freestyle 不限定体裁。
 RW_PROFILE_META: dict[str, str] = {
+    "douyin_cog": "抖音口播",
     "toutiao": "头条图文",
     "caijing": "抖音财经",
     "jitang": "心灵鸡汤",
@@ -2353,6 +2481,17 @@ RW_PROFILE_META: dict[str, str] = {
 }
 
 _RW_PROFILE_BODY: dict[str, list[str]] = {
+    "douyin_cog": [
+        "你是抖音口播稿的资深写手。请把下面的源文档改写成一篇可直接口播的抖音稿。",
+        "",
+        "【体裁要求】",
+        "- 开头黄金 3 秒抛钩子：反差 / 反常识结论 / 悬念，一句话抓住注意力；",
+        "- 四段式推进：钩子 -> 展开冲突或反差 -> 给出洞察/干货 -> 收束 + 行动号召；",
+        "- 全程口语化、第二人称「你」，像对着镜头说话；短句、强节奏，不写书面长句；",
+        "- 善用对比、反转、追问；信息密度高但不堆术语；",
+        "- 不要 AI 味套话（如「首先 / 其次 / 综上所述 / 值得注意的是」）；",
+        "- 正文 1200-1600 字，适配 60-90 秒口播。",
+    ],
     "toutiao": [
         "你是【今日头条】爆款图文写手。请把下面的源文档改写成一篇可直接发布的头条图文稿。",
         "",
@@ -2393,7 +2532,87 @@ _RW_PROFILE_BODY: dict[str, list[str]] = {
     ],
 }
 
-DEFAULT_RW_PROFILE = "freestyle"
+DEFAULT_RW_PROFILE = "douyin_cog"
+
+
+def _rw_source_text(asr_items: list[dict[str, Any]], job_dir: Path) -> str:
+    """把 asr 产物拼成 rw 的源文本。
+
+    沈括统一走采集后，优先用 collected 条目内嵌的清洗稿 ``text``；为兼容 legacy 转写产物
+    （items 带 article_relpath/transcript_relpath 文件路径），text 缺失时回退读文件。
+    来源标题用作品文案 ``desc``（剥掉内嵌 #话题），无则用 title。
+    """
+    sections: list[str] = []
+    for it in asr_items:
+        txt = (it.get("text") or "").strip()
+        if not txt:
+            relpath = it.get("article_relpath") or it.get("transcript_relpath")
+            if relpath and (job_dir / relpath).is_file():
+                txt = (job_dir / relpath).read_text(encoding="utf-8").strip()
+        if not txt:
+            continue
+        title = str(it.get("desc") or it.get("title") or "")
+        for tag in it.get("hashtags") or []:
+            title = title.replace(f"#{tag}", "")
+        title = " ".join(title.split())
+        sections.append(f"## 来源 {it.get('index')} - {title}\n\n{txt}")
+    return "\n\n---\n\n".join(sections).strip()
+
+
+def _purge_ai_taste_rw(text: str, report: dict[str, Any], on_progress: Callable[[str], None]) -> str:
+    """把 ai_taste 命中的 AI 味甩回 opus 消除，返回改写后全文（同柳永 liuyong._purge_ai_taste）。"""
+    hits = report.get("density") or []
+    hit_desc = "；".join(str(h) for h in hits[:10]) if hits else "（泛 AI 味句式）"
+    user = (
+        "下面这篇抖音口播稿有 AI 味句式问题，请改写消除。\n\n"
+        f"【命中问题】{hit_desc}\n\n"
+        "【改写要求】\n"
+        "- 保持原意、结构、信息量不变；\n"
+        "- 只消除 AI 味套话 / 模板句式，换成口语化的自然表达；\n"
+        "- 只输出改写后的全文，不要解释、不要标题、不要 ``` 包裹。\n\n"
+        f"== 原稿 ==\n{text}\n== 原稿结束 =="
+    )
+    try:
+        return (_call_opus_for_rw(user, "你是中文口播稿润色专家，擅长把 AI 味句式改成自然口语。", "claude-opus-4-8") or "").strip()
+    except Exception as exc:  # noqa: BLE001 — 消 AI 味失败不致命，保留上一版
+        on_progress(f"  消 AI 味调用失败: {exc}")
+        return ""
+
+
+def _apply_rw_qc(model_dir: Path, model_id: str, on_progress: Callable[[str], None]) -> dict[str, Any]:
+    """对一份已写盘的 draft.md 跑柳永质检闸门（同 liuyong.py:154-184）：
+    ai_taste.scan -> fail 打回重写≤2 轮 -> quality_rubric.score(opus 5 维度)。
+    重写后回写 draft.md + 旁挂 draft.qc.json，返回 {"qc":..., "qc_rubric":...}。
+    """
+    from ncds_opus_factory.common import ai_taste, quality_rubric
+
+    draft_path = model_dir / "draft.md"
+    if not draft_path.is_file():
+        return {}
+    text = draft_path.read_text(encoding="utf-8").strip()
+    report = ai_taste.scan(text)
+    on_progress(f"质检[{model_id}]: {report.get('verdict')} - {report.get('summary', '')}")
+    rounds = 0
+    while report.get("verdict") == "fail" and rounds < 2:
+        rounds += 1
+        on_progress(f"  [{model_id}] AI 味超标，打回重写第 {rounds} 轮…")
+        new_text = _purge_ai_taste_rw(text, report, on_progress)
+        if not new_text or len(new_text) < 200:
+            on_progress(f"  [{model_id}] 重写未返回有效稿，保留上一版")
+            break
+        text = new_text
+        report = ai_taste.scan(text)
+        on_progress(f"  [{model_id}] 第 {rounds} 轮后: {report.get('verdict')}")
+    rub = quality_rubric.score(text)
+    if rub.get("available"):
+        on_progress(f"质检2[rubric/{model_id}]: {rub.get('total')}/50 {rub.get('grade')}")
+    else:
+        on_progress(f"质检2[rubric/{model_id}]: 跳过（{rub.get('skipped')}）")
+    draft_path.write_text(text + "\n", encoding="utf-8")
+    (model_dir / "draft.qc.json").write_text(
+        json.dumps({"qc": report, "qc_rubric": rub}, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return {"qc": report, "qc_rubric": rub}
 
 
 def _build_rw_prompt(
@@ -2424,11 +2643,21 @@ def _build_rw_prompt(
         source_text,
         "== 源文档结束 ==",
     ]
-    if user_requirements.strip():
+    # 注入卧龙复盘归纳的 Leader 口味备忘（同柳永 liuyong.py：让 rw 一开始就照 Leader 口味写）。
+    reqs = user_requirements or ""
+    try:
+        from ncds_opus_factory.common import rubric_store
+
+        brief = rubric_store.injection_brief()
+        if brief:
+            reqs = (reqs + "\n\n" if reqs else "") + brief
+    except Exception:  # noqa: BLE001 — 口味注入失败不阻塞改写
+        pass
+    if reqs.strip():
         parts += [
             "",
-            "【用户附加要求（最高优先级，可覆盖以上默认要求）】：",
-            user_requirements.strip(),
+            "【用户附加要求 / Leader 口味（最高优先级，可覆盖以上默认要求）】：",
+            reqs.strip(),
         ]
     return system_prompt, "\n".join(parts)
 
