@@ -89,6 +89,10 @@ export function NodeStatusBar({ nodeState, jobId }: { nodeState: NodeState; jobI
         <span className="nsb-status">{STATUS_ZH[status]}</span>
         {elapsedText && <span className="nsb-elapsed">{elapsedText}</span>}
         {active && progress && <span className="nsb-progress">{progress}</span>}
+        {/* running/done 也露出任务ID（failed 在下方详情块带复制按钮，这里不重复） */}
+        {status !== 'failed' && task_id && (
+          <span className="nsb-taskid nsb-taskid-inline">任务 ID&nbsp;&nbsp;{task_id}</span>
+        )}
       </div>
 
       {status === 'failed' && (error || task_id) && (

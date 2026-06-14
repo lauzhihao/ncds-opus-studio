@@ -350,6 +350,18 @@ textarea.code-pane.editable {
   font-size: var(--text-2xs);
 }
 .node-status-bar .nsb-taskid { word-break: break-all; }
+/* nsb-main 内联任务ID（running/done）：右对齐、单行省略，不与进度文案抢宽。 */
+.node-status-bar .nsb-taskid-inline {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .node-status-bar .nsb-copy { flex: 0 0 auto; margin-left: auto; }
 
 @keyframes nsb-breath {

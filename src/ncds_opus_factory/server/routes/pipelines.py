@@ -215,8 +215,9 @@ async def run_node(
     body: dict[str, Any] | None = Body(default=None),
 ) -> dict[str, Any]:
     params = (body or {}).get("params") if isinstance(body, dict) else None
+    force = bool((body or {}).get("force")) if isinstance(body, dict) else False
     try:
-        await PIPELINE_RUNNER.run_node(job_id, node, params)
+        await PIPELINE_RUNNER.run_node(job_id, node, params, force=force)
     except KeyError as e:
         raise HTTPException(404, _exc_msg(e))
     except (ValueError, RuntimeError) as e:

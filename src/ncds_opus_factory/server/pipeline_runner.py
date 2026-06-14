@@ -407,10 +407,18 @@ class PipelineRunner:
         n.error = None
         n.task_id = None
 
-    async def run_node(self, job_id: str, node_name: str, params: dict[str, Any] | None = None) -> None:
+    async def run_node(
+        self,
+        job_id: str,
+        node_name: str,
+        params: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> None:
         """触发某节点执行。会把节点及其下游全部 reset 后再排队。
         params: 可选节点配置（如 rw 的 {profile}），merge 进 node_configs 持久化，
         执行时由 _execute_* 读取。不随 reset 清空。
+        force: True = 用户显式「重新执行」，无条件 reset 重跑；False = 普通触发，
+        对 asr 走幂等短路（见下）。
         """
         state = self._load(job_id)
         pipeline = get_pipeline(state.pipeline_id)
@@ -422,6 +430,21 @@ class PipelineRunner:
             cfg = dict(state.node_configs.get(node_name) or {})
             cfg.update(params)
             state.node_configs[node_name] = cfg
+            self._save(state)
+
+        # asr 幂等短路：article 已存在（done + 有产物）且非显式重跑 → 秒回，不重算、不动下游。
+        # 输入变了 update_inputs 已把 asr reset 成 idle，故 done 即「输入未变」，复用安全。
+        if (
+            not force
+            and node_name == "asr"
+            and state.nodes[node_name].status == "done"
+            and state.nodes[node_name].outputs
+        ):
+            self.bus.publish(job_id, {
+                "type": "node_status", "job_id": job_id, "node": node_name,
+                "state": asdict(state.nodes[node_name]),
+            })
+            return
 
         # 检查 deps 已完成
         for dep in node.deps:
@@ -1011,7 +1034,13 @@ class PipelineRunner:
             job.engine_iid = iid          # 持久化句柄，重启后复用同一实例（不留孤儿）
             self._save(job)
         await engine.reset_step(iid, node_name)   # 回 idle，支持重跑
-        step_inputs = {"job_dir": str(self.video_jobs_dir / job_id)}
+        # 闭合签名：各 pct015_* performer 不能盲 splat config，driver 按节点装配 step_inputs。
+        step_inputs = self._engine_step_inputs(job, node_name)
+        # 引擎路径无 TaskRunner task_id；用实例 iid 作节点追踪句柄，失败时前端可复制上报。
+        node = job.nodes.get(node_name)
+        if node is not None and node.task_id != iid:
+            node.task_id = iid
+            self._save(job)
         # 把 performer 的 on_progress 回桥到 facade JobState.nodes[node].progress + /jobs SSE，
         # 否则引擎路径下 storyboard/image/render 抽屉 running 态进度文本会冻结。
         st = await engine.run_step(
@@ -1024,6 +1053,31 @@ class PipelineRunner:
         if st.status != "done":
             raise RuntimeError(f"engine step {node_name} -> {st.status}: {st.error or ''}")
         return dict(st.outputs)
+
+    def _engine_step_inputs(self, job: JobState, node_name: str) -> dict[str, Any]:
+        """为生产引擎 performer 装配该步的 step_inputs。
+
+        performer 是闭合签名（不能盲 splat config，否则 TypeError），故 driver 负责把上游产物/
+        全局输入折进 step_inputs（与旧 _execute_asr/_execute_rw 的取数口径一致）：
+          - asr：urls + shares（inputs 只存了 shares、无顶层 urls 时从 shares 派生 url）
+          - rw ：asr_items（asr 节点 outputs.items）+ profile（node_configs.rw.profile）
+          - 其余（lines/storyboard/tts/image/render）：只读 02_rw/episode.json，job_dir 足矣
+        """
+        si: dict[str, Any] = {"job_dir": str(self.video_jobs_dir / job.job_id)}
+        if node_name == "asr":
+            shares = list(job.inputs.get("shares") or [])
+            urls = [u.strip() for u in (job.inputs.get("urls") or []) if u and u.strip()]
+            if not urls:
+                urls = [s["url"] for s in shares
+                        if isinstance(s, dict) and isinstance(s.get("url"), str) and s["url"].strip()]
+            si["urls"] = urls
+            si["shares"] = shares
+        elif node_name == "rw":
+            asr_node = job.nodes.get("asr")
+            asr_out = (asr_node.outputs or {}) if asr_node else {}
+            si["asr_items"] = list(asr_out.get("collected") or asr_out.get("items") or [])
+            si["profile"] = (job.node_configs.get("rw") or {}).get("profile", DEFAULT_RW_PROFILE)
+        return si
 
     # ------------------------------------------------------------
     # 真接入：进度推送 helper

@@ -64,8 +64,11 @@ export const api = {
   deleteJob: (id: string) => del<{ deleted: string }>(`/jobs/${id}`),
   updateJobTitle: (jobId: string, title: string) =>
     put<{ job_id: string; title: string }>(`/jobs/${jobId}/title`, { title }),
-  runNode: (jobId: string, node: string, params?: Record<string, unknown>) =>
-    post<JobState>(`/jobs/${jobId}/nodes/${node}/run`, params ? { params } : undefined),
+  runNode: (jobId: string, node: string, params?: Record<string, unknown>, force?: boolean) =>
+    post<JobState>(
+      `/jobs/${jobId}/nodes/${node}/run`,
+      params || force ? { ...(params ? { params } : {}), ...(force ? { force: true } : {}) } : undefined,
+    ),
   cancelNode: (jobId: string, node: string) =>
     post<{ cancelled: boolean; job_id: string; node: string }>(
       `/jobs/${jobId}/nodes/${node}/cancel`,

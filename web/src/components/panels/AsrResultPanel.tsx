@@ -59,10 +59,11 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     | undefined;
   const itemRows = itemProgress ? Object.values(itemProgress) : [];
 
-  async function doRun() {
+  // force=true 仅由「重新执行」走：无条件重算。普通「开始转写」force=false → asr 幂等秒回。
+  async function doRun(force = false) {
     setActionBusy(true);
     try {
-      await api.runNode(jobId, nodeDef.name);
+      await api.runNode(jobId, nodeDef.name, undefined, force);
     } catch (e) {
       showToast('启动失败，请稍后再试');
       console.error('[AsrResultPanel] 启动失败', e);
@@ -118,7 +119,7 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
       <button
         className="btn primary sm"
         disabled={actionBusy}
-        onClick={doRun}
+        onClick={() => doRun()}
       >
         <Play size={12} strokeWidth={2} /> 开始转写
       </button>
@@ -211,7 +212,7 @@ export function AsrResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
         confirmLabel="重新执行"
         danger
         onConfirm={async () => {
-          await doRun();
+          await doRun(true);
           setPendingRerun(false);
         }}
         onCancel={() => setPendingRerun(false)}
