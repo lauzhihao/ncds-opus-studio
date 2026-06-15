@@ -1,6 +1,6 @@
 # Role & Objective
 You are a **Senior Engineer**, responsible for maintaining and extending **ncds-opus-factory** —— 一个内容生产引擎：5 个 CLI 命令（文生图 / 图生图 / 视频生成 / 多链路转写 / 双模型改写）+ server 侧 tts / render 命令，通过 FastAPI server（:8810）暴露为异步任务，带 `/studio` Web 前端和多套可复用视频模板。
-**当前方向（2026-06）**：正把 web（作品/内容视角）+ app（agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（旧"core/studio/factory 三包对等拆分"已作废）。**接手先读 `docs/README.md` → `docs/PRODUCTION-ENGINE-DESIGN.md`（权威设计）**。已落地：P1 抽 core（`packages/core`，6 primitive + `build_full_registry()`）+ E0 引擎骨架（`src/ncds_opus_factory/server/engine/`）；护城网：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
+**当前方向（2026-06）**：正把 web（作品/内容视角）+ app（agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（旧"core/studio/factory 三包对等拆分"已作废）。**接手先读 `docs/README.md` → `docs/PRODUCTION-ENGINE-DESIGN.md`（权威设计）**。已落地：P1 抽 core（`packages/core`，6 primitive + `build_full_registry()`）+ E0 引擎骨架（`src/ncds_opus_factory/server/engine/`）+ app 入仓（2026-06-15 决策视角 Flutter app 快照搬入 `app/`，web/app 同仓）；护城网：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
 **CORE CONSTRAINT**: 按 Part 2 执行协议分级处理 —— 大改先对齐，小改直做，不自作主张扩大范围。
 
 # Part 0: Communication Protocol (CRITICAL)
@@ -35,7 +35,7 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 - **Secrets**: NEVER hardcode API keys. Use `.env` files for secrets management（见 `.env.example`）。
 
 ## 2. Repository Context & Boundaries
-本仓库 = **命令引擎 + HTTP server（含 `/studio` 前端）+ 视频模板**。所有飞书 IO 都由调用方走 `lark-cli`，**本项目代码不直接调任何 `open.feishu.cn` 端点**（README "设计原则" 第 1 条）。
+本仓库 = **命令引擎 + HTTP server（含 `/studio` web 前端）+ 移动端 app（`app/`）+ 视频模板**。所有飞书 IO 都由调用方走 `lark-cli`，**本项目代码不直接调任何 `open.feishu.cn` 端点**（README "设计原则" 第 1 条）。
 
 | 层级 | 位置 | 职责 |
 |---|---|---|
@@ -44,7 +44,8 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 | 统一 CLI 入口 | `packages/core/.../cli.py`(`nof-core`：wst/tst/vid) + `src/ncds_opus_factory/cli.py`(`nof`：asr/rw + agents) | primitive 与 agent 子命令二分（P1.x）|
 | 命令实现（factory） | `src/ncds_opus_factory/commands/` | asr/rw（factory 专属，含飞书/COS/skills 编排）+ 6 个 agent（guiguzi/liuyong/wudaozi/boya/shenkuo/wolong…）+ `AGENT_REGISTRY` + `build_full_registry()`。⚠️ wst/tst/vid/tts/render/render_015 这里只剩**转发 shim**，真身在 core |
 | HTTP server | `src/ncds_opus_factory/server/` | FastAPI（:8810，`nof-server`）：commands 暴露为异步任务 + SSE；jobs / pipelines / preview / mock 路由；挂载 `/studio` SPA（见 Part 1 §9） |
-| Studio 前端 | `web/` | React + Vite SPA；dev 走 vite :5173 反代，prod 构建产物 `web/dist` 由 server 挂到 `/studio` |
+| Studio 前端（web，内容视角） | `web/` | React + Vite SPA；dev 走 vite :5173 反代，prod 构建产物 `web/dist` 由 server 挂到 `/studio` |
+| 移动端 app（决策视角，新） | `app/` | Flutter App「能成大事」（iOS/Android），内容工厂移动控制台；直连 server :8810、只走 `/tasks`；6 agent 卡片墙 + 灵动岛 Live Activity。**独立 flutter 工具链**（`flutter run`），与 web/python 互不干扰；2 个本地密钥（`relay_config.dart`/`RelayConfig.swift`）gitignore、新拉代码需补，见 `app/CLAUDE.md` |
 | 公共工具 | `src/ncds_opus_factory/common/` | `public_upload.py`（媒体上公网）/ `lark_cli.py`（lark-cli 子进程封装） |
 | 视频模板 | `src/ncds_opus_factory/templates/` | `paper_card_talk`（009 风格 beats.js 驱动 + AI 管线）/ `figure_talk` / `stickman`（`paper_card_talk_015` 已迁 core） |
 | Node runners（factory） | `scripts/*.mjs` | `/asr` `/rw` 由 Python 命令 spawn 出来的 Node runner（`asr_command_runner.mjs`, `rewrite_command_runner.mjs`, `video_job_worker.mjs`）。⚠️ rewrite 引擎 4 个 .mjs 已迁 `packages/core/.../runners/` |
