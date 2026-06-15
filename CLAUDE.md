@@ -51,7 +51,6 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 | Node runners（factory） | `scripts/*.mjs` | `/asr` `/rw` 由 Python 命令 spawn 出来的 Node runner（`asr_command_runner.mjs`, `rewrite_command_runner.mjs`, `video_job_worker.mjs`）。⚠️ rewrite 引擎 4 个 .mjs 已迁 `packages/core/.../runners/` |
 | gpt-image 网关 | `packages/core/.../gpt_image/{generate,generate_edit}.py` | `/wst` `/tst` 的底层 gpt-image-2 调用（P1 已从 repo 根迁入 core）|
 | Skills 说明 | `skills/*/SKILL.md` | 各 skill 的 frontmatter；不是可执行 entry point，只是文档。`skills/` 留 repo 根、不进任何包，env `NOF_VIDEO_PIPELINE_SCRIPT` 兜底 |
-| 配置示例 | `configs/openclaw-examples/` | `openclaw.example.json` 等示例（不进 runtime） |
 | 文档 | `docs/README.md`(索引) → `docs/PRODUCTION-ENGINE-DESIGN.md`(权威设计) / `docs/WOLONG-DESIGN.md`(卧龙/agents)；旧设计在 `docs/archive/` | 接手从 README 进；archive 是历史不当现状读 |
 | 删除候选 | repo 根 `pipelines/douyin_processing/` | 零消费者（DAG 类型已迁 core）—— 评估删除 |
 | 产物（gitignored） | `state/`, `video-jobs/` | 任务产物、视频任务数据 |
@@ -59,7 +58,7 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 **边界规则**：
 - 新业务逻辑**默认加在对应的 `commands/*.py` 或它 spawn 的 Node runner 里**。
 - **不要**给项目加任何直接的飞书 SDK / OpenAPI 调用；飞书读写一律走 `lark-cli`，由调用方负责（见 README "设计原则"）。
-- `scripts/feishu_sdk_adapter.mjs` 是**历史遗留**：当前 `/asr` `/rw` 的 Node runner 还在通过它直调飞书 OpenAPI，迁移计划见 `docs/FEISHU-REFACTOR.md`。新代码不要 import 它，老代码改动需要在 PR 里说明是否同时往 lark-cli 迁移。
+- `scripts/feishu_sdk_adapter.mjs`：飞书 OpenAPI → `lark-cli` 迁移**已完成**（见 `docs/FEISHU-REFACTOR.md`）——adapter 现仅转发给 `scripts/lark_cli.mjs`（保留原 exports），不再直调任何 `open-apis` 端点。新代码优先直接用 `lark-cli`，不要新增对 adapter 的依赖。
 - 进度回调由调用方传入：命令本身不知道 "发飞书消息"，只通过 `on_progress(text)` 回调把状态吐给调用方。
 
 ## 3. Script Guidelines
@@ -114,11 +113,9 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 
 ## 8. 项目地图与看门狗
 - **`.project_map`**：项目根的结构地图（commands / runtime / skills / 目录树），是 agent 进入会话后的第一手 navigator。**不要手改**，由脚本生成。
-- ⚠️ **生成器仍是旧单包布局**：`map_project.py` 的命令/目录扫描以 `src/ncds_opus_factory/` 为主，
-  对 `packages/core/`、`server/engine/` 等新结构覆盖不全——导航表可能偏旧、漏新模块。需要权威结构时
-  以 `docs/PRODUCTION-ENGINE-DESIGN.md` + 本 §2 表为准；map 生成器适配新布局是一项待办。
+- 生成器已覆盖新结构（2026-06 升级）：Commands 区含 5 primitive + 6 agent，另有独立 App 区（Flutter）；目录树忽略 `.claude/`（不再扫 worktree 副本）与 Flutter/iOS 编译噪音（`.dart_tool`/`Pods` 等）。深层架构语义仍以 `docs/PRODUCTION-ENGINE-DESIGN.md` + 本 §2 表为准。
 - 生成器：`scripts/map_project.py`，可手动跑 `python3 scripts/map_project.py`。
-- 看门狗：`scripts/map_project_watchdog.py` —— long-running 进程，轮询 `src/` `scripts/` `pipelines/` `gpt_image/` `skills/` `docs/` `configs/` 下相关文件的 mtime，发现变化（去抖 1.5s）后自动重生成 `.project_map`。
+- 看门狗：`scripts/map_project_watchdog.py` —— long-running 进程，轮询 `src/` `packages/` `app/` `scripts/` `pipelines/` `skills/` `docs/` `configs/` 下相关文件的 mtime，发现变化（停手满 30s 的 quiet-period 去抖）后自动重生成 `.project_map`。
 - 注册为 launchd 自启动（macOS）：
   ```bash
   ./scripts/install_map_watchdog.sh install     # 写 plist 并加载，开机自启

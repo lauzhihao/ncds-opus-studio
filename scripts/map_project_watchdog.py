@@ -31,9 +31,10 @@ LOCK_FILE = PROJECT_ROOT / "state" / "map_project_watchdog.lock"
 # 监控的目录（相对项目根）。子目录递归扫描。
 WATCH_DIRS = [
     "src",
+    "packages",      # core 包(P1 抽出),改动要刷新地图
+    "app",           # Flutter app(决策视角,2026-06 入仓)
     "scripts",
     "pipelines",
-    "gpt_image",
     "skills",
     "docs",
     "configs",
@@ -56,7 +57,8 @@ TRACKED_EXTS = {
 IGNORE_DIRS = {
     "__pycache__", ".pytest_cache", ".venv", "node_modules",
     ".git", "dist", "build", ".egg-info",
-    "state", "video-jobs", ".worktrees",
+    "state", "video-jobs", ".worktrees", ".claude",
+    ".dart_tool", "Pods", ".symlinks", "ephemeral",  # Flutter/iOS 编译噪音
 }
 
 POLL_INTERVAL_SECONDS = 3.0
