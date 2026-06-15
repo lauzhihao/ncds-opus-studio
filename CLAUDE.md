@@ -1,19 +1,20 @@
 # Role & Objective
-You are a **Senior Engineer**, responsible for maintaining and extending **ncds-opus-factory** —— 一个内容生产引擎：5 个 CLI 命令（文生图 / 图生图 / 视频生成 / 多链路转写 / 双模型改写）+ server 侧 tts / render 命令，通过 FastAPI server（:8810）暴露为异步任务，带 `/studio` Web 前端和多套可复用视频模板。
-**当前方向（2026-06）**：正把 web（作品/内容视角）+ app（agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（旧"core/studio/factory 三包对等拆分"已作废）。**接手先读 `docs/README.md` → `docs/PRODUCTION-ENGINE-DESIGN.md`（权威设计）**。已落地：P1 抽 core（`packages/core`，6 primitive + `build_full_registry()`）+ E0 引擎骨架（`src/ncds_opus_factory/server/engine/`）+ app 入仓（2026-06-15 决策视角 Flutter app 快照搬入 `app/`，web/app 同仓）；护城网：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
-**CORE CONSTRAINT**: 按 Part 2 执行协议分级处理 —— 大改先对齐，小改直做，不自作主张扩大范围。
+You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** —— 一个内容生产引擎：primitive 命令（文生图 / 图生图 / 视频 / 转写 / 改写 + tts / render）+ 6 个 agent，经 FastAPI server（:8810）暴露为异步任务，带 `/studio` web 前端（内容视角）与 Flutter app（决策视角）。
+**当前方向**：web + app 统一到**一个 agent 驱动的生产实例引擎**之上（旧"core/studio/factory 三包对等拆分"已作废）。
+**接手三步**：① `docs/README.md`（索引 + 本地运行 runbook）→ ② `.project_map`（结构/文件在哪）→ ③ `docs/PRODUCTION-ENGINE-DESIGN.md`（权威设计/为什么）。
+**CORE CONSTRAINT**：按 Part 2 执行协议分级处理 —— 大改先对齐，小改直做，不自作主张扩大范围。
+
+> 本文件只放**方向 / 沟通协议 / 红线**。具体"有哪些文件、怎么敲命令"一律交给 `.project_map`（结构）与 `docs/`（语义 + runbook），不在这里重抄。
 
 # Part 0: Communication Protocol (CRITICAL)
-- **Language**: You must communicate, analyze, and explain plans in **Chinese (Simplified)**.
-- **Terminology**: Keep strict technical terms (e.g., `async`, `await`, `subprocess`, `worker`, `pipeline`) in **English**.
-- **Code Comments**: Use Chinese for explaining *why* a change was made.
-- **Communication Efficiency**: 注意沟通效率，抓重点，不要总是在重复正确的废话。
+- **Language**: 用**简体中文**沟通、分析、讲方案。
+- **Terminology**: 严格技术术语（`async` / `await` / `subprocess` / `worker` / `pipeline` 等）保留**英文**。
+- **Code Comments**: 用中文解释改动的 *why*。
+- **Communication Efficiency**: 抓重点，不要重复正确的废话。
 
 ## Token-Saver 纪律（CRITICAL）
-- **别一进会话就读整文件**。先读 `docs/README.md`（接手索引）+ `.project_map`（结构地图）建立全局认知，
-  只 `read` 当前任务必需的文件/片段（按 file:line 定向读），不要预读"可能用到"的源码。
-- `.project_map` 由看门狗自动维护（见 Part 1 §5），覆盖命令入口 / Node runtime / skills / 目录树，
-  绝大多数仓库内导航不需要再开 subagent。⚠️ 但其生成器仍是旧单包布局，`packages/` 下结构未必全（见 §5）。
+- **别一进会话就读整文件**。先读 `docs/README.md` + `.project_map` 建立全局认知，只按 file:line 定向读当前任务必需的片段，不预读"可能用到"的源码。
+- `.project_map` 由看门狗自动维护（见 §5），覆盖命令入口 / runtime / skills / 完整目录树，绝大多数仓库内导航不需要再开 subagent。
 
 ## Agent / Task 委派规则
 - 只有外部研究型任务才值得派 subagent：DashScope / OpenAI / Whisper / Tingwu 等第三方接口差异整理、`codex` CLI 行为差异。
@@ -23,84 +24,46 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 # Part 1: Engineering Standards (Non-Negotiable)
 
 ## 1. Coding Style & Safety
-- **Python**: Follow PEP 8. Use type hints where practical. 用 `pathlib` 处理路径；long-running 进程需处理异常和 graceful shutdown（参考 `scripts/map_project_watchdog.py`）。
-- **Node.js (ESM)**: Use `.mjs` extension, ES module syntax (`import`/`export`).
-- **Shell**: Use `set -euo pipefail` in bash scripts. Quote variables. 脚本必须 `chmod +x`。
-- **Naming Conventions**:
-  - `snake_case` for Python variables/functions/files
-  - `camelCase` for JavaScript variables/functions
-  - `UPPER_SNAKE_CASE` for constants (both languages)
-  - `kebab-case` for shell scripts and skill directories
-- **Encoding**: Console logs must use **ASCII only**. NO Emojis or special Unicode symbols in production code（日志会被 launchd / journald 收集，emoji 容易乱码）。
-- **Secrets**: NEVER hardcode API keys. Use `.env` files for secrets management（见 `.env.example`）。
+- **Python**: PEP 8，尽量带 type hints，用 `pathlib` 处理路径；long-running 进程要处理异常和 graceful shutdown。
+- **Node.js (ESM)**: `.mjs` 扩展名，ES module 语法（`import`/`export`）。
+- **Shell**: `set -euo pipefail`，引号包变量，脚本 `chmod +x`。
+- **Naming**: Python `snake_case` / JS `camelCase` / 常量 `UPPER_SNAKE_CASE` / shell 与 skill 目录 `kebab-case`。
+- **Encoding**: 控制台日志**只用 ASCII**，生产代码无 emoji / 特殊 Unicode（日志会被 launchd / journald 收集，emoji 易乱码）。
+- **Secrets**: 绝不硬编码 API key，统一走 `.env`（见 `.env.example`）。
 
 ## 2. Repository Context & Boundaries
-本仓库 = **命令引擎 + HTTP server（含 `/studio` web 前端）+ 移动端 app（`app/`）+ 视频模板**。所有飞书 IO 都由调用方走 `lark-cli`，**本项目代码不直接调任何 `open.feishu.cn` 端点**（README "设计原则" 第 1 条）。
+本仓库 = **primitive 命令引擎 + agent 编排 + HTTP server（含 `/studio`）+ Flutter app + 视频模板**。
+分层（**文件清单查 `.project_map`，层次语义查 `docs/PRODUCTION-ENGINE-DESIGN.md`**）：
+- **core**（`packages/core`，唯一独立包）：两端复用的纯能力（primitive 命令 + registry + gpt-image + 模板 + rewrite runners）。**core 绝不 import factory/agent**。
+- **factory**（`src/ncds_opus_factory`）：agent 编排（6 agent + asr/rw）+ HTTP server + 生产引擎。primitive（wst/tst/vid/tts/render…）在这里只剩**转发 shim**，真身在 core。
+- **生产引擎**（`server/engine/`）：统一"生产实例 + 步骤"运行时，经 `build_full_registry()` 晚绑定派发（取代 PipelineRunner + TaskRunner 双轨）。
+- **web**（`web/`，内容视角）/ **app**（`app/`，决策视角，独立 flutter 工具链）：两个前端视图，都连 server :8810。
 
-| 层级 | 位置 | 职责 |
-|---|---|---|
-| **core 包（唯一独立包）** | `packages/core/src/ncds_opus_core/` | 两端复用纯能力：`commands/{wst,tst,vid,tts,render,render_015}` + `PRIMITIVE_REGISTRY`(registry.py) + `gpt_image/` + `pipelines/`(DAG 类型) + `templates/paper_card_talk_015` + `runners/`(rewrite 引擎 .mjs) + 中性 `common/`(`paths.repo_root()` 等)。**core 绝不 import factory/agent** |
-| 生产引擎（E0，新） | `src/ncds_opus_factory/server/engine/` | `InstanceStore`/`InstanceRunner`/`Recipe`/步骤状态机/分层 SSE；经 `build_full_registry()` 晚绑定派发，统一"生产实例+步骤"运行时（取代 PipelineRunner+TaskRunner 双轨，见 PRODUCTION-ENGINE-DESIGN §10）|
-| 统一 CLI 入口 | `packages/core/.../cli.py`(`nof-core`：wst/tst/vid) + `src/ncds_opus_factory/cli.py`(`nof`：asr/rw + agents) | primitive 与 agent 子命令二分（P1.x）|
-| 命令实现（factory） | `src/ncds_opus_factory/commands/` | asr/rw（factory 专属，含飞书/COS/skills 编排）+ 6 个 agent（guiguzi/liuyong/wudaozi/boya/shenkuo/wolong…）+ `AGENT_REGISTRY` + `build_full_registry()`。⚠️ wst/tst/vid/tts/render/render_015 这里只剩**转发 shim**，真身在 core |
-| HTTP server | `src/ncds_opus_factory/server/` | FastAPI（:8810，`nof-server`）：commands 暴露为异步任务 + SSE；`server/routes/` 下 14 个路由（`instances`(引擎)/`tasks`/`jobs`/`pipelines`/`accounts`/`works`/`rounds`/`subscriptions`/`artifacts`/`preview`/`mock`…）；挂载 `/studio` SPA（见 Part 1 §6） |
-| Studio 前端（web，内容视角） | `web/` | React + Vite SPA；dev 走 vite :5173 反代，prod 构建产物 `web/dist` 由 server 挂到 `/studio` |
-| 移动端 app（决策视角，新） | `app/` | Flutter App「能成大事」（iOS/Android），内容工厂移动控制台；直连 server :8810、只走 `/tasks`；6 agent 卡片墙 + 灵动岛 Live Activity。**独立 flutter 工具链**（`flutter run`），与 web/python 互不干扰；2 个本地密钥（`relay_config.dart`/`RelayConfig.swift`）gitignore、新拉代码需补，见 `app/CLAUDE.md` |
-| 公共工具 | `src/ncds_opus_factory/common/` | `public_upload.py`（媒体上公网）/ `lark_cli.py`（lark-cli 子进程封装） |
-| 视频模板 | `src/ncds_opus_factory/templates/` | `paper_card_talk`（009 风格 beats.js 驱动 + AI 管线）/ `figure_talk` / `stickman`（`paper_card_talk_015` 已迁 core） |
-| Node runners（factory） | `scripts/*.mjs` | `/asr` `/rw` 由 Python 命令 spawn 出来的 Node runner（`asr_command_runner.mjs`, `rewrite_command_runner.mjs`, `video_job_worker.mjs`）。⚠️ rewrite 引擎 4 个 .mjs 已迁 `packages/core/.../runners/` |
-| gpt-image 网关 | `packages/core/.../gpt_image/{generate,generate_edit}.py` | `/wst` `/tst` 的底层 gpt-image-2 调用（P1 已从 repo 根迁入 core）|
-| Skills 说明 | `skills/*/SKILL.md` | 各 skill 的 frontmatter；不是可执行 entry point，只是文档。`skills/` 留 repo 根、不进任何包，env `NOF_VIDEO_PIPELINE_SCRIPT` 兜底 |
-| 文档 | `docs/README.md`(索引) → `docs/PRODUCTION-ENGINE-DESIGN.md`(权威设计) / `docs/WOLONG-DESIGN.md`(卧龙/agents)；旧设计在 `docs/archive/` | 接手从 README 进；archive 是历史不当现状读 |
-| 任务/决策跟踪 | repo 根 `backlog/`（**小写**）| `tasks/`(任务卡) + `decisions/`(ADR) + `drafts/`/`completed/`/`archive/` + `docs/`(深设计，如 `S3-redis-worker-design.md`) + `config.yml`。CLAUDE.md / 记忆里对 worker 拆分的引用都落这里 |
-| 删除候选 | repo 根 `pipelines/douyin_processing/` | 零消费者（DAG 类型已迁 core）—— 评估删除 |
-| 产物（gitignored） | `state/`, `video-jobs/` | 任务产物、视频任务数据 |
-
-**边界规则**：
-- 新业务逻辑**默认加在对应的 `commands/*.py` 或它 spawn 的 Node runner 里**。
-- **不要**给项目加任何直接的飞书 SDK / OpenAPI 调用；飞书读写一律走 `lark-cli`，由调用方负责（见 README "设计原则"）。
-- `scripts/feishu_sdk_adapter.mjs`：飞书 OpenAPI → `lark-cli` 迁移**已完成**（见 `docs/FEISHU-REFACTOR.md`）——adapter 现仅转发给 `scripts/lark_cli.mjs`（保留原 exports），不再直调任何 `open-apis` 端点。新代码优先直接用 `lark-cli`，不要新增对 adapter 的依赖。
-- 进度回调由调用方传入：命令本身不知道 "发飞书消息"，只通过 `on_progress(text)` 回调把状态吐给调用方。
+**边界规则（红线）**：
+- 新业务逻辑默认加在对应的 `commands/*.py` 或它 spawn 的 Node runner 里。
+- **不直连飞书**：项目代码不出现任何飞书 SDK / OpenAPI 调用；飞书 IO 一律走 `lark-cli`，由调用方负责（改造记录见 `docs/FEISHU-REFACTOR.md`）。
+- 进度回调由调用方传入：命令只通过 `on_progress(text)` 吐状态，不假设回调到哪去（飞书 / 终端 / 文件 / noop）。
 
 ## 3. Script Guidelines
-- **Python scripts** (`.py`)：主程序、命令实现、pipeline、工具脚本。
-- **Node.js runners** (`.mjs`)：被 Python `commands/*.py` spawn 出来的子进程；通过 stdout 输出结构化 JSON 或进度行。
-- **Shell scripts** (`.sh`)：bootstrap、launchd 注册（如 `install_map_watchdog.sh`）、部署。必须可执行，开头 `set -euo pipefail`。
+- **Python** (`.py`)：主程序、命令实现、pipeline、工具脚本。
+- **Node runners** (`.mjs`)：被 Python 命令 spawn 的子进程，stdout 输出结构化 JSON / 进度行。
+- **Shell** (`.sh`)：bootstrap / launchd 注册 / 部署，`set -euo pipefail` + `chmod +x`。
 
 ## 4. Testing
-- **Python**: 用 pytest。`pyproject.toml` 已配 `pythonpath = ["src"]`。测试文件命名约定 `*_test.py`（与 Go / 部分 Python 团队风格一致，便于和实现文件并排）；顶层 `tests/` 目录也接受标准的 `test_*.py`。
-- **Node**: 测试文件命名约定 `<runner>.test.mjs`，与 runner 同目录（参见 `scripts/asr_command_runner.test.mjs` 等）。
-- **Contract**: 测试应定义预期接口 / 行为，再写实现。
+- **Python**：pytest（`pyproject.toml` 已配 `pythonpath`）。命名 `*_test.py` 与实现并排；顶层 `tests/` 也接受 `test_*.py`。
+- **Node**：`<runner>.test.mjs` 与 runner 同目录。
+- **Contract**：先用测试定义预期接口 / 行为，再写实现。
 
-## 5. 项目地图与看门狗
-- **`.project_map`**：项目根的结构地图（commands / runtime / skills / 目录树），是 agent 进入会话后的第一手 navigator。**不要手改**，由脚本生成。
-- 生成器已覆盖新结构（2026-06 升级）：Commands 区含 5 primitive + 6 agent，另有独立 App 区（Flutter）；目录树忽略 `.claude/`（不再扫 worktree 副本）与 Flutter/iOS 编译噪音（`.dart_tool`/`Pods` 等）。深层架构语义仍以 `docs/PRODUCTION-ENGINE-DESIGN.md` + 本 §2 表为准。
-- 生成器：`scripts/map_project.py`，可手动跑 `python3 scripts/map_project.py`。
-- 看门狗：`scripts/map_project_watchdog.py` —— long-running 进程，轮询 `src/` `packages/` `app/` `scripts/` `pipelines/` `skills/` `docs/` `configs/` 下相关文件的 mtime，发现变化（停手满 30s 的 quiet-period 去抖）后自动重生成 `.project_map`。
-- 注册为 launchd 自启动（macOS）：
-  ```bash
-  ./scripts/install_map_watchdog.sh install     # 写 plist 并加载，开机自启
-  ./scripts/install_map_watchdog.sh status      # 查看 launchd 状态
-  ./scripts/install_map_watchdog.sh logs        # tail 看门狗日志
-  ./scripts/install_map_watchdog.sh restart     # 重新加载
-  ./scripts/install_map_watchdog.sh uninstall   # 卸载
-  ```
-- 日志位置：`state/map_watchdog.{out,err}.log`。PID / 锁文件：`state/map_project_watchdog.{pid,lock}`（gitignored，因 `state/` 已忽略）。
-- **如果你看到 `.project_map` 时间戳比 `src/` 下任何源文件都旧**：看门狗很可能没在跑，先 `./scripts/install_map_watchdog.sh status`，再决定是否手动 `python3 scripts/map_project.py` 一次。
+## 5. 项目地图（.project_map）
+- 结构地图（命令入口 / runtime / skills / 目录树），进会话第一手 navigator，**别手改**，看门狗自动维护，仓库内导航优先查它。
+- 若 `.project_map` 时间戳比 `src/` 源文件旧 → 看门狗没在跑（重生成 / launchd 命令见 `docs/README.md`「本地运行」）。
+- map 只给"在哪"，不给"为什么"——深层架构语义以 `docs/PRODUCTION-ENGINE-DESIGN.md` 为准。
 
-## 6. 本地运行环境（venv / nof-server / studio 前端）
-- **`.venv` 是 uv 管理的 Python 3.12，没有自带 pip**。装包必须用：
-  ```bash
-  uv pip install --python .venv/bin/python3 <pkg>
-  ```
-  **不要**用全局 pip，也不要假设 `.venv/bin/pip` 存在（历史上曾有 3.13 残留 pip 把包静默装进 `lib/python3.13/site-packages`，运行时 import 不到，2026-06 已清理；如再看到 `.venv/lib/python3.13/` 说明又被污染了，直接删）。
-- **后端**：`nof-server` 起 FastAPI，默认 `0.0.0.0:8810`（`NOF_SERVER_HOST` / `NOF_SERVER_PORT` 可覆盖）。
-- **Worker 拆分(S3)**：离线任务执行已从 nof-server 拆到独立 `nof-worker` 进程，跨进程队列走 Redis。本地完整跑需三件，**按序起**：① `redis-server`(队列信道，先起；`brew services start redis` 或临时 `redis-server`)；② `nof-server`(:8810，HTTP/SSE/**入队**，S3 后纯 producer、不再执行任务)；③ `nof-worker`(`.venv/bin/python3 -m ncds_opus_factory.server.worker`，唯一消费+执行+写状态)。Redis 连不上→nof-server `POST /tasks` 返 503、nof-worker fail-fast 退出。⚠️ **同 cmd 只能起一个 nof-worker**(出队 CAS 单进程语义)。**重启 nof-server 不再打断 nof-worker 在跑任务**。launchd 常驻见 `scripts/install_nof_worker.sh`(S4)。
-- **`/studio` 前端**（`web/`，React + Vite，挂在 8810 同源路径下），两种模式：
-  - dev：`cd web && npm run dev`（vite :5173）+ `NOF_DEV=1 nof-server`，访问 `http://localhost:8810/studio`，HMR WebSocket 同走 8810 反代（依赖 `httpx` + `websockets`，已声明在 pyproject）。
-  - prod：`cd web && npm run build` 生成 `web/dist`，再起 `nof-server`。
-  - **`/studio` 是否挂载在 server import 时就定死**：没设 `NOF_DEV=1` 且 `web/dist` 不存在 → `/studio` 404；补构建后必须重启 server 才生效。
-- 前端 API 全部走同源相对路径（`/jobs` `/pipelines` `/tasks` `/preview`），不需要任何跨域 / baseUrl 配置。
+## 6. 运行红线（命令见 `docs/README.md`「本地运行」）
+- **venv 用 uv 不用 pip**：装包 `uv pip install --python .venv/bin/python3 <pkg>`；看到 `.venv/lib/python3.13/` = 被污染，直接删。
+- **三进程**：redis → nof-server（:8810，纯入队）→ nof-worker（唯一执行），按序起；同 cmd 只能一个 nof-worker；**重启 nof-server 不打断 worker 在跑任务**。
+- **/studio 挂载在 server import 时定死**：没 `NOF_DEV=1` 且无 `web/dist` → 404，补构建后必须重启 server。
+- **develop 永不并 main**：main 上留着 web 旧画布可跑副本作护城河，不并 main 就毁不掉它（工作主线 = develop，弃用 git worktree）。
 
 # Part 2: 执行协议
 
@@ -128,10 +91,10 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 - 方案本身有 ≥ 2 种可行路径且难以取舍
 
 ## 永远停下来问（不分级别）
-- 不可逆操作：`git push --force`、`rm -rf`、删分支、amend 已推送的提交
+- 不可逆操作：`git push --force`、`rm -rf`、删分支、amend 已推送的提交、并 main
 - 涉及 secrets 或生产数据
 - 用户让改 A 但发现必须连带改 B
-- 给 launchd 注册 / 注销持久服务（`install_map_watchdog.sh install/uninstall`）
+- 给 launchd 注册 / 注销持久服务（`install_map_watchdog.sh` / `install_nof_worker.sh` install/uninstall）
 
 ## 原因判断类回答规则
 当用户追问"原因是什么""为什么会这样""根因是什么""是哪一类问题"时：
