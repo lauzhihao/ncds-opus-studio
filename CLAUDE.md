@@ -12,11 +12,11 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 ## Token-Saver 纪律（CRITICAL）
 - **别一进会话就读整文件**。先读 `docs/README.md`（接手索引）+ `.project_map`（结构地图）建立全局认知，
   只 `read` 当前任务必需的文件/片段（按 file:line 定向读），不要预读"可能用到"的源码。
-- `.project_map` 由看门狗自动维护（见 Part 1 §8），覆盖命令入口 / Node runtime / skills / 目录树，
-  绝大多数仓库内导航不需要再开 subagent。⚠️ 但其生成器仍是旧单包布局，`packages/` 下结构未必全（见 §8）。
+- `.project_map` 由看门狗自动维护（见 Part 1 §5），覆盖命令入口 / Node runtime / skills / 目录树，
+  绝大多数仓库内导航不需要再开 subagent。⚠️ 但其生成器仍是旧单包布局，`packages/` 下结构未必全（见 §5）。
 
 ## Agent / Task 委派规则
-- 只有外部研究型任务才值得派 subagent：飞书开放平台多页文档、`lark-cli` 子命令或权限语义、DashScope / OpenAI / Whisper / Tingwu 等第三方接口差异整理、`codex` CLI 行为差异。
+- 只有外部研究型任务才值得派 subagent：DashScope / OpenAI / Whisper / Tingwu 等第三方接口差异整理、`codex` CLI 行为差异。
 - **子任务按复杂度匹配模型**（成本优化）：简单文件操作/明确命令/格式化 → haiku；代码分析/调试/需要推理 → sonnet；架构设计/深度推理/对抗审查 → opus。默认继承主线程模型，仅在确信更低/更高 tier 更合适时显式覆盖。
 - 涉及 secrets、用户确认、真实权限变更、批量写操作、删除操作的判断不委派；结论必须由主线程复核后再执行。
 
@@ -43,7 +43,7 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 | 生产引擎（E0，新） | `src/ncds_opus_factory/server/engine/` | `InstanceStore`/`InstanceRunner`/`Recipe`/步骤状态机/分层 SSE；经 `build_full_registry()` 晚绑定派发，统一"生产实例+步骤"运行时（取代 PipelineRunner+TaskRunner 双轨，见 PRODUCTION-ENGINE-DESIGN §10）|
 | 统一 CLI 入口 | `packages/core/.../cli.py`(`nof-core`：wst/tst/vid) + `src/ncds_opus_factory/cli.py`(`nof`：asr/rw + agents) | primitive 与 agent 子命令二分（P1.x）|
 | 命令实现（factory） | `src/ncds_opus_factory/commands/` | asr/rw（factory 专属，含飞书/COS/skills 编排）+ 6 个 agent（guiguzi/liuyong/wudaozi/boya/shenkuo/wolong…）+ `AGENT_REGISTRY` + `build_full_registry()`。⚠️ wst/tst/vid/tts/render/render_015 这里只剩**转发 shim**，真身在 core |
-| HTTP server | `src/ncds_opus_factory/server/` | FastAPI（:8810，`nof-server`）：commands 暴露为异步任务 + SSE；jobs / pipelines / preview / mock 路由；挂载 `/studio` SPA（见 Part 1 §9） |
+| HTTP server | `src/ncds_opus_factory/server/` | FastAPI（:8810，`nof-server`）：commands 暴露为异步任务 + SSE；`server/routes/` 下 14 个路由（`instances`(引擎)/`tasks`/`jobs`/`pipelines`/`accounts`/`works`/`rounds`/`subscriptions`/`artifacts`/`preview`/`mock`…）；挂载 `/studio` SPA（见 Part 1 §6） |
 | Studio 前端（web，内容视角） | `web/` | React + Vite SPA；dev 走 vite :5173 反代，prod 构建产物 `web/dist` 由 server 挂到 `/studio` |
 | 移动端 app（决策视角，新） | `app/` | Flutter App「能成大事」（iOS/Android），内容工厂移动控制台；直连 server :8810、只走 `/tasks`；6 agent 卡片墙 + 灵动岛 Live Activity。**独立 flutter 工具链**（`flutter run`），与 web/python 互不干扰；2 个本地密钥（`relay_config.dart`/`RelayConfig.swift`）gitignore、新拉代码需补，见 `app/CLAUDE.md` |
 | 公共工具 | `src/ncds_opus_factory/common/` | `public_upload.py`（媒体上公网）/ `lark_cli.py`（lark-cli 子进程封装） |
@@ -52,6 +52,7 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 | gpt-image 网关 | `packages/core/.../gpt_image/{generate,generate_edit}.py` | `/wst` `/tst` 的底层 gpt-image-2 调用（P1 已从 repo 根迁入 core）|
 | Skills 说明 | `skills/*/SKILL.md` | 各 skill 的 frontmatter；不是可执行 entry point，只是文档。`skills/` 留 repo 根、不进任何包，env `NOF_VIDEO_PIPELINE_SCRIPT` 兜底 |
 | 文档 | `docs/README.md`(索引) → `docs/PRODUCTION-ENGINE-DESIGN.md`(权威设计) / `docs/WOLONG-DESIGN.md`(卧龙/agents)；旧设计在 `docs/archive/` | 接手从 README 进；archive 是历史不当现状读 |
+| 任务/决策跟踪 | repo 根 `backlog/`（**小写**）| `tasks/`(任务卡) + `decisions/`(ADR) + `drafts/`/`completed/`/`archive/` + `docs/`(深设计，如 `S3-redis-worker-design.md`) + `config.yml`。CLAUDE.md / 记忆里对 worker 拆分的引用都落这里 |
 | 删除候选 | repo 根 `pipelines/douyin_processing/` | 零消费者（DAG 类型已迁 core）—— 评估删除 |
 | 产物（gitignored） | `state/`, `video-jobs/` | 任务产物、视频任务数据 |
 
@@ -66,52 +67,12 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 - **Node.js runners** (`.mjs`)：被 Python `commands/*.py` spawn 出来的子进程；通过 stdout 输出结构化 JSON 或进度行。
 - **Shell scripts** (`.sh`)：bootstrap、launchd 注册（如 `install_map_watchdog.sh`）、部署。必须可执行，开头 `set -euo pipefail`。
 
-## 4. `lark-cli` 集成规则
-- 飞书侧能力统一走 `lark-cli`。**不要**在 Python / Node 里手写 Feishu OpenAPI 请求，也不要自己重做认证流程。
-- 调用 API 前必须先用 `lark-cli schema <service.resource.method>` 查看参数结构，不要猜测字段格式。
-- 如果 `lark-cli` 不在 PATH，回退到 `npx -y @larksuite/cli@<version>`。
-- 仅当任务明确要求"封装 / 扩展自定义 CLI wrapper"时，才考虑 `Credential` / `Transport` 扩展点。源码参考已 clone 到 `~/larksuite-cli/`，命令参考见 `~/.codex/docs/lark-cli.md`。本仓库当前没有这种需求。
-
-## 5. `lark-cli` Agent Skills（Claude Code 直接可用）
-- Claude Code 加载的权威路径是 `~/.claude/skills/`（系统启动时通过 system-reminder 列出当前可用 skill 名）。`~/.agents/skills/` 是 lark-cli skill installer 的镜像，二者通常同步，但**以 system-reminder 列出的为准**。
-- 使用飞书能力前，先读对应 skill 的 `SKILL.md` 了解 shortcuts 和参数结构；所有 lark-* skill 都依赖 `lark-shared`，首次使用先读 `lark-shared/SKILL.md` 了解认证和权限处理。
-- 常用 skill 速查：
-
-| Skill | 用途 |
-|-------|------|
-| `lark-im` | 收发消息、管理群聊、搜索聊天记录、下载图片文件 |
-| `lark-calendar` | 日程查看 / 创建、忙闲查询、时间建议 |
-| `lark-doc` | 文档创建 / 读取 / 更新 |
-| `lark-drive` | 文件上传下载、搜索文档 |
-| `lark-base` | 多维表格 CRUD |
-| `lark-sheets` | 电子表格读写 |
-| `lark-task` | 任务创建 / 查询 / 更新 |
-| `lark-contact` | 用户搜索 / 信息获取 |
-| `lark-wiki` | 知识库空间和节点管理 |
-| `lark-mail` | 邮件收发和管理 |
-
-## 6. 以用户身份操作飞书（代发消息等）
-- `lark-as-user <open_id> <lark-cli args...>` —— 以指定用户身份执行任意 `lark-cli` 命令。已全局安装（`/opt/homebrew/bin/lark-as-user`）。
-- 原理：通过 HTTPS 从远程 OAuth 服务（`oauth2.vooice.tech`）获取 `user_access_token`，注入环境变量后调用 `lark-cli --as user`。
-- 查看已授权用户：`lark-as-user --list`。
-- 当用户说"以我的身份"时，必须先 `--list` 让其选择编号确认身份，再 `--check` 检查 token。
-- 用法示例：
-  ```bash
-  # 以用户身份发消息到群聊
-  lark-as-user ou_1d0c81ba0ed229804b966f4511a5f8d0 im +messages-send --chat-id oc_xxx --text "hello"
-  # 以用户身份发私聊消息
-  lark-as-user ou_1d0c81ba0ed229804b966f4511a5f8d0 im +messages-send --user-id ou_xxx --text "hello"
-  # 调用任意飞书 API
-  lark-as-user ou_1d0c81ba0ed229804b966f4511a5f8d0 api GET /open-apis/calendar/v4/calendars
-  ```
-- 新用户授权：访问 `https://oauth2.vooice.tech/login?senderId=<open_id>` 完成 OAuth 登录。
-
-## 7. Testing
+## 4. Testing
 - **Python**: 用 pytest。`pyproject.toml` 已配 `pythonpath = ["src"]`。测试文件命名约定 `*_test.py`（与 Go / 部分 Python 团队风格一致，便于和实现文件并排）；顶层 `tests/` 目录也接受标准的 `test_*.py`。
 - **Node**: 测试文件命名约定 `<runner>.test.mjs`，与 runner 同目录（参见 `scripts/asr_command_runner.test.mjs` 等）。
 - **Contract**: 测试应定义预期接口 / 行为，再写实现。
 
-## 8. 项目地图与看门狗
+## 5. 项目地图与看门狗
 - **`.project_map`**：项目根的结构地图（commands / runtime / skills / 目录树），是 agent 进入会话后的第一手 navigator。**不要手改**，由脚本生成。
 - 生成器已覆盖新结构（2026-06 升级）：Commands 区含 5 primitive + 6 agent，另有独立 App 区（Flutter）；目录树忽略 `.claude/`（不再扫 worktree 副本）与 Flutter/iOS 编译噪音（`.dart_tool`/`Pods` 等）。深层架构语义仍以 `docs/PRODUCTION-ENGINE-DESIGN.md` + 本 §2 表为准。
 - 生成器：`scripts/map_project.py`，可手动跑 `python3 scripts/map_project.py`。
@@ -127,7 +88,7 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
 - 日志位置：`state/map_watchdog.{out,err}.log`。PID / 锁文件：`state/map_project_watchdog.{pid,lock}`（gitignored，因 `state/` 已忽略）。
 - **如果你看到 `.project_map` 时间戳比 `src/` 下任何源文件都旧**：看门狗很可能没在跑，先 `./scripts/install_map_watchdog.sh status`，再决定是否手动 `python3 scripts/map_project.py` 一次。
 
-## 9. 本地运行环境（venv / nof-server / studio 前端）
+## 6. 本地运行环境（venv / nof-server / studio 前端）
 - **`.venv` 是 uv 管理的 Python 3.12，没有自带 pip**。装包必须用：
   ```bash
   uv pip install --python .venv/bin/python3 <pkg>
