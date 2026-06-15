@@ -81,6 +81,12 @@ def fetch_user_posts_page(
     return aweme_list, next_cursor, has_more
 
 
+def _duration_sec(video: dict) -> int:
+    """抖音 aweme.video.duration 是毫秒;转成秒(取不到/非法返回 0,前端据此不渲染时长徽标)。"""
+    ms = video.get("duration") if isinstance(video, dict) else None
+    return round(ms / 1000) if isinstance(ms, (int, float)) and ms > 0 else 0
+
+
 def simplify_aweme(aweme: dict) -> dict[str, Any]:
     """TikHub aweme -> all_posts.json 精简条目(鬼谷子格式)。"""
     st = aweme.get("statistics") or {}
@@ -100,6 +106,7 @@ def simplify_aweme(aweme: dict) -> dict[str, Any]:
         "collect": st.get("collect_count", 0),
         "create": aweme.get("create_time", 0),
         "cover_url": cover_url,
+        "duration": _duration_sec(video),
     }
 
 
@@ -353,6 +360,7 @@ def extract_meta(detail: dict) -> dict[str, Any]:
         "share": st.get("share_count", 0),
         "collect": st.get("collect_count", 0),
         "cover_url": cover_url,
+        "duration": _duration_sec(video),
     }
 
 

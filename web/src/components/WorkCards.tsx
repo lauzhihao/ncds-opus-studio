@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { ChevronRight, Clock, Image as ImageIcon, Loader2, PenBox, Plus, Trash2 } from 'lucide-react';
 
 import type { JobSummary, SubscriptionAuthor } from '../api/types';
-import { formatCount, timeAgo } from '../utils/format';
+import { formatCount, formatDuration, timeAgo } from '../utils/format';
 
 // 虚线"+"新增框：与作品卡同尺寸（grid stretch 对齐行高），点击触发弹窗。
 export function AddCard({ label, onClick }: { label: string; onClick: () => void }) {
@@ -92,6 +92,12 @@ export function CoverImage({ src, marker }: { src: string; marker: string }) {
       <span className="cover-fallback-mark">{marker}</span>
     </div>
   );
+}
+
+// 封面右下角视频时长徽标：放在 position:relative 的封面容器里；秒数缺失/<=0 不渲染（拿不到就不显示）。
+export function DurationBadge({ seconds }: { seconds?: number | null }) {
+  if (!seconds || seconds <= 0) return null;
+  return <span className="duration-badge">{formatDuration(seconds)}</span>;
 }
 
 export function JobCard({

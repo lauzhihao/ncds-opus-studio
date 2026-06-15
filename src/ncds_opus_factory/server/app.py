@@ -55,6 +55,16 @@ from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
 from ncds_opus_factory.server.routes import works as works_routes
 from ncds_opus_factory.server import rounds_gate
+from ncds_opus_factory.server.maintenance import (
+    CRON_TTL_HOURS,
+    DISCARD_TTL_HOURS,
+    _DISCARD_SWEEP_INTERVAL_S,
+    _discard_sweeper,
+    _round_reconciler,
+    backfill_labels_once,  # re-export: 保持对外接口兼容（test_labels 经 app_mod 调）
+    sweep_cron_once,       # re-export: 同上
+    sweep_discarded_once,  # re-export: 同上
+)
 from ncds_opus_factory.server.state import LABELS, RUNNER, STATE_DIR, STORE
 from ncds_opus_factory.server.subscriptions import subscription_loop, subscriptions_path
 
@@ -139,150 +149,6 @@ async def health_check() -> dict:
     }
 
 
-# ---- 弃用素材定时清除 ----
-# 沈括的决策语义是「通过/弃用」(没有打回重做):弃用=rejected 进已归档,
-# 保留一段时间允许「拉回待验收」,超期由这里的协程整目录清掉(只删任务记录,
-# 不动 state/benchmark 下共享的已下载素材)。
-DISCARD_TTL_HOURS = float(os.environ.get("NOF_DISCARD_TTL_HOURS", "168"))   # 默认保留 7 天
-# cron 刷新任务独立 TTL:订阅传感器每天产十几条任务记录,自动归档后无人再看,
-# 比人工弃用件清得更快(默认 3 天)。案卷照例先于删除存在。
-CRON_TTL_HOURS = float(os.environ.get("NOF_CRON_TTL_HOURS", "72"))
-_DISCARD_SWEEP_INTERVAL_S = 3600
-
-
-def backfill_labels_once() -> int:
-    """案卷对账:凡有决策(review.json)而无案卷的任务,幂等补写一份。返回补写数。
-
-    吃下两类缺口:P1 上线前的存量决策(现成的种子语料)、review 路由落卷失败
-    被吞掉的样本。每小时随清扫跑一轮,复盘(P4)只读 labels/,缺卷即缺样本。
-    """
-    filled = 0
-    for meta in STORE.list_tasks():
-        if meta.decision is None or LABELS.exists(meta.task_id):
-            continue
-        review = STORE.get_review(meta.task_id)
-        if review is None:
-            continue
-        try:
-            LABELS.write(meta, review, STORE.get_result(meta.task_id))
-            filled += 1
-        except Exception:  # noqa: BLE001 — 单条失败不影响整轮
-            logger.exception("[sweep] 案卷回填失败 %s", meta.task_id)
-    return filled
-
-
-def sweep_discarded_once() -> int:
-    """清一轮:沈括 rejected 且超过保留期的任务。返回删除数。"""
-    import shutil
-    from datetime import datetime, timedelta
-
-    cutoff = datetime.now() - timedelta(hours=DISCARD_TTL_HOURS)
-    removed = 0
-    for meta in STORE.list_tasks():
-        if meta.cmd != "shenkuo" or meta.decision != "rejected":
-            continue
-        review = STORE.get_review(meta.task_id)
-        if review is None or not review.reviewed_at:
-            continue
-        try:
-            ts = datetime.fromisoformat(review.reviewed_at)
-        except ValueError:
-            continue
-        if ts < cutoff:
-            # 删除前确认案卷已存在(决策=标注,负样本是卧龙复盘的训练数据,
-            # 任务目录可以清,标签不能丢)。补写失败则本轮跳过,下轮再试。
-            try:
-                if not LABELS.exists(meta.task_id):
-                    LABELS.write(meta, review, STORE.get_result(meta.task_id))
-            except Exception:  # noqa: BLE001
-                logger.exception("[sweep] 案卷补写失败,跳过删除 %s", meta.task_id)
-                continue
-            shutil.rmtree(STORE.task_dir(meta.task_id), ignore_errors=True)
-            removed += 1
-            logger.info("[sweep] 清除弃用沈括任务 %s (reviewed_at=%s)", meta.task_id, review.reviewed_at)
-    return removed
-
-
-def sweep_cron_once() -> int:
-    """清一轮:cron 刷新任务终态后超过 CRON_TTL_HOURS 的记录。返回删除数。
-
-    订阅传感器的任务自动归档(reviewer=system),没有人工价值,只占列表;
-    有决策的照例先确保案卷存在再删(自动归档的 system 案卷复盘本就不学)。
-    """
-    import shutil
-    from datetime import datetime, timedelta
-
-    cutoff = datetime.now() - timedelta(hours=CRON_TTL_HOURS)
-    removed = 0
-    for meta in STORE.list_tasks():
-        # 只清订阅刷新任务:别让将来其他 cron 触发的任务静默继承 72h 删除策略
-        if (
-            meta.source != "cron"
-            or meta.cmd != "shenkuo"
-            or not meta.params.get("refresh_only")
-            or meta.status not in ("completed", "failed", "cancelled")
-        ):
-            continue
-        # 只清纯机器闭环的记录:被用户撤销(review=None,等重审)或人工改判
-        # (reviewer=user)的任务移交人工清扫节奏(sweep_discarded_once 的 168h)
-        review = STORE.get_review(meta.task_id)
-        if review is None or review.reviewer != "system":
-            continue
-        ref = meta.finished_at or meta.created_at
-        try:
-            ts = datetime.fromisoformat(ref)
-        except ValueError:
-            continue
-        if ts >= cutoff:
-            continue
-        try:
-            if not LABELS.exists(meta.task_id):
-                LABELS.write(meta, review, STORE.get_result(meta.task_id))
-        except Exception:  # noqa: BLE001
-            logger.exception("[sweep] cron 案卷补写失败,跳过删除 %s", meta.task_id)
-            continue
-        shutil.rmtree(STORE.task_dir(meta.task_id), ignore_errors=True)
-        removed += 1
-    return removed
-
-
-# round 对账周期(§4.5):比清扫快——续跑丢失要在分钟级被补上,不能等一小时
-_ROUND_RECONCILE_INTERVAL_S = float(os.environ.get("NOF_ROUND_RECONCILE_S", "300"))
-
-
-async def _round_reconciler() -> None:
-    import asyncio
-
-    while True:
-        try:
-            n = await rounds_gate.reconcile_once()
-            if n:
-                logger.info("[rounds] 对账处理 %d 个 round", n)
-        except Exception:  # noqa: BLE001 — 对账失败不影响服务
-            logger.exception("[rounds] reconcile failed")
-        await asyncio.sleep(_ROUND_RECONCILE_INTERVAL_S)
-
-
-async def _discard_sweeper() -> None:
-    import asyncio
-
-    while True:
-        try:
-            # 先对账补卷,再清扫——回填和守门双保险,标签先于删除存在
-            filled = backfill_labels_once()
-            if filled:
-                logger.info("[sweep] 本轮回填 %d 份案卷", filled)
-            n = sweep_discarded_once()
-            if n:
-                logger.info("[sweep] 本轮清除 %d 条弃用任务", n)
-            c = sweep_cron_once()
-            if c:
-                logger.info("[sweep] 本轮清除 %d 条 cron 刷新记录", c)
-        except Exception:  # noqa: BLE001 — 清扫失败不影响服务
-            logger.exception("[sweep] discard sweep failed")
-        await asyncio.sleep(_DISCARD_SWEEP_INTERVAL_S)
-
-
 @app.on_event("startup")
 async def _startup_log() -> None:
     import asyncio
@@ -294,8 +160,9 @@ async def _startup_log() -> None:
     )
     # round 事件接线(§4.2):任务终态 -> 编排层。先挂钩子再恢复积压,别漏事件
     RUNNER.on_terminal = rounds_gate.handle_terminal
-    # 调度器:恢复积压(重启后队列在内存里已蒸发) + 按 per-cmd 额度拉起 worker
-    recovered = RUNNER.recover_and_start()
+    # 调度器:恢复积压(重启后 Redis List 先 DEL 再 disk-scan 全量重投) + 按 per-cmd 额度拉起 worker
+    # recover_and_start 改 async（S3 步3），startup 已是 async，直接 await
+    recovered = await RUNNER.recover_and_start()
     if recovered:
         logger.info("[nof-server] 重启恢复: %d 个积压任务重新入队", recovered)
     asyncio.create_task(_discard_sweeper())

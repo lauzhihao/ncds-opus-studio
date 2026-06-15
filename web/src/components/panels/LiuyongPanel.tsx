@@ -1,4 +1,4 @@
-// rw 节点产物面板：4 模型 tab，每 tab 显示该模型出的 **markdown 候选稿**。
+// 柳永（rw 出稿）面板：4 模型 tab，每 tab 显示该模型出的 **markdown 候选稿**。
 // 候选稿默认可编辑（textarea + 防抖落盘到 draft.md），失败/不可用模型显示原因。
 //
 // 按钮可用性：
@@ -10,51 +10,12 @@
 // 注：本阶段（A）RW 不再出 beats JSON；LINES 节点接收 02_rw/draft.md 后调 LLM 把它结构化。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Circle,
-  Play,
-  RefreshCw,
-  Square,
-  XCircle,
-} from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Play, RefreshCw, Square } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type { NodeState, PipelineNodeDef, RwDraft } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useToast } from '../Toast';
-
-// 进程状态行（RW 4 模型 / ASR 4 阶段共用）。直角信息框 + 状态配色 + 状态标签。
-export type ProcStatus = 'pending' | 'running' | 'done' | 'failed' | 'unavailable';
-export interface ProcRow {
-  id: string;
-  label: string;
-  status: ProcStatus;
-  detail?: string; // hover tooltip 显示的完整信息（如失败原因全文）
-}
-
-const PROC_MAP: Record<ProcStatus, { icon: (s: number) => React.ReactNode; text: string }> = {
-  pending: { icon: (s) => <Circle size={s} strokeWidth={1.7} className="rw-ms-pending" />, text: '等待中' },
-  running: { icon: () => <span className="rw-ms-blink-dot" aria-label="执行中" />, text: '执行中' },
-  done: { icon: (s) => <CheckCircle2 size={s} strokeWidth={2} className="rw-ms-done" />, text: '完成' },
-  failed: { icon: (s) => <XCircle size={s} strokeWidth={2} className="rw-ms-failed" />, text: '错误' },
-  unavailable: { icon: (s) => <AlertTriangle size={s} strokeWidth={2} className="rw-ms-warn" />, text: '不可用' },
-};
-
-export function ProcStatusRow({ row, runningText }: { row: ProcRow; runningText?: string }) {
-  const m = PROC_MAP[row.status] ?? PROC_MAP.pending;
-  const text = row.status === 'running' && runningText ? runningText : m.text;
-  // hover 显示完整信息：有 detail（如失败原因全文）优先，否则 "标签 · 状态"
-  const title = row.detail ? `${row.label} · ${row.detail}` : `${row.label} · ${text}`;
-  return (
-    <div className={`proc-row proc-${row.status}`} title={title}>
-      <span className="proc-row-icon">{m.icon(14)}</span>
-      <span className="proc-row-label">{row.label}</span>
-      <span className="proc-row-badge">{text}</span>
-    </div>
-  );
-}
 
 interface Props {
   jobId: string;
@@ -77,7 +38,60 @@ const DEFAULT_RW_PROFILE = 'douyin_cog';
 
 const RUBRIC_DIMS = ['节奏', '真实性', '精炼度', '直接性', '信任度'];
 
-// 柳永质检报告：AI 味 verdict + rubric 5 维度评分（对齐 app liuyong 详情页 _QCReport）。
+// 五边形雷达图：5 维度各满分 10（总分 50）。顶点从正上方起、顺时针每 72° 一个。
+// 画 4 圈网格 + 5 条轴 + 数据多边形 + 顶点标注（维度名 + 分值）。
+function QcRadar({ dims, max = 10, size = 180 }: { dims: Record<string, number>; max?: number; size?: number }) {
+  const cx = size / 2;
+  const cy = size / 2;
+  const R = size / 2 - 26; // 留出外圈标注空间
+  const n = RUBRIC_DIMS.length;
+  const ang = (i: number) => -Math.PI / 2 + (i * 2 * Math.PI) / n;
+  const pt = (i: number, r: number): [number, number] => [cx + r * Math.cos(ang(i)), cy + r * Math.sin(ang(i))];
+  const poly = (r: number) => RUBRIC_DIMS.map((_, i) => pt(i, r).join(',')).join(' ');
+
+  const dataPts = RUBRIC_DIMS.map((d, i) => {
+    const v = Math.max(0, Math.min(max, dims[d] ?? 0));
+    return pt(i, R * (v / max));
+  });
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ overflow: 'visible' }}>
+      {/* 网格圈 */}
+      {[0.25, 0.5, 0.75, 1].map((f) => (
+        <polygon key={f} points={poly(R * f)} fill="none" stroke="var(--border, rgba(0,0,0,0.1))" strokeWidth={1} />
+      ))}
+      {/* 轴线 */}
+      {RUBRIC_DIMS.map((_, i) => {
+        const [x, y] = pt(i, R);
+        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="var(--border, rgba(0,0,0,0.1))" strokeWidth={1} />;
+      })}
+      {/* 数据多边形 */}
+      <polygon
+        points={dataPts.map((p) => p.join(',')).join(' ')}
+        fill="var(--accent)"
+        fillOpacity={0.16}
+        stroke="var(--accent)"
+        strokeWidth={1.5}
+      />
+      {dataPts.map((p, i) => (
+        <circle key={i} cx={p[0]} cy={p[1]} r={2.5} fill="var(--accent)" />
+      ))}
+      {/* 顶点标注：维度名 + 分值 */}
+      {RUBRIC_DIMS.map((d, i) => {
+        const [lx, ly] = pt(i, R + 13);
+        const anchor = Math.abs(lx - cx) < 1 ? 'middle' : lx > cx ? 'start' : 'end';
+        return (
+          <text key={d} x={lx} y={ly} textAnchor={anchor} fontSize={9} fill="var(--ink-2)">
+            <tspan x={lx} dy={0}>{d}</tspan>
+            <tspan x={lx} dy={11} fontWeight={600} fill="var(--ink-1)">{dims[d] ?? '-'}</tspan>
+          </text>
+        );
+      })}
+    </svg>
+  );
+}
+
+// 柳永质检报告：AI 味 verdict + rubric 5 维度雷达图（对齐 app liuyong 详情页 _QCReport）。
 // 质检字段（qc/qc_rubric）由后端质检闸门产出；还在后台跑时字段未到，整块不渲染。
 function QcReport({ draft }: { draft?: RwDraft }) {
   if (!draft || draft.status !== 'success') return null;
@@ -86,54 +100,42 @@ function QcReport({ draft }: { draft?: RwDraft }) {
   if (!qc && !rub) return null;
   const pass = qc?.verdict === 'pass';
   return (
-    <div
-      className="rw-qc-report"
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 'var(--s-3)',
-        alignItems: 'center',
-        padding: '8px 10px',
-        margin: 'var(--s-3) 0',
-        border: '1px solid var(--line, rgba(0,0,0,0.08))',
-        borderRadius: 8,
-        fontSize: 'var(--text-xs)',
-      }}
-    >
-      {qc?.verdict && (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3,
-            fontWeight: 600,
-            color: pass ? '#3aa55d' : '#e5484d',
-          }}
-        >
-          {pass ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-          AI 味 {pass ? '通过' : '仍超标'}
-        </span>
+    <div className="rw-qc-report">
+      {/* 顶部一行：AI 味 verdict（左）+ 质量等级 pill（右） */}
+      {(qc?.verdict || rub?.grade) && (
+        <div className="rw-qc-head">
+          {qc?.verdict ? (
+            <span className={`rw-qc-verdict ${pass ? 'pass' : 'fail'}`}>
+              {pass ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+              AI 味 {pass ? '通过' : '仍超标'}
+            </span>
+          ) : (
+            <span />
+          )}
+          {rub?.grade && <span className="rw-qc-grade">{rub.grade}</span>}
+        </div>
       )}
+
       {rub?.available ? (
-        <>
-          <span style={{ fontWeight: 600 }}>
-            质量分 {rub.total}/50{rub.grade ? ` · ${rub.grade}` : ''}
+        <div className="rw-qc-chart">
+          <QcRadar dims={rub.dims ?? {}} />
+          <span className="rw-qc-score">
+            质量分 <b>{rub.total}</b> / 50
           </span>
-          <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', color: 'var(--ink-2)' }}>
-            {RUBRIC_DIMS.map((d) => (
-              <span key={d}>
-                {d} {rub.dims?.[d] ?? '-'}
-              </span>
-            ))}
-          </span>
-        </>
+        </div>
       ) : rub ? (
-        <span className="dim-mono">质量分跳过（{rub.skipped}）</span>
+        <span className="rw-qc-skip">质量分跳过（{rub.skipped}）</span>
       ) : null}
+
       {rub?.issues && rub.issues.length > 0 && (
-        <span className="dim-mono" title={rub.issues.join('；')} style={{ width: '100%' }}>
-          建议：{rub.issues.slice(0, 3).join('；')}
-        </span>
+        <div className="rw-qc-issues">
+          <span className="rw-qc-issues-label">优化建议</span>
+          {rub.issues.slice(0, 3).map((it, i) => (
+            <span key={i} className="rw-qc-issue" title={it}>
+              {it}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -150,7 +152,7 @@ const MODEL_LABELS: Record<string, string> = {
 };
 const modelLabel = (id: string, fallback: string): string => MODEL_LABELS[id] ?? fallback;
 
-export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   const { showToast } = useToast();
   const drafts = (nodeState.outputs?.drafts as RwDraft[] | undefined) ?? [];
   // 下方 tabs 只渲染成功的稿件；失败/不可用模型只在上面的状态行展示。
@@ -255,7 +257,7 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
       await api.runNode(jobId, nodeDef.name, { profile });
     } catch (e) {
       showToast('启动失败，请稍后再试');
-      console.error('[RwResultPanel] 启动失败', e);
+      console.error('[LiuyongPanel] 启动失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -267,7 +269,7 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
       await api.cancelNode(jobId, nodeDef.name);
     } catch (e) {
       showToast('停止失败，请稍后再试');
-      console.error('[RwResultPanel] 停止失败', e);
+      console.error('[LiuyongPanel] 停止失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -286,7 +288,7 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
       });
     } catch (e) {
       showToast('重写失败，请稍后再试');
-      console.error('[RwResultPanel] 重写失败', e);
+      console.error('[LiuyongPanel] 重写失败', e);
     } finally {
       setRewriteBusy(false);
     }
@@ -302,7 +304,7 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
       onAdvanced?.();
     } catch (e) {
       showToast('进入下一步失败，请稍后再试');
-      console.error('[RwResultPanel] 进入下一步失败', e);
+      console.error('[LiuyongPanel] 进入下一步失败', e);
     } finally {
       setActionBusy(false);
     }
@@ -346,24 +348,6 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
   const body = cache[tab];
   const loading = loadingTab === tab;
   const currentDraft = drafts.find((d) => d.model_id === tab);
-  // 4 模型状态行：running 期间用后端推的 outputs.model_progress；done 后从 drafts 派生。
-  // 这样 4 行状态框在 running / done 都常驻显示（done 后不消失）。
-  const modelProgress = nodeState.outputs?.model_progress as
-    | Record<string, { model_id: string; label: string; status: ProcStatus }>
-    | undefined;
-  const statusRows: ProcRow[] =
-    modelProgress && Object.keys(modelProgress).length > 0
-      ? Object.values(modelProgress).map((m) => ({ id: m.model_id, label: modelLabel(m.model_id, m.label), status: m.status }))
-      : drafts.map((d) => ({
-          id: d.model_id,
-          label: modelLabel(d.model_id, d.label),
-          status:
-            d.status === 'success'
-              ? 'done'
-              : (d.reason ?? '').includes('模型不可用')
-                ? 'unavailable'
-                : 'failed',
-        }));
   // 成功的稿件默认可编辑（textarea 直接改 + 防抖落盘）；失败/加载中不可编辑
   const editable = currentDraft?.status === 'success' && !loading;
   // 单模型重试：节点不在跑 + 本模型当前不在 rewrite + (本模型 success 或 failed)
@@ -380,7 +364,7 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
   }
 
   return (
-    <div className="rw-panel-root">
+    <div className="rw-panel-root liuyong-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
 
       {/* 体裁选项（-p）：idle 可选，running/done 锁定显示实际用的体裁 */}
@@ -399,15 +383,6 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
           </button>
         ))}
       </div>
-
-      {/* 4 模型状态框：放在「RW 改写」标题分割线上方；running / done 都常驻（done 后不消失） */}
-      {statusRows.length > 0 && (
-        <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
-          {statusRows.map((r) => (
-            <ProcStatusRow key={r.id} row={r} runningText="改写中" />
-          ))}
-        </div>
-      )}
 
       <div className="rw-panel-header">
         <div
@@ -460,7 +435,6 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
               <Play size={12} strokeWidth={2} fill="currentColor" />
             </button>
           </nav>
-          <QcReport draft={currentDraft} />
           {loading ? (
             <div className="article-pane dim-mono">加载中…</div>
           ) : (
@@ -474,6 +448,8 @@ export function RwResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) 
               spellCheck={false}
             />
           )}
+          {/* 质检报告放在改写正文下方 */}
+          <QcReport draft={currentDraft} />
         </>
       )}
 

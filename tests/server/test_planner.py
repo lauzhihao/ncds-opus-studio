@@ -26,7 +26,7 @@ class _FakeRunner:
         self.submits: list[dict[str, Any]] = []
         self.quota_calls: list[tuple[str, Any]] = []  # 自查必须走 cron 桶(§8.4)
 
-    def quota_remaining(self, cmd, source=None):
+    async def quota_remaining(self, cmd, source=None):
         self.quota_calls.append((cmd, source))
         if isinstance(self.quota, dict):
             return self.quota.get(cmd, 99)
@@ -232,7 +232,7 @@ def test_quota_midway_offset_advances_to_last_processed(monkeypatch):
     _write_events([line1, line2])
 
     class _OneShot(_FakeRunner):
-        def quota_remaining(self, cmd, source=None):  # noqa: ARG002
+        async def quota_remaining(self, cmd, source=None):  # noqa: ARG002
             return 1 - len([s for s in self.submits if s["cmd"] == cmd])
 
     store = _FakeStore()

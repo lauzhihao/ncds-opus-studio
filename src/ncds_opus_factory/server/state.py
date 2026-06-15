@@ -18,6 +18,7 @@ from ncds_opus_factory.server.engine.pipeline_performers_015 import PERFORMERS_0
 from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.mock_agents import maybe_mock_registry
 from ncds_opus_factory.server.pipeline_runner import PipelineRunner
+from ncds_opus_factory.server.queue import get_default_queue
 from ncds_opus_factory.server.task_runner import TaskRunner
 from ncds_opus_factory.server.task_store import TaskStore
 
@@ -36,7 +37,12 @@ STORE: TaskStore = TaskStore(STATE_DIR)
 LABELS: LabelStore = LabelStore(LABELS_DIR)
 # NOF_MOCK_AGENTS 控制哪些命令走 mock（测试期不真调 codex/opus）
 # labels 注入:cron 任务完成自动归档时由 runner 直接落案卷
-RUNNER: TaskRunner = TaskRunner(STORE, maybe_mock_registry(build_full_registry()), labels=LABELS)
+RUNNER: TaskRunner = TaskRunner(
+    STORE,
+    maybe_mock_registry(build_full_registry()),
+    labels=LABELS,
+    redis_queue=get_default_queue(),  # 显式传入，确保配额走 Redis 而非内存
+)
 PIPELINE_RUNNER: PipelineRunner = PipelineRunner(VIDEO_JOBS_DIR)
 # 生产引擎（E1）：派发表 = bare command（含 mock 门）∪ 015 orchestration performer（pct015_*）。
 # 015 recipe 各步的 cmd 指向 pct015_*（见 recipes.py），故引擎须能在合并表里解析它们。

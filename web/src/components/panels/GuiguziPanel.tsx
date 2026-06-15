@@ -11,9 +11,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { Lightbulb, PenLine } from 'lucide-react';
 
 import { api } from '../../api/client';
-import type { AsrItem, JobState } from '../../api/types';
+import type { JobState, ShenkuoEntry } from '../../api/types';
 import { angleStorageKey } from '../../config/agents';
 import { useToast } from '../Toast';
+
+// 源素材标题：剥掉 desc 内嵌的 #话题（与沈括面板 cleanTitle 一致）。
+function sourceTitle(e: ShenkuoEntry): string {
+  let t = e.desc || '';
+  for (const tag of e.hashtags ?? []) t = t.replaceAll(`#${tag}`, '');
+  return t.split(/\s+/).filter(Boolean).join(' ').trim();
+}
 
 interface Props {
   jobId: string;
@@ -29,10 +36,11 @@ export function GuiguziPanel({ jobId, job, onConfirmed }: Props) {
 
   const asr = job.nodes.asr;
   const asrDone = asr?.status === 'done';
-  const sources = useMemo<AsrItem[]>(() => {
-    const items = (asr?.outputs?.items as AsrItem[] | undefined) ?? [];
-    return Array.isArray(items) ? items : [];
-  }, [asr?.outputs?.items]);
+  // 沈括统一走采集：源素材在 asr.outputs.collected（ShenkuoEntry），过滤掉采集失败条目。
+  const sources = useMemo<ShenkuoEntry[]>(() => {
+    const collected = (asr?.outputs?.collected as ShenkuoEntry[] | undefined) ?? [];
+    return Array.isArray(collected) ? collected.filter((e) => !e.error) : [];
+  }, [asr?.outputs?.collected]);
 
   // 进面板时回填上次的选题角度
   useEffect(() => {
@@ -87,10 +95,9 @@ export function GuiguziPanel({ jobId, job, onConfirmed }: Props) {
           <div className="empty-state" style={{ padding: 'var(--s-4)' }}>沈括未返回可用素材。</div>
         ) : (
           <ul className="guiguzi-sources">
-            {sources.map((s) => (
-              <li key={s.index} className="guiguzi-source">
-                <span className="guiguzi-source-title">{s.title || `素材 ${s.index + 1}`}</span>
-                {s.author && <span className="dim-mono">@{s.author}</span>}
+            {sources.map((s, i) => (
+              <li key={s.aweme_id || s.url || i} className="guiguzi-source">
+                <span className="guiguzi-source-title">{sourceTitle(s) || `素材 ${i + 1}`}</span>
               </li>
             ))}
           </ul>

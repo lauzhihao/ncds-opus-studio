@@ -1,7 +1,7 @@
 // Agent 抽屉：顶部 agent 身份 + 状态监控（成员步进 chips），下方按当前成员渲染现成面板。
 //
 // 成员推进完全由引擎真实 NEXT 链驱动（见 config/agents.ts NODE_NEXT）：同 agent 内的下一步
-// 切 tab，跨 agent 的下一步打开下一个 agent。各成员面板（InputPanel/AsrResultPanel/...）原样复用，
+// 切 tab，跨 agent 的下一步打开下一个 agent。各成员面板（InputPanel/ShenkuoCollectPanel/...）原样复用，
 // 它们内部的 runNode 仍打到底层 engine 节点——"agent 调现成 performer"。
 
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
@@ -23,7 +23,7 @@ import { ImageResultPanel } from './panels/ImageResultPanel';
 import { InputPanel } from './panels/InputPanel';
 import { LinesPanel } from './panels/LinesPanel';
 import { PreviewIframePanel } from './panels/PreviewIframePanel';
-import { RwResultPanel } from './panels/RwResultPanel';
+import { LiuyongPanel } from './panels/LiuyongPanel';
 import { StepRunPanel } from './panels/StepRunPanel';
 import { StoryboardPanel } from './panels/StoryboardPanel';
 import { TtsResultPanel } from './panels/TtsResultPanel';
@@ -159,7 +159,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
         return <GuiguziPanel jobId={jobId} job={job} onConfirmed={() => advance('guiguzi')} />;
       case 'rw':
         return (
-          <RwResultPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('rw')} />
+          <LiuyongPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('rw')} />
         );
       case 'lines':
         return (

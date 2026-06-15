@@ -101,7 +101,7 @@ def test_tick_stops_when_quota_exhausted(tmp_path: Path):
     store = TaskStore(tmp_path / "tasks")
 
     class NoQuotaRunner(StubRunner):
-        def quota_remaining(self, cmd, source=None):
+        async def quota_remaining(self, cmd, source=None):
             return 0
 
     runner = NoQuotaRunner()

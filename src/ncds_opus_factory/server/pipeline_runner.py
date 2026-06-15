@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -35,7 +36,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_core.templates import template_dir as _template_dir
-from ncds_opus_core.pipelines import PIPELINE_REGISTRY, PipelineDef, get_pipeline
+from ncds_opus_core.pipelines import PIPELINE_REGISTRY, get_pipeline
+from ncds_opus_core.common import cancel as _cancel
 from ncds_opus_factory.server import storyboard_director
 
 logger = logging.getLogger(__name__)
@@ -132,6 +134,9 @@ class PipelineRunner:
         # 绞杀者（E1-b2 #3）：注入的生产引擎 + 命中节点集。每 job 的引擎实例 iid 持久化在
         # JobState.engine_iid（不放内存，避免重启后重建孤儿实例）。
         self._engine: Any = None
+        # S1：events.jsonl 事件落盘计数器。key=job_id，value=已发出的最后 seq。
+        # server 重启后首次 _emit 时按文件末行 seq 恢复，保证跨重启单调不回退。
+        self._event_seq: dict[str, int] = {}
         # 本分支默认「全节点走生产引擎」（必走新版本）。NOF_ENGINE_NODES 可覆盖：
         #   未设                       → 全 7 个可执行节点走引擎 run_step（默认，pct015_* performer）
         #   "none"/"off"/"legacy"/"" → 全走旧 _execute_*（临时回旧画布调试用）
@@ -150,6 +155,109 @@ class PipelineRunner:
         """注入生产引擎（InstanceRunner）。由 server/state.py 在两 runner 都建好后调，
         避免 pipeline_runner ↔ state 的 import 环。"""
         self._engine = engine
+
+    # ---------- S2：跨进程取消文件标记 ----------
+
+    #: watcher 轮询间隔（秒）：0.5s 足够响应，不过度 IO。
+    _CANCEL_WATCHER_INTERVAL_SEC: float = 0.5
+    #: Option A 宽限期（秒）：flag 命中后等工作线程协作式自停的最长等待时间。
+    #: 够 killpg SIGTERM→wait(5)→SIGKILL + 轮询一次子进程退出，超时才 fallback inner.cancel()。
+    _CANCEL_GRACE_SEC: float = 15.0
+
+    def _cancel_flag(self, job_id: str, node_name: str) -> Path:
+        """返回该节点的取消标记文件路径。
+
+        约定：video-jobs/{job_id}/cancel/{node_name}.flag。
+        仅 PipelineRunner 知道目录结构；core cancel 模块只收绝对 Path。
+        """
+        return self.video_jobs_dir / job_id / "cancel" / f"{node_name}.flag"
+
+    async def _run_in_thread_cancellable(self, fn: Callable, flag_path: Path, /, *args: Any, **kwargs: Any) -> Any:
+        """在工作线程里 install 读 is_flagged(flag_path) 的协作式取消 checker 后调 fn。
+        镜像 task_runner._invoke：命令在步骤边界 cancel.checkpoint() / 子进程 Popen 轮询
+        cancel.current() 命中即中止。checker 读跨进程文件 flag（而非内存），故 worker 拆分后天然可达。"""
+        def _wrapped() -> Any:
+            # install 的 checker 是文件存在性检查，与内存状态无关——跨进程 worker 侧也能触发
+            _cancel.install(lambda: _cancel.is_flagged(flag_path))
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _cancel.uninstall()
+        return await asyncio.to_thread(_wrapped)
+
+    # ---------- S1：events.jsonl 落盘 ----------
+
+    def _events_file(self, job_id: str) -> Path:
+        """返回该 job 的事件日志路径：video-jobs/{job_id}/events.jsonl。"""
+        return self.video_jobs_dir / job_id / "events.jsonl"
+
+    def _emit(self, job_id: str, event: dict[str, Any]) -> None:
+        """统一事件发射：
+        1. 追加一行到 events.jsonl（seq 单调递增，event 原样 + ts/seq 信封字段）；
+        2. 继续走内存 EventBus（保留向后兼容，S1 不删 EventBus）。
+
+        可从同步上下文（to_thread 内部）安全调用，open("a") 是同步 IO。
+        """
+        # ---- seq 计数：首次调用时从文件末行恢复（跨重启单调）----
+        if job_id not in self._event_seq:
+            ef = self._events_file(job_id)
+            if ef.is_file():
+                try:
+                    # 读最后一行恢复 seq；残行（torn write）不计入 seq——
+                    # 修复缺口2：原代码遇到坏行 last_seq += 1，把进程被杀时写半截的残行
+                    # 当成一条有效事件计数，污染 seq。正确做法：坏行直接忽略，不更新 last_seq。
+                    last_seq = 0
+                    with ef.open("r", encoding="utf-8") as fh:
+                        for line in fh:
+                            line = line.strip()
+                            if line:
+                                try:
+                                    obj = json.loads(line)
+                                    last_seq = int(obj.get("seq") or last_seq)
+                                except (json.JSONDecodeError, ValueError):
+                                    # 残行（坏 JSON）：忽略，不调整 last_seq
+                                    pass
+                    self._event_seq[job_id] = last_seq
+                except OSError:
+                    self._event_seq[job_id] = 0
+            else:
+                self._event_seq[job_id] = 0
+
+        self._event_seq[job_id] += 1
+        seq = self._event_seq[job_id]
+
+        # ---- 落盘记录 = 原 event 原样 + ts/seq 信封字段 ----
+        # 关键(契约)：events.jsonl 每行必须等于内存 EventBus 广播的 event 形态
+        # (仅多挂 ts/seq + 补 node 字段)，因为 SSE 端把整行原样 yield 给前端。前端
+        # useJobStream 读 parsed.node / parsed.state；若把 state 埋进 payload 子对象，
+        # 前端 parsed.state 会变 undefined、node_status 增量更新失效(types.ts 也按
+        # {type,job_id,node,state} 定义 wire 格式)。
+        record: dict[str, Any] = {**event, "ts": time.time(), "seq": seq}
+        record.setdefault("node", None)  # job_updated 等无 node 事件填 None，便于消费方按 node 过滤
+
+        # ---- 追加写入 events.jsonl（O_APPEND 语义，单行原子）----
+        # 修复缺口2：torn write 防护——若上次进程被 SIGKILL 时写半截（末字节非 \n），
+        # 直接 append 会把新记录拼接到残行末尾，导致两行 JSON 合并成一行无法解析。
+        # 修法：追加前用二进制模式读末字节；若非 \n，先补一个 \n 再写新记录行。
+        ef = self._events_file(job_id)
+        ef.parent.mkdir(parents=True, exist_ok=True)
+        if ef.is_file() and ef.stat().st_size > 0:
+            try:
+                with ef.open("rb") as _fb:
+                    _fb.seek(-1, 2)  # 从文件末尾倒退 1 字节
+                    _last_byte = _fb.read(1)
+                if _last_byte != b"\n":
+                    # 末行残缺（torn write），先补换行符隔断残行
+                    with ef.open("a", encoding="utf-8") as _fix:
+                        _fix.write("\n")
+            except OSError:
+                pass
+        with ef.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            fh.flush()
+
+        # ---- 内存广播（向后兼容）----
+        self.bus.publish(job_id, event)
 
     # ---------- 持久化 ----------
 
@@ -359,14 +467,14 @@ class PipelineRunner:
             if state.nodes[n].status != "idle":
                 self._reset_node(state.nodes[n])
         self._save(state)
-        self.bus.publish(state.job_id, {"type": "job_updated", "job_id": state.job_id})
+        self._emit(state.job_id, {"type": "job_updated", "job_id": state.job_id})
 
     def update_title(self, job_id: str, title: str) -> None:
         state = self._load(job_id)
         state.title = title or self._default_title(job_id, state.created_at)
         state.updated_at = time.time()
         self._save(state)
-        self.bus.publish(state.job_id, {"type": "job_updated", "job_id": state.job_id})
+        self._emit(state.job_id, {"type": "job_updated", "job_id": state.job_id})
 
     def update_node_position(self, job_id: str, node: str, x: float, y: float) -> None:
         state = self._load(job_id)
@@ -394,7 +502,7 @@ class PipelineRunner:
             if n.name != "input" and n.status != "idle":
                 self._reset_node(n)
         self._save(state)
-        self.bus.publish(job_id, {"type": "job_updated", "job_id": job_id})
+        self._emit(job_id, {"type": "job_updated", "job_id": job_id})
 
     # parse_inputs 已废弃：解析在前端完成，后端只通过 update_inputs 持久化。
 
@@ -442,7 +550,7 @@ class PipelineRunner:
             and state.nodes[node_name].status == "done"
             and state.nodes[node_name].outputs
         ):
-            self.bus.publish(job_id, {
+            self._emit(job_id, {
                 "type": "node_status", "job_id": job_id, "node": node_name,
                 "state": asdict(state.nodes[node_name]),
             })
@@ -463,7 +571,7 @@ class PipelineRunner:
 
         state.nodes[node_name].status = "queued"
         self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(state.nodes[node_name])})
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(state.nodes[node_name])})
 
         # spawn 异步执行
         key = (job_id, node_name)
@@ -476,21 +584,39 @@ class PipelineRunner:
             if self._load(job_id).mock:
                 await self._execute_mock(job_id, node_name)
             else:
-                await self._execute_real(job_id, node_name)
+                await self._execute_real_with_flag_watcher(job_id, node_name)
         except asyncio.CancelledError:
-            # 用户主动 cancel：把节点回退到 idle 让 UI 可以再点"确认"
+            # 用户主动 cancel（内存 task.cancel 或 watcher 检测到 flag 后 cancel inner task）：
+            # 把节点回退到 idle 让 UI 可以再点"确认"。
             try:
                 state = self._load(job_id)
                 n = state.nodes[node_name]
-                n.status = "idle"
+                # _reset_node 先清各字段（outputs/task_id/started_at…），再覆写 error/finished_at
+                self._reset_node(n)
                 n.error = "cancelled"
                 n.finished_at = time.time()
-                n.progress = ""
-                self._reset_node(n)
                 self._save(state)
-                self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+                self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
             finally:
+                # 清文件标记：取消完成后清掉，否则下次重跑该节点会立刻又被 watcher 取消。
+                _cancel.clear_flag(self._cancel_flag(job_id, node_name))
                 raise
+        except _cancel.TaskCancelled:
+            # Option A 协作式取消：工作线程自己 checkpoint 抛 TaskCancelled（不是 asyncio cancel）。
+            # 不重抛（_execute 是 fire-and-forget task，无人 await；协作式取消是正常终态）。
+            # flag 由工作线程（_run_in_thread_cancellable 的 finally uninstall 之前）或本分支清。
+            try:
+                state = self._load(job_id)
+                n = state.nodes[node_name]
+                # _reset_node 先清各字段，再覆写 error/finished_at
+                self._reset_node(n)
+                n.error = "cancelled"
+                n.finished_at = time.time()
+                self._save(state)
+                self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+            finally:
+                # 工作线程协作式自停后，flag 由本分支清——flag 存活到此刻是协作式停止的前提。
+                _cancel.clear_flag(self._cancel_flag(job_id, node_name))
         except Exception as exc:
             logger.exception("[pipeline] node %s/%s failed", job_id, node_name)
             state = self._load(job_id)
@@ -499,9 +625,74 @@ class PipelineRunner:
             n.error = f"{type(exc).__name__}: {exc}"
             n.finished_at = time.time()
             self._save(state)
-            self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+            self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
         finally:
             self._running_nodes.pop((job_id, node_name), None)
+
+    async def _execute_real_with_flag_watcher(self, job_id: str, node_name: str) -> None:
+        """在 _execute_real 外套一个轻量 watcher task，轮询文件标记。
+
+        实现思路：
+        - 把 _execute_real 包成 inner asyncio.Task
+        - 并行启动 watcher coroutine，每 _CANCEL_WATCHER_INTERVAL_SEC 检查一次 flag
+        - 用 asyncio.wait(FIRST_COMPLETED) 等待：inner 结束(正常/异常) 或 watcher 先返回
+        - watcher 发现 flag → inner.cancel()，等 inner 结束后重抛 CancelledError
+        - 无论如何 watcher task 都会被 cancel 掉（不泄漏）
+
+        为什么不直接 inner.cancel() 再 await：
+          asyncio.wait 是最简洁的"竞速"原语，避免在 flag 检测和 inner 异常间的竞态。
+        """
+        flag_path = self._cancel_flag(job_id, node_name)
+
+        async def _watcher() -> None:
+            """持续轮询 flag，发现则直接返回（由外层逻辑 cancel inner）。"""
+            while True:
+                await asyncio.sleep(self._CANCEL_WATCHER_INTERVAL_SEC)
+                if _cancel.is_flagged(flag_path):
+                    return  # 告知外层"flag 命中"
+
+        inner: asyncio.Task[None] = asyncio.create_task(self._execute_real(job_id, node_name))
+        watcher: asyncio.Task[None] = asyncio.create_task(_watcher())
+        try:
+            done, pending = await asyncio.wait(
+                {inner, watcher},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            # 外层 task（_execute）被直接 cancel（内存路径）：同时 cancel inner 和 watcher
+            inner.cancel()
+            watcher.cancel()
+            # 等待两者都结束，避免泄漏
+            await asyncio.gather(inner, watcher, return_exceptions=True)
+            raise
+
+        # 注意：绝不在此盲 cancel pending——flag 命中时 pending={inner}，盲 cancel 会抛弃工作线程，
+        # 抢在下面宽限期之前把 inner 干掉，使 Option A 协作式停止失效（子进程变孤儿）。
+        # 改为按"谁先完成"分别处理。
+        if watcher in done and not watcher.cancelled():
+            # Option A：flag 命中后先给工作线程宽限期协作式自停（flag 仍存活 → 线程 checkpoint 抛
+            # TaskCancelled / 子进程 Popen 轮询 killpg）。asyncio.wait 带 timeout 不会 cancel inner。
+            if not inner.done():
+                done2, _ = await asyncio.wait({inner}, timeout=self._CANCEL_GRACE_SEC)
+                if inner not in done2:
+                    # 非协作节点超时未停：强制 cancel（兜底，可能留孤儿线程）
+                    inner.cancel()
+                    await asyncio.gather(inner, return_exceptions=True)
+                    raise asyncio.CancelledError("cancel flag detected (forced after grace)")
+            # inner 已协作式结束：透传其异常（通常 TaskCancelled）给 _execute 的 except TaskCancelled
+            if inner.cancelled():
+                raise asyncio.CancelledError("cancel flag detected")
+            exc = inner.exception()
+            if exc is not None:
+                raise exc
+            return  # inner 在 flag 命中前正好正常完成
+
+        # inner 先完成：cancel watcher 防泄漏，再透传 inner 结果（正常无返回值，异常则重抛）
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+        exc = inner.exception()
+        if exc is not None:
+            raise exc
 
     async def _execute_mock(self, job_id: str, node_name: str) -> None:
         """Mock 执行：状态机与 _execute_real 完全一致（idle→running→done + SSE），
@@ -519,7 +710,7 @@ class PipelineRunner:
         n.error = None
         n.outputs = {}
         self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
         await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
         job_dir = self.video_jobs_dir / job_id
@@ -532,7 +723,7 @@ class PipelineRunner:
         n.progress = "完成"
         n.outputs = outputs
         self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
     async def _mock_regen_delay(self) -> None:
         """mock 下 regen 类操作的统一模拟耗时。"""
@@ -554,7 +745,7 @@ class PipelineRunner:
             await self._mock_regen_delay()
             n = state.nodes.get("rw")
             if n is not None:
-                self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
+                self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
             return
         n = state.nodes.get("rw")
         if n is None:
@@ -615,7 +806,7 @@ class PipelineRunner:
 
         state.updated_at = time.time()
         self._save(state)
-        self.bus.publish(
+        self._emit(
             job_id,
             {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)},
         )
@@ -649,7 +840,7 @@ class PipelineRunner:
         n.outputs["selected_model_id"] = model_id
         state.updated_at = time.time()
         self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
 
     async def regen_scene_image_from_preview(self, job_id: str, scene_id: str) -> str:
         """preview 抽屉里点「生成图片」时调用。不要求 image 节点 done，
@@ -711,7 +902,7 @@ class PipelineRunner:
             image_node.finished_at = time.time()
             state.updated_at = time.time()
             self._save(state)
-            self.bus.publish(
+            self._emit(
                 job_id,
                 {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(image_node)},
             )
@@ -802,7 +993,7 @@ class PipelineRunner:
             img.finished_at = time.time()
             state.updated_at = time.time()
             self._save(state)
-            self.bus.publish(
+            self._emit(
                 job_id,
                 {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)},
             )
@@ -859,7 +1050,7 @@ class PipelineRunner:
         n.finished_at = time.time()
         state.updated_at = time.time()
         self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
 
     # ------------------------------------------------------------
     # mock 下 regen 短路实现：复用 015 素材，不打真实 gpt-image / TTS
@@ -885,7 +1076,7 @@ class PipelineRunner:
             img.outputs["items"] = items
             img.finished_at = time.time()
             self._save(state)
-            self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)})
+            self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)})
         return rel
 
     async def _mock_regen_sketch(self, job_id: str, scene_id: str, n: int) -> str:
@@ -920,7 +1111,7 @@ class PipelineRunner:
             img.outputs["items"] = items
             img.finished_at = time.time()
             self._save(state)
-            self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)})
+            self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)})
         return rel
 
     async def _mock_regen_tts(self, job_id: str, scene_id: str) -> None:
@@ -936,36 +1127,66 @@ class PipelineRunner:
             n.outputs["items"] = _rebuild_tts_items_015(ep)
         n.finished_at = time.time()
         self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
 
     async def cancel_node(self, job_id: str, node_name: str) -> bool:
         """取消节点。幂等：内存里没有活着的 task 也视为取消成功。
 
-        正常情况 cancel 内存里的 asyncio task（其 CancelledError 分支把节点回退到 idle）。
-        但 server 热重载/重启后 `_running_nodes` 会清空，而磁盘 pipeline_state.json 可能
-        残留 status=running 的"幽灵任务"——旧实现此时返回 False，前端永远卡 loading 且无从
-        取消。这里改为：内存无活 task 时，若磁盘仍 running/queued 就直接落盘 idle（与
-        CancelledError 分支一致，让 UI 回到可重跑），并一律返回 True。
+        S2 变更：先写文件标记（跨进程取消信号），再走内存 task.cancel（同进程快路径）。
+        文件标记让跨进程 worker（S3）的执行侧 watcher 也能读到并中止节点；
+        内存 cancel 保留用于同进程下的即时响应。
+
+        幽灵任务兜底（server 热重载/重启后 _running_nodes 清空）：内存无活 task 时，
+        若磁盘仍 running/queued 就直接落盘 idle（与 CancelledError 分支一致），并一律返回 True。
         """
+        # 先写文件标记（跨进程信号；同进程路径的 watcher 也会读到）。
+        # Option A：flag 存活到工作线程协作式自停（_execute 的 TaskCancelled 分支清 flag），
+        # 不在此处提前 clear，否则工作线程下个轮询点读到 flag=False 变孤儿。
+        _cancel.set_flag(self._cancel_flag(job_id, node_name))
+
+        # AC#5：连带 cancel 正在后台跑的 enrich（音轨/抠图）task。
+        # enrich 工作线程靠存活的 flag 协作式终止 Demucs 子进程。
+        enrich = self._enrich_tasks.get(job_id)
+        enrich_cancelled = False
+        if enrich is not None and not enrich.done():
+            enrich.cancel()  # asyncio 层停 enrich loop；工作线程靠存活的 flag 协作式终止 Demucs
+            enrich_cancelled = True
+
         key = (job_id, node_name)
         task = self._running_nodes.get(key)
         if task is not None and not task.done():
-            task.cancel()
+            # Option A 真实节点：不直接 cancel asyncio.Task。
+            # watcher 已在跑，检测到 flag 后给宽限期等工作线程协作式自停，超时才 fallback cancel。
+            # mock 节点（state.mock=True）无协作式停止点（纯 sleep），asyncio cancel 是唯一手段。
+            try:
+                is_mock = self._load(job_id).mock
+            except FileNotFoundError:
+                is_mock = False
+            if is_mock:
+                # mock 无子进程/checkpoint，直接 cancel；flag 由 _execute CancelledError 分支清
+                task.cancel()
+            # 真实节点：不 cancel task，靠 watcher+协作式（flag 存活到线程自停）
             return True
-        # 幽灵任务兜底：内存没句柄，直接重置磁盘上残留的 running/queued 状态。
+
+        # 幽灵任务兜底：内存没句柄，直接重置磁盘上残留的 running/queued 状态，并清标记。
         try:
             state = self._load(job_id)
         except FileNotFoundError:
+            _cancel.clear_flag(self._cancel_flag(job_id, node_name))
             return True
         n = state.nodes.get(node_name)
         if n is not None and n.status in ("running", "queued"):
-            n.status = "idle"
+            # _reset_node 先清各字段（含 error→None），再覆写 error/finished_at；
+            # 否则先设 error 会被 _reset_node 清掉（与 _execute 的 cancelled 分支统一）。
+            self._reset_node(n)
             n.error = "cancelled"
             n.finished_at = time.time()
-            n.progress = ""
-            self._reset_node(n)
             self._save(state)
-            self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+            self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+        # 幽灵路径清标记：但若刚才有活 enrich 被 cancel（说明 asr 已 done、有后台 enrich 在跑），
+        # 不清 flag（让 enrich 工作线程靠 flag 终止 Demucs）；其余幽灵情形正常清。
+        if not enrich_cancelled:
+            _cancel.clear_flag(self._cancel_flag(job_id, node_name))
         return True
 
     async def _execute_real(self, job_id: str, node_name: str) -> None:
@@ -974,6 +1195,9 @@ class PipelineRunner:
         已接入：tts, image
         未接入：asr, rw, render → 显式 raise NotImplementedError；不再 fallback mock。
         """
+        # 4h：重跑前清残留 flag（防幽灵边界 DOA）。节点(重)启动前清掉任何残留 flag，
+        # 确保 fresh run 不被旧 flag 秒取消。submit_node 已防双跑，故这里只在真正新启动时执行。
+        _cancel.clear_flag(self._cancel_flag(job_id, node_name))
         state = self._load(job_id)
         n = state.nodes[node_name]
         n.status = "running"
@@ -982,7 +1206,7 @@ class PipelineRunner:
         n.error = None
         n.outputs = {}
         self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
         if self._engine is not None and node_name in self._engine_nodes and node_name != "asr":
             # 绞杀者：该节点改走生产引擎执行（JobState 仍是 facade 真相源）。
@@ -1013,7 +1237,7 @@ class PipelineRunner:
         n.progress = "完成"
         n.outputs = outputs
         self._save(state)
-        self.bus.publish(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
         # 沈括采集快采 done 后，后台补 Demucs 音轨分离 + 抠图（重活，不阻塞下游 rw）。
         if node_name == "asr":
@@ -1048,6 +1272,8 @@ class PipelineRunner:
         st = await engine.run_step(
             iid, node_name, step_inputs,
             on_progress=lambda text: self._push_progress(job_id, node_name, text),
+            # 4f：传文件 flag checker 给引擎，让 performer 在 cancel.checkpoint() 处中止
+            cancel_check=lambda: _cancel.is_flagged(self._cancel_flag(job_id, node_name)),
         )
         if st.status == "awaiting_review":
             # content_edit 步（lines/storyboard）：facade 无 awaiting 闸（编辑走 episode 端点），自动定稿
@@ -1097,7 +1323,7 @@ class PipelineRunner:
                 return
             n.progress = text
             self._save(state)
-            self.bus.publish(
+            self._emit(
                 job_id,
                 {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)},
             )
@@ -1116,7 +1342,7 @@ class PipelineRunner:
                 return
             n.outputs = {**(n.outputs or {}), key: value}
             self._save(state)
-            self.bus.publish(
+            self._emit(
                 job_id,
                 {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)},
             )
@@ -1351,16 +1577,21 @@ class PipelineRunner:
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "asr", text)
 
+        flag_path = self._cancel_flag(job_id, "asr")
         for entry in collected:
             if entry.get("error") or not entry.get("aweme_id"):
                 continue
             try:
-                full = await asyncio.to_thread(
-                    shenkuo.collect_one, entry["aweme_id"], collect_dir,
+                full = await self._run_in_thread_cancellable(
+                    shenkuo.collect_one, flag_path,
+                    entry["aweme_id"], collect_dir,
                     meta={}, on_progress=on_progress,
                     do_audio=True, do_frames=True,
                 )
             except asyncio.CancelledError:
+                raise
+            except _cancel.TaskCancelled:
+                # 取消信号到达：让 enrich task 正常终止，不影响已有快采产物
                 raise
             except Exception as exc:  # noqa: BLE001 — 后台补失败不影响主链路
                 on_progress(f"[{entry.get('index')}] 音轨/抠图后台补失败（不影响主链路）：{exc}")
@@ -1407,6 +1638,7 @@ class PipelineRunner:
             ordered = [collected_by_idx[k] for k in sorted(collected_by_idx)]
             self._push_outputs_patch(job_id, "asr", "collected", ordered)
 
+        flag_path = self._cancel_flag(job_id, "asr")
         for idx, url in enumerate(urls, start=1):
             on_progress(f"[{idx}/{len(urls)}] 解析作品链接")
             try:
@@ -1418,8 +1650,9 @@ class PipelineRunner:
                     meta = tikhub_client.extract_meta(tikhub_client.fetch_one_video_detail(aweme_id))
                 except Exception as exc:  # noqa: BLE001 — 元数据失败不阻塞主链路
                     on_progress(f"[{idx}/{len(urls)}] 元数据获取失败（不阻塞）：{exc}")
-                entry = await asyncio.to_thread(
-                    shenkuo.collect_one, aweme_id, collect_dir,
+                entry = await self._run_in_thread_cancellable(
+                    shenkuo.collect_one, flag_path,
+                    aweme_id, collect_dir,
                     meta=meta, on_progress=on_progress,
                     do_audio=False, do_frames=False,
                 )
@@ -1428,6 +1661,10 @@ class PipelineRunner:
                 collected_by_idx[idx] = entry
                 push_collected()
                 on_progress(f"[{idx}/{len(urls)}] 采集完成（文案/评论/数据）")
+            except _cancel.TaskCancelled:
+                # TaskCancelled 继承 RuntimeError，不能被下面的 except Exception 吞掉——
+                # 取消信号应中止整个节点，而不是被当成单条失败 continue
+                raise
             except Exception as exc:  # noqa: BLE001 — 单条失败不拖垮整批
                 msg = str(exc)
                 first = msg.splitlines()[0] if msg.splitlines() else "未知错误"
@@ -1560,8 +1797,9 @@ class PipelineRunner:
                         push_items()
                     on_progress(f"[{i}/{total}] {line}")
 
-                await asyncio.to_thread(
-                    _run_video_pipeline,
+                # 装协作式取消 checker：video_pipeline 的 killpg 轮询读 cancel.current() → 命中杀整组。
+                await self._run_in_thread_cancellable(
+                    _run_video_pipeline, self._cancel_flag(job_id, "asr"),
                     pipeline_script=pipeline_script,
                     url=url,
                     output_dir=item_dir,
@@ -1606,6 +1844,8 @@ class PipelineRunner:
                     on_progress(f"[{idx}/{len(urls)}] " + (
                         "调 opus 整理成文章" if polished else "文章已是最新,跳过 opus"))
                     article_abs = str(article_path)
+                except _cancel.TaskCancelled:
+                    raise  # 取消不能被当成 polish 失败 fallback 吞掉
                 except Exception as exc:
                     on_progress(f"[{idx}/{len(urls)}] opus polish 失败：{exc}；fallback 到原始 transcript")
                     article_abs = transcript_abs
@@ -1623,6 +1863,10 @@ class PipelineRunner:
                 item_status[str(idx)]["stage"] = "完成"
                 push_items()
                 on_progress(f"[{idx}/{len(urls)}] 完成")
+            except _cancel.TaskCancelled:
+                # TaskCancelled 继承 RuntimeError，不能被下面的 except Exception 当单条失败吞掉——
+                # 取消应中止整个节点（与 _execute_asr_collect 一致）
+                raise
             except Exception as exc:
                 msg = str(exc)
                 first_line = msg.splitlines()[0] if msg.splitlines() else "未知错误"
@@ -1988,6 +2232,25 @@ def _rebuild_tts_items_015(episode: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def _terminate_proc_group(proc: "subprocess.Popen[str]") -> None:
+    """杀整个进程组（直接子进程 + 孙进程 yt-dlp/ffmpeg/whisper/Demucs）。
+    SIGTERM→wait(5)→SIGKILL。proc 须以 start_new_session=True 启动（独立 pgid）。"""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    except ProcessLookupError:
+        pass
+
+
 def _run_tts_gen_015(
     *,
     script: Path,
@@ -2017,10 +2280,16 @@ def _run_tts_gen_015(
         stderr=subprocess.STDOUT,
         text=True,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        start_new_session=True,  # 独立 pgid：killpg 可杀整组（包含孙进程）
     )
     assert proc.stdout is not None
     tail: list[str] = []
+    checker = _cancel.current()  # 取主线程 install 的 checker（thread-local）
     for line in iter(proc.stdout.readline, ""):
+        # 每行开头轮询取消：readline 阻塞期间无法检查，但 tts_gen 持续吐行，取消延迟≤下一行时间
+        if checker():
+            _terminate_proc_group(proc)
+            raise _cancel.TaskCancelled("cancelled during tts_gen subprocess")
         s = line.rstrip("\n")
         if s:
             on_line(s)
@@ -2066,10 +2335,16 @@ def _run_video_pipeline(
         stderr=subprocess.STDOUT,
         text=True,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        start_new_session=True,  # 独立 pgid：killpg 可杀 yt-dlp/ffmpeg/whisper 等孙进程
     )
     assert proc.stdout is not None
     tail: list[str] = []
+    checker = _cancel.current()  # 取主线程 install 的 checker（thread-local）
     for line in iter(proc.stdout.readline, ""):
+        # 每行开头轮询取消：video_pipeline 持续吐进度行，取消延迟≤下一行时间（设计接受的范式）
+        if checker():
+            _terminate_proc_group(proc)
+            raise _cancel.TaskCancelled("cancelled during video_pipeline subprocess")
         s = line.rstrip("\n")
         if s:
             on_line(s)

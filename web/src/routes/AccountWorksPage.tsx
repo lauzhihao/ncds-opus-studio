@@ -9,7 +9,7 @@ import { api } from '../api/client';
 import type { AccountPost, SubscriptionAuthor } from '../api/types';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useToast } from '../components/Toast';
-import { CoverImage } from '../components/WorkCards';
+import { CoverImage, DurationBadge } from '../components/WorkCards';
 import { formatCount, timeAgo } from '../utils/format';
 
 export function AccountWorksPage() {
@@ -185,6 +185,7 @@ function PostCard({ post, creating, onDerive }: { post: AccountPost; creating: b
           </div>
         )}
         {post.collected && <span className="run-pill" style={{ background: 'var(--accent)' }}>已采集</span>}
+        <DurationBadge seconds={post.duration} />
       </div>
       <div className="body">
         <div className="name" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>

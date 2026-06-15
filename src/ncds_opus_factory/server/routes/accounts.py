@@ -123,8 +123,8 @@ def get_account_posts(sec_uid: str) -> dict[str, Any]:
         # 还没采集过这个账号 -> 空列表, 前端展示"暂无作品, 待采集"。
         return {"sec_uid": sec_uid, "posts": []}
 
-    # 老数据没有封面字段（cover_url 是后加的）-> 重拉一次带封面的列表并回写，之后命中缓存。
-    if posts and isinstance(posts[0], dict) and not posts[0].get("cover_url"):
+    # 老数据缺封面或缺时长（cover_url/duration 都是后加的）-> 重拉一次补齐并回写，之后命中缓存。
+    if posts and isinstance(posts[0], dict) and (not posts[0].get("cover_url") or "duration" not in posts[0]):
         try:
             fresh = tikhub_client.fetch_user_posts(sec_uid, max_items=max(len(posts), 30))
             if fresh:
@@ -160,6 +160,7 @@ def get_account_posts(sec_uid: str) -> dict[str, Any]:
                 "collect": p.get("collect", 0),
                 "create": p.get("create", 0),
                 "cover_url": p.get("cover_url") or "",
+                "duration": p.get("duration", 0),  # 秒；0=未知，前端不渲染时长徽标
                 # 构造抖音作品页链接: 衍生作品画布据此 seed 源(沈括单链/asr 都能解析)。
                 "share_url": f"https://www.douyin.com/video/{aid}",
                 "collected": aid in collected_ids,

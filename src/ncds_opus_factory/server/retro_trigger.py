@@ -70,7 +70,7 @@ async def retro_tick(runner: TaskRunner, store: TaskStore) -> str | None:
     if fresh < MIN_LABELS:
         logger.info("[retro] 新标签不足(%d/%d),本轮跳过", fresh, MIN_LABELS)
         return None
-    if runner.quota_remaining("wolong", source="retro") <= 0:
+    if await runner.quota_remaining("wolong", source="retro") <= 0:
         logger.warning("[retro] retro 配额耗尽,今晚复盘暂缓")
         return None
     task_id = await runner.submit("wolong", {"mode": "retro"}, source="retro")

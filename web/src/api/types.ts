@@ -164,6 +164,7 @@ export interface ShenkuoEntry {
   hashtags?: string[];
   stats?: Record<string, number>; // digg/comment/share/collect（抖音不公开播放量）
   cover?: string; // 封面相对路径
+  duration?: number; // 视频时长（秒），缺失/0 -> 前端不渲染时长徽标
   text?: string; // 提取文案（清洗稿，内嵌）
   top_comments?: ShenkuoComment[]; // 高赞评论（>10 赞，按赞排序）
   audio?: Record<string, string>; // original/vocals/bgm 相对路径（后台补）
@@ -252,6 +253,7 @@ export interface AccountPost {
   collect: number;
   create: number;
   cover_url: string;
+  duration: number; // 视频时长（秒），0=未知 -> 前端不渲染时长徽标
   share_url: string;
   collected: boolean;
 }

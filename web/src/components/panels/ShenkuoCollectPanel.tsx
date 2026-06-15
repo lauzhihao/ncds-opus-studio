@@ -6,10 +6,12 @@
 // 采集自动触发（input 的「开始创作」→ runNode('asr')），本面板纯展示、无手动按钮；
 // 音轨/抠图由后台第二趟补，字段后到（前端按字段在否渲染，缺失即不显示该区块）。
 
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Circle,
   ExternalLink,
@@ -21,10 +23,12 @@ import {
   Share2,
   Star,
   User,
+  X,
   XCircle,
 } from 'lucide-react';
 
 import type { NodeState, PipelineNodeDef, ShenkuoComment, ShenkuoEntry } from '../../api/types';
+import { DurationBadge } from '../WorkCards';
 
 interface Props {
   jobId: string;
@@ -137,112 +141,241 @@ function EntryCard({ entry }: { entry: ShenkuoEntry }) {
   const cutouts = (entry.cutouts ?? []).map(fileUrl).filter(Boolean) as string[];
 
   return (
-    <article className="shenkuo-entry" style={cardStyle}>
-      {/* 封面 + 标题 + 话题 + 播放数据 */}
-      <div style={{ display: 'flex', gap: 'var(--s-3)', alignItems: 'flex-start' }}>
-        {cover && (
-          <img
-            src={cover}
-            alt=""
-            style={{ width: 84, height: 112, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }}
-          />
-        )}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', lineHeight: 1.4 }}>{cleanTitle(entry)}</div>
-          {entry.author && (
-            <div className="dim-mono" style={{ marginTop: 2 }}>
-              <User size={11} strokeWidth={1.7} style={{ verticalAlign: '-1px', marginRight: 2 }} />
-              {entry.author}
+    // 一条作品 = 一组独立卡片：作品信息 / 提取文案 / 声音素材 / 高赞评论 / 抠图各占一张卡，
+    // 每张自带边框、独立区域，分块更清晰（不再塞进同一张大卡）。
+    <div className="shenkuo-entry-group" style={{ marginBottom: 'var(--s-4)' }}>
+      {/* 卡片：作品信息（封面 + 标题 + 话题 + 播放数据 + 工序状态点） */}
+      <article className="shenkuo-entry shenkuo-card" style={cardStyle}>
+        <div style={{ display: 'flex', gap: 'var(--s-3)', alignItems: 'flex-start' }}>
+          {cover && (
+            <div className="shenkuo-cover-wrap">
+              <img
+                src={cover}
+                alt=""
+                style={{ width: 84, height: 112, objectFit: 'cover', borderRadius: 8, display: 'block' }}
+              />
+              <DurationBadge seconds={entry.duration} />
             </div>
           )}
-          {hashtags.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-              {hashtags.map((t) => (
-                <span key={t} style={tagStyle}>#{t}</span>
-              ))}
-            </div>
-          )}
-          <StatsLine stats={entry.stats ?? {}} digg={entry.digg} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', lineHeight: 1.4 }}>{cleanTitle(entry)}</div>
+            {entry.author && (
+              <div className="dim-mono" style={{ marginTop: 2 }}>
+                <User size={11} strokeWidth={1.7} style={{ verticalAlign: '-1px', marginRight: 2 }} />
+                {entry.author}
+              </div>
+            )}
+            {hashtags.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                {hashtags.map((t) => (
+                  <span key={t} style={tagStyle}>#{t}</span>
+                ))}
+              </div>
+            )}
+            <StatsLine stats={entry.stats ?? {}} digg={entry.digg} />
+          </div>
         </div>
-      </div>
+        {/* 工序状态点一行，原作品链接靠该行最右 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s-3)' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <StageDots status={entry.status} />
+          </div>
+          {entry.url && <UrlLink url={entry.url} />}
+        </div>
+      </article>
 
-      {/* 工序状态点 */}
-      <StageDots status={entry.status} />
-
-      {/* 提取文案 */}
+      {/* 卡片：提取文案 */}
       {entry.text && (
-        <div style={{ marginTop: 'var(--s-3)' }}>
+        <article className="shenkuo-card" style={cardStyle}>
           <SectionHead
             icon={<Quote size={13} />}
             label={`提取文案 · ${entry.text.length} 字`}
-            right={
-              <button type="button" style={linkBtnStyle} onClick={() => setTextOpen((v) => !v)}>
-                {textOpen ? '收起' : '展开全文'}
-              </button>
-            }
+            right={<CardToggle open={textOpen} onToggle={() => setTextOpen((v) => !v)} openText="收起" closedText="展开全文" />}
           />
           <div
             style={{
               fontSize: 'var(--text-sm)',
-              lineHeight: 1.6,
+              lineHeight: 1.7,
               color: 'var(--ink-2)',
+              // 清洗稿本身是空行分段的纯文本；不保留换行会被 HTML 折叠成一坨，pre-wrap 还原段落
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
               ...(textOpen ? {} : clamp6),
             }}
           >
             {entry.text}
           </div>
-        </div>
+        </article>
       )}
 
-      {/* 声音素材（原声/人声/伴奏，内联播放） */}
+      {/* 卡片：声音素材（原声/人声/伴奏，内联播放） */}
       {audioRows.length > 0 && (
-        <Disclosure
-          open={audioOpen}
-          onToggle={() => setAudioOpen((v) => !v)}
-          icon={<Music size={13} />}
-          label={`声音素材 · ${audioRows.length} 轨`}
-        >
-          {audioRows.map((r) => (
-            <div key={r.key} style={{ marginBottom: 8 }}>
-              <div className="dim-mono" style={{ marginBottom: 2 }}>
-                {r.label} · {r.note}
+        <article className="shenkuo-card" style={cardStyle}>
+          <SectionHead
+            icon={<Music size={13} />}
+            label={`声音素材 · ${audioRows.length} 轨`}
+            right={<CardToggle open={audioOpen} onToggle={() => setAudioOpen((v) => !v)} />}
+          />
+          {audioOpen &&
+            audioRows.map((r) => (
+              <div key={r.key} style={{ marginBottom: 8 }}>
+                <div className="dim-mono" style={{ marginBottom: 2 }}>
+                  {r.label} · {r.note}
+                </div>
+                <audio controls preload="none" src={fileUrl(audio[r.key])} style={{ width: '100%', height: 32 }} />
               </div>
-              <audio controls preload="none" src={fileUrl(audio[r.key])} style={{ width: '100%', height: 32 }} />
-            </div>
-          ))}
-        </Disclosure>
-      )}
-
-      {/* 高赞评论 */}
-      {comments.length > 0 && (
-        <Disclosure
-          open={commentsOpen}
-          onToggle={() => setCommentsOpen((v) => !v)}
-          icon={<MessageCircle size={13} />}
-          label={`高赞评论 · Top ${comments.length}`}
-        >
-          {comments.map((c, i) => (
-            <CommentRow key={i} idx={i} c={c} />
-          ))}
-        </Disclosure>
-      )}
-
-      {/* 抠图素材（横滑，点击新标签看大图） */}
-      {cutouts.length > 0 && (
-        <div style={{ marginTop: 'var(--s-3)' }}>
-          <div className="dim-mono" style={{ marginBottom: 4 }}>抠图素材 · {cutouts.length}</div>
-          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
-            {cutouts.map((u, i) => (
-              <a key={i} href={u} target="_blank" rel="noopener noreferrer" style={{ flexShrink: 0 }}>
-                <img src={u} alt="" style={{ height: 54, borderRadius: 6, display: 'block' }} />
-              </a>
             ))}
-          </div>
-        </div>
+        </article>
       )}
 
-      {entry.url && <UrlLink url={entry.url} />}
-    </article>
+      {/* 卡片：高赞评论 */}
+      {comments.length > 0 && (
+        <article className="shenkuo-card" style={cardStyle}>
+          <SectionHead
+            icon={<MessageCircle size={13} />}
+            label={`高赞评论 · Top ${comments.length}`}
+            right={<CardToggle open={commentsOpen} onToggle={() => setCommentsOpen((v) => !v)} />}
+            mb={commentsOpen ? 6 : 0}
+          />
+          {commentsOpen &&
+            comments.map((c, i) => (
+              <CommentRow key={i} idx={i} c={c} />
+            ))}
+        </article>
+      )}
+
+      {/* 卡片：抠图素材（网格 + 展开收起，点击进遮罩相册左右切换） */}
+      {cutouts.length > 0 && (
+        <article className="shenkuo-card" style={cardStyle}>
+          <div className="dim-mono" style={{ marginBottom: 6 }}>抠图素材 · {cutouts.length}</div>
+          <CutoutGrid urls={cutouts} />
+        </article>
+      )}
+    </div>
+  );
+}
+
+// 抠图网格：固定列数，默认只显示第一行（收起），展开显示全部；点击进遮罩相册。
+const CUTOUT_COLS = 5;
+
+function CutoutGrid({ urls }: { urls: string[] }) {
+  const [open, setOpen] = useState(false);
+  const [lightbox, setLightbox] = useState<number | null>(null);
+  const hasMore = urls.length > CUTOUT_COLS;
+  const shown = open ? urls : urls.slice(0, CUTOUT_COLS);
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${CUTOUT_COLS}, 1fr)`, gap: 6 }}>
+        {shown.map((u, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => setLightbox(i)}
+            title="点击看大图"
+            style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer', lineHeight: 0 }}
+          >
+            <img
+              src={u}
+              alt=""
+              loading="lazy"
+              style={{ width: '100%', aspectRatio: '1 / 1', objectFit: 'cover', borderRadius: 6, display: 'block' }}
+            />
+          </button>
+        ))}
+      </div>
+      {hasMore && (
+        <button
+          type="button"
+          className="dim-mono"
+          onClick={() => setOpen((v) => !v)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            marginTop: 8,
+            padding: 0,
+            border: 'none',
+            background: 'none',
+            cursor: 'pointer',
+            fontSize: 'var(--text-2xs)',
+          }}
+        >
+          {open ? <ChevronDown size={12} style={{ transform: 'rotate(180deg)' }} /> : <ChevronDown size={12} />}
+          {open ? '收起' : `展开全部 ${urls.length}`}
+        </button>
+      )}
+      {lightbox != null && (
+        <CutoutLightbox urls={urls} startIndex={lightbox} onClose={() => setLightbox(null)} />
+      )}
+    </>
+  );
+}
+
+// 抠图遮罩相册：fixed 遮罩 + 左右切换 + 底部缩略图条，复用 image gallery 的 .ig-* 样式。
+function CutoutLightbox({ urls, startIndex, onClose }: { urls: string[]; startIndex: number; onClose: () => void }) {
+  const clamp = (i: number) => Math.max(0, Math.min(urls.length - 1, i));
+  const [cur, setCur] = useState(() => clamp(startIndex));
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') setCur((c) => Math.max(0, c - 1));
+      else if (e.key === 'ArrowRight') setCur((c) => Math.min(urls.length - 1, c + 1));
+      else if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [urls.length, onClose]);
+
+  // 门户挂到 body：脱离抽屉(可能带 transform)的包含块，保证 fixed 遮罩铺满视口
+  return createPortal(
+    <div className="ig-backdrop" onClick={onClose}>
+      <div className="ig" onClick={(e) => e.stopPropagation()}>
+        <button className="btn sm icon-only ghost ig-close" onClick={onClose} title="关闭 (Esc)">
+          <X size={16} strokeWidth={1.7} />
+        </button>
+
+        <div className="ig-stage">
+          <button
+            type="button"
+            className="ig-nav"
+            disabled={cur <= 0}
+            onClick={() => setCur((c) => Math.max(0, c - 1))}
+            title="上一张 (←)"
+          >
+            <ChevronLeft size={24} strokeWidth={1.8} />
+          </button>
+
+          <div className="ig-main">
+            <img src={urls[cur]} alt="" draggable={false} />
+            <span className="ig-scene-id mono">{cur + 1} / {urls.length}</span>
+          </div>
+
+          <button
+            type="button"
+            className="ig-nav"
+            disabled={cur >= urls.length - 1}
+            onClick={() => setCur((c) => Math.min(urls.length - 1, c + 1))}
+            title="下一张 (→)"
+          >
+            <ChevronRight size={24} strokeWidth={1.8} />
+          </button>
+        </div>
+
+        <div className="ig-filmstrip">
+          {urls.map((u, i) => (
+            <button
+              key={i}
+              type="button"
+              className={`ig-thumb${i === cur ? ' active' : ''}`}
+              onClick={() => setCur(i)}
+            >
+              <img src={u} alt="" loading="lazy" draggable={false} />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -293,14 +426,14 @@ function StageDots({ status }: { status?: Record<string, string> }) {
   );
 }
 
-function SectionHead({ icon, label, right }: { icon: ReactNode; label: string; right?: ReactNode }) {
+function SectionHead({ icon, label, right, mb = 6 }: { icon: ReactNode; label: string; right?: ReactNode; mb?: number }) {
   return (
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 4,
-        marginBottom: 6,
+        marginBottom: mb,
         fontSize: 'var(--text-xs)',
         color: 'var(--ink-2)',
         fontWeight: 600,
@@ -313,74 +446,73 @@ function SectionHead({ icon, label, right }: { icon: ReactNode; label: string; r
   );
 }
 
-function Disclosure({
+// 卡片头部右侧的展开/收起按钮：文字 + chevron 指示展开态。
+function CardToggle({
   open,
   onToggle,
-  icon,
-  label,
-  children,
+  openText = '收起',
+  closedText = '展开',
 }: {
   open: boolean;
   onToggle: () => void;
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
+  openText?: string;
+  closedText?: string;
 }) {
   return (
-    <div style={{ marginTop: 'var(--s-3)' }}>
-      <button
-        type="button"
-        onClick={onToggle}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          width: '100%',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          padding: 0,
-          color: 'var(--ink-2)',
-          fontSize: 'var(--text-xs)',
-          fontWeight: 500,
-        }}
-      >
-        {icon}
-        <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
-        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-      </button>
-      {open && <div style={{ marginTop: 8 }}>{children}</div>}
-    </div>
+    <button
+      type="button"
+      onClick={onToggle}
+      style={{ ...linkBtnStyle, display: 'inline-flex', alignItems: 'center', gap: 2 }}
+    >
+      {open ? openText : closedText}
+      {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+    </button>
   );
 }
 
 function CommentRow({ idx, c }: { idx: number; c: ShenkuoComment }) {
+  const top = idx < 3;
   return (
-    <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+    // 三列网格：序号 / 内容(自动换行) / 点赞量；序号列与点赞列水平垂直居中
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'auto 1fr auto',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 8,
+      }}
+    >
+      {/* 圆标签序号：前三名用 accent 实心，其余用浅底 */}
       <span
         style={{
-          width: 16,
-          textAlign: 'right',
+          width: 18,
+          height: 18,
+          borderRadius: '50%',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           fontWeight: 700,
           fontSize: 'var(--text-2xs)',
-          color: idx < 3 ? 'var(--accent)' : 'var(--ink-3)',
+          lineHeight: 1,
+          color: top ? '#fff' : 'var(--ink-3)',
+          background: top ? 'var(--accent)' : 'var(--ink-7, rgba(0,0,0,0.06))',
         }}
       >
         {idx + 1}
       </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--ink-2)' }}>{c.text}</div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 2, fontSize: 'var(--text-2xs)', color: 'var(--ink-3)' }}>
-          {c.nickname && <span>{c.nickname}</span>}
-          {c.ip && <span>{c.ip}</span>}
-          <span style={{ flex: 1 }} />
-          {c.digg != null && (
-            <span style={{ color: '#e5484d', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-              <Heart size={10} /> {shenkuoCount(c.digg)}
-            </span>
-          )}
-        </div>
+      {/* 内容列：隐藏作者昵称与归属 IP，仅显示文案，自动换行 */}
+      <div style={{ minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--ink-2)', overflowWrap: 'anywhere' }}>
+        {c.text}
       </div>
+      {/* 点赞量列：水平垂直居中 */}
+      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 2, color: '#e5484d', fontSize: 'var(--text-2xs)', whiteSpace: 'nowrap' }}>
+        {c.digg != null && (
+          <>
+            <Heart size={10} /> {shenkuoCount(c.digg)}
+          </>
+        )}
+      </span>
     </div>
   );
 }

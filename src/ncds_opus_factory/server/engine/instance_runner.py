@@ -17,6 +17,7 @@ import logging
 import time
 from typing import Any, Callable, Literal
 
+from ncds_opus_core.common import cancel
 from ncds_opus_factory.commands import build_full_registry
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
 from ncds_opus_factory.server.engine.recipes import RECIPE_REGISTRY
@@ -45,9 +46,20 @@ def _now_iso() -> str:
     return datetime.now().isoformat()
 
 
-def _invoke(run_fn: Callable[..., Any], params: dict[str, Any], on_progress: Callable[[str], None]) -> Any:
-    """asyncio.to_thread 的同步目标：run_fn(on_progress=..., **params)。"""
-    return run_fn(on_progress=on_progress, **params)
+def _invoke(
+    run_fn: Callable[..., Any],
+    params: dict[str, Any],
+    on_progress: Callable[[str], None],
+    cancel_check: Callable[[], bool] | None = None,
+) -> Any:
+    """asyncio.to_thread 的同步目标：run_fn(on_progress=..., **params)。
+    cancel_check 装进线程局部，performer 在 cancel.checkpoint() 处中止。"""
+    if cancel_check is not None:
+        cancel.install(cancel_check)
+    try:
+        return run_fn(on_progress=on_progress, **params)
+    finally:
+        cancel.uninstall()
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +146,7 @@ class InstanceRunner:
         step_inputs: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
         on_progress: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> StepState:
         """执行单步（**按实例串行化**，防并发步骤竞态）；执行细节见 _run_step。
 
@@ -147,7 +160,7 @@ class InstanceRunner:
         （从工作线程同步调，driver 自己保证线程安全）。绞杀者据此把进度回桥到旧 facade SSE。
         """
         async with self._lock_for(instance_id):
-            return await self._run_step(instance_id, step_id, step_inputs, config, on_progress)
+            return await self._run_step(instance_id, step_id, step_inputs, config, on_progress, cancel_check)
 
     async def _run_step(
         self,
@@ -156,6 +169,7 @@ class InstanceRunner:
         step_inputs: dict[str, Any] | None = None,
         config: dict[str, Any] | None = None,
         on_progress: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> StepState:
         """执行单步：派发 → 状态机推进 → 事件/落盘。返回该步终态 StepState。
 
@@ -214,7 +228,12 @@ class InstanceRunner:
         # config 是溯源记录、不进 performer 参数（闭合签名会 TypeError）；driver 已把选择折进 step_inputs
         params = dict(step_inputs or {})
         try:
-            result = await asyncio.to_thread(_invoke, run_fn, params, _step_progress)
+            result = await asyncio.to_thread(_invoke, run_fn, params, _step_progress, cancel_check)
+        except cancel.TaskCancelled:
+            # 取消：步骤回 idle（可重跑；running→idle 非法，故直接写 fresh StepState 不走 _transition），
+            # 重抛让 _execute_via_engine 透传 TaskCancelled 给 _execute 的 except TaskCancelled 分支。
+            self.store.write_step_state(instance_id, StepState(step_id=step_id, config=dict(state.config)))
+            raise
         except Exception as exc:  # noqa: BLE001  —— 任何步骤异常都收成 failed，不冒泡炸 driver
             self._fail(instance_id, state, f"{type(exc).__name__}: {exc}")
             return state

@@ -148,7 +148,7 @@ async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path
                     continue
             except ValueError:
                 pass
-        if hasattr(runner, "quota_remaining") and runner.quota_remaining("shenkuo", source="cron") <= 0:
+        if hasattr(runner, "quota_remaining") and await runner.quota_remaining("shenkuo", source="cron") <= 0:
             logger.warning("[subscriptions] cron 配额耗尽,本轮订阅刷新停止")
             break
         try:

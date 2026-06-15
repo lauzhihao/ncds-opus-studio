@@ -21,3 +21,13 @@ export function formatElapsed(seconds: number): string {
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
+
+// 视频时长：秒 -> 「m:ss」（>=1h 显示「h:mm:ss」）。用于封面右下角时长徽标。
+export function formatDuration(seconds?: number | null): string {
+  const s = Math.max(0, Math.floor(seconds ?? 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, '0');
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${sec}`;
+  return `${m}:${sec}`;
+}

@@ -18,7 +18,7 @@ def test_simplify_aweme():
     }
     assert tikhub_client.simplify_aweme(a) == {
         "aweme_id": "123", "desc": "测试", "digg": 100, "comment": 5, "share": 2, "collect": 9,
-        "create": 1700, "cover_url": "",  # 无 video 字段 -> 封面回退空串
+        "create": 1700, "cover_url": "", "duration": 0,  # 无 video 字段 -> 封面/时长回退
     }
 
 

@@ -36,6 +36,9 @@ ROOT = Path(__file__).resolve().parents[3]
 BENCH = ROOT / "state" / "benchmark"
 COLLECTED = ROOT / "state" / "figure_collected"
 BENCH_DB = ROOT / "state" / "shenkuo" / "benchmark.db"  # 指标层 SQLite(时间序列)
+# entry["text"](提取文案/下游 rw 源)的安全上限:防极端长稿撑爆 payload。
+# 旧值 3000 会把 rw 改写源也截断,故抬到 2 万(典型稿几千字,等于不截)。
+_TEXT_CAP = 20000
 
 ProgressFn = Callable[[str], None]
 
@@ -121,6 +124,8 @@ def collect_one(
         entry["author"] = meta["author"]
     if meta.get("hashtags"):
         entry["hashtags"] = meta["hashtags"]
+    if meta.get("duration"):
+        entry["duration"] = meta["duration"]
     stats = {k: meta[k] for k in ("digg", "comment", "share", "collect") if meta.get(k) is not None}
     if stats:
         entry["stats"] = stats
@@ -188,11 +193,13 @@ def collect_one(
                 cleaned = capabilities.clean_transcript(raw_text, report)
                 if cleaned:
                     clean.write_text(cleaned, encoding="utf-8")
+            # text 同时供前端「提取文案」展示与下游 rw 改写源（_rw_source_text 优先读它），
+            # 故不再截到 3000（会让 rw 只看到前 3000 字就开写）；留 2 万作极端长稿的安全上限。
             if clean.exists():
-                entry["text"] = clean.read_text(encoding="utf-8").strip()[:3000]
+                entry["text"] = clean.read_text(encoding="utf-8").strip()[:_TEXT_CAP]
                 entry["text_raw"] = _rel(txt)
             else:
-                entry["text"] = raw_text[:3000]
+                entry["text"] = raw_text[:_TEXT_CAP]
 
     def branch_audio() -> None:
         guard()

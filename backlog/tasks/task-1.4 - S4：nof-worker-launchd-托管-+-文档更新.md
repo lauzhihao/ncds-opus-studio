@@ -18,6 +18,8 @@ priority: medium
 
 父任务 task-1，依赖 S3(task-1.3)。让 nof-worker 常驻、与 8810 解耦、开机自启，对标 map_watchdog 的 launchd 方式。写 launchd plist + scripts/install_nof_worker.sh(install/status/logs/restart/uninstall，参考 scripts/install_map_watchdog.sh)；更新文档。
 
+> **决策更新(2026-06-15)**：S3 队列改用 Redis(见 task-1.3)，故 nof-worker 启动**依赖 Redis 已就绪**。S4 需保证启动顺序：launchd 让 Redis 先于 nof-worker(`brew services start redis` 或单独 plist + 文档化依赖)，或 nof-worker 启动时做 Redis 连通性自检+重试。文档的"本地运行"章节除 nof-server(HTTP)+nof-worker(执行)外，新增 Redis 启停说明。
+
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 scripts/install_nof_worker.sh install/status/logs/restart/uninstall 可用、开机自启

@@ -16,7 +16,9 @@
 纪律（§8.4 已裁定）：
 - source 一律 cron：复用 _maybe_auto_archive 豁免与 _cron 配额桶，不新增 TaskSource；
 - 派发前 quota_remaining 自查，<=0 即停，绝不制造注定 failed 的任务；
-- 「防重索引检查→submit」之间不插 await（单事件循环原子性，RUNNER.submit 体内无 await）；
+- 「防重索引检查→submit」之间不插 await（单事件循环协作式原子性）——submit 体内
+  create 在 await lpush 之前同步完成；两次并发 maybe_resume 在同一 event loop 上
+  协作式串行，第一次 create 落盘后第二次扫 store 能看到，防卧龙双投（S3 步3）；
 - offset 语义：一批事件全部处理完才原子写新值；配额中断只推进到已成功处理的
   最后一行之后；crash 在 submit 后 offset 前 → 重读重放，防重索引兜住
   （宁可重派也不丢事件）；
@@ -280,7 +282,7 @@ async def _consume_events(
                     # 防重命中(在途或 24h 内已深采):不重派;链缺失则补登记
                     # ——覆盖「crash 在 submit 后、链落盘前」的重放窗口
                     chains_dirty |= _register_chain(chains, aweme, sec_uid, existing)
-                elif runner.quota_remaining("shenkuo", source="cron") <= 0:
+                elif await runner.quota_remaining("shenkuo", source="cron") <= 0:
                     logger.warning("[planner] cron 配额耗尽,事件消费停在 offset=%d",
                                    offset + pos)
                     break
@@ -358,7 +360,7 @@ async def _advance_chains(
                         sec_uid[:16])
             dirty = True
             continue
-        if runner.quota_remaining("guiguzi", source="cron") <= 0:
+        if await runner.quota_remaining("guiguzi", source="cron") <= 0:
             logger.warning("[planner] cron 配额耗尽,链推进暂停")
             kept.append(chain)
             halted = True
@@ -408,7 +410,7 @@ async def _maybe_restock(runner: TaskRunner, idx: _Index) -> str | None:
         logger.info("[planner] 库存低(%d/%d)但已有在途 cron 鬼谷子,跳过补货(防堆积)",
                     fresh, LOW_WATER)
         return None
-    if runner.quota_remaining("guiguzi", source="cron") <= 0:
+    if await runner.quota_remaining("guiguzi", source="cron") <= 0:
         logger.warning("[planner] 库存低(%d/%d)但 cron 配额耗尽,补货暂缓", fresh, LOW_WATER)
         return None
     avoid = topic_store.active_titles()

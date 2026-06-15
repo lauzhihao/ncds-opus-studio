@@ -121,14 +121,16 @@ async def maybe_resume(round_id: str) -> bool:
     """有积压且无在途续跑段 -> 投递一个续跑段。返回是否真的投了。
 
     注意:从 _has_inflight_gate 检查到 RUNNER.submit 之间不得出现 await——
-    单事件循环上的原子性是"同 round 不双投"的前提(RUNNER.submit 当前无 await)。
+    submit 体内 create 在 await lpush 之前同步完成；两次并发 maybe_resume 在同一
+    event loop 上协作式串行，第一次 create 落盘后第二次扫 store 能看到，
+    从而防卧龙双投（S3 步3，RUNNER.submit 体内 create 先于 lpush）。
     """
     r = ROUNDS.load(round_id)
     if r is None or r.get("status") != "active" or not _has_pending_work(r):
         return False
     if _has_inflight_gate(round_id):
         return False  # 续跑合并(§4.4):在途段退出时由 handle_terminal 补触发
-    if RUNNER.quota_remaining("wolong", source="gate") <= 0:
+    if await RUNNER.quota_remaining("wolong", source="gate") <= 0:
         # 配额耗尽:静默等翌日(对账协程会再试),不铸注定失败的垃圾任务
         logger.warning("[rounds] gate 配额耗尽,round %s 续跑暂缓", round_id)
         return False

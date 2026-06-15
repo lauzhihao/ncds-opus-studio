@@ -15,7 +15,7 @@ import { api } from '../../api/client';
 import type { NodeState, PipelineNodeDef } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useToast } from '../Toast';
-import { ProcStatusRow } from './RwResultPanel';
+import { ProcStatusRow } from './ProcStatusRow';
 
 interface Props {
   jobId: string;

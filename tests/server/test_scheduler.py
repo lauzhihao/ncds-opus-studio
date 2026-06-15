@@ -50,7 +50,7 @@ def test_concurrency_cap(tmp_path: Path, monkeypatch):
     async def main():
         store = TaskStore(tmp_path / "tasks")
         runner = tr.TaskRunner(store, {"x": slow})
-        runner.recover_and_start()
+        await runner.recover_and_start()
         ids = [await runner.submit("x", {}) for _ in range(5)]
         assert await _wait_status(store, ids, "completed")
         return store, ids
@@ -67,7 +67,7 @@ def test_quota_fail_fast_and_gate_exempt(tmp_path: Path, monkeypatch):
     async def main():
         store = TaskStore(tmp_path / "tasks")
         runner = tr.TaskRunner(store, {"x": _ok})
-        runner.recover_and_start()
+        await runner.recover_and_start()
         ok1 = await runner.submit("x", {})
         ok2 = await runner.submit("x", {})
         over = await runner.submit("x", {})          # 第 3 个:超额
@@ -93,10 +93,11 @@ def test_dequeue_cas_skips_cancelled(tmp_path: Path):
     async def main():
         store = TaskStore(tmp_path / "tasks")
         runner = tr.TaskRunner(store, {"x": counting})
-        # 先提交(无 worker,堆在队列里),再取消,再拉起 worker
+        # 先提交(无 worker,堆在队列里)——lpush 进 Redis，再取消，再拉起 worker
+        # recover DEL 旧 List，disk-scan 时 status=cancelled 不进 backlog，不重投
         tid = await runner.submit("x", {})
         store.update_status(tid, "cancelled")
-        runner.recover_and_start()
+        await runner.recover_and_start()
         await asyncio.sleep(0.5)
         return store, tid
 
@@ -124,7 +125,7 @@ def test_recover_backlog_and_orphans(tmp_path: Path):
 
     async def main():
         runner = tr.TaskRunner(store, {"x": _ok})
-        runner.recover_and_start()
+        await runner.recover_and_start()
         assert await _wait_status(store, [fresh_pending.task_id, orphan_running.task_id], "completed")
 
     asyncio.run(main())
@@ -140,7 +141,7 @@ def test_cron_task_auto_archives(tmp_path: Path):
 
     async def main():
         runner = tr.TaskRunner(store, {"x": _ok}, labels=labels)
-        runner.recover_and_start()
+        await runner.recover_and_start()
         cron_id = await runner.submit("x", {"author": "a"}, source="cron")
         user_id = await runner.submit("x", {})
         assert await _wait_status(store, [cron_id, user_id], "completed")
@@ -247,7 +248,7 @@ def test_cron_failed_also_auto_archived(tmp_path: Path):
 
     async def main():
         runner = tr.TaskRunner(store, {"x": boom}, labels=labels)
-        runner.recover_and_start()
+        await runner.recover_and_start()
         tid = await runner.submit("x", {"author": "a"}, source="cron")
         assert await _wait_status(store, [tid], "failed")
         return tid
@@ -269,7 +270,7 @@ def test_inflight_tracking(tmp_path: Path):
     async def main():
         store = TaskStore(tmp_path / "tasks")
         runner = tr.TaskRunner(store, {"x": slow})
-        runner.recover_and_start()
+        await runner.recover_and_start()
         tid = await runner.submit("x", {})
         for _ in range(50):
             if started.is_set():
@@ -288,3 +289,110 @@ def test_inflight_tracking(tmp_path: Path):
     store, tid = asyncio.run(main())
     assert store.get_meta(tid).status == "cancelled"
     assert store.get_result(tid) is None
+
+
+# ---------------------------------------------------------------------------
+# S3 步3 防双投测试（fakeredis，不连真 Redis）
+# ---------------------------------------------------------------------------
+
+def test_recover_clears_redis_stale_before_disk_scan(tmp_path: Path):
+    """recover DEL 先于 disk-scan 重投：Redis List 残留 + 磁盘 pending，每个 task_id 只执行一次。
+
+    场景：
+    - 磁盘有一个 pending task_id（模拟上次 lpush 后进程崩溃，task 残留 pending）。
+    - Redis List 里也有同一 task_id（模拟旧进程已 lpush 但没 BRPOP）。
+    - recover 必须先 DEL List，再 disk-scan 全量重投一次。
+    - 断言：run_fn 只被调用一次（不是两次）——CAS 兜底第二次 _run 也能防重。
+    """
+    # 用简单计数器（不依赖 _dispatch_task_id 注入，那是 wolong-only 逻辑）
+    run_count = {"n": 0}
+
+    def counting(on_progress=None, **kw):
+        run_count["n"] += 1
+        return {"ok": True}
+
+    async def main():
+        store = TaskStore(tmp_path / "tasks")
+        runner = tr.TaskRunner(store, {"x": counting})
+
+        # 造一个真实 task_id（符合 _REAL_TASK_ID_RE）的 pending 任务
+        meta = store.create("x", {})
+        tid = meta.task_id
+
+        # 模拟 Redis List 里预先有该 task_id（旧进程已 lpush，但进程崩了没 brpop）
+        await runner._rq.lpush("x", tid)
+
+        # recover 先 DEL List（清掉上面那条残留），再 disk-scan（disk 还是 pending，重投一次）
+        await runner.recover_and_start()
+        # cancel 所有 worker（防 brpop 等 5s 拖慢测试，测试直接驱动 _run）
+        for w in runner._workers:
+            w.cancel()
+
+        # 直接断言 DEL 生效：Redis 残留 1 条 + 磁盘 pending 1 条，DEL 清残留后只重投 1 次
+        # → List 恰好 1 条(不是 2)。workers 刚 cancel、事件循环未 yield 给它们故未消费，
+        # 此处 llen 非竞态。这条直接守护「DEL 先于重投」决策——少了它仅靠 CAS 也能 exactly-once，
+        # 但 List 会残留双份(膨胀 + 多一次被 CAS 丢弃的空跑)。
+        assert await runner._rq._client.llen("nof:q:x") == 1, "DEL 未清残留：List 应恰好 1 条"
+
+        # 直接调 _run 模拟出队执行
+        # _run 是幂等 CAS（只跑 pending）：第一次执行后 status=completed，
+        # 第二次 CAS 检查到非 pending，静默跳过——不会双跑
+        await runner._run(tid, "x")
+        await runner._run(tid, "x")  # 第二次 CAS skip
+
+        return store, tid
+
+    store, tid = asyncio.run(main())
+    assert store.get_meta(tid).status == "completed", "task 应已 completed"
+    # 关键断言：只执行一次（DEL 清掉残留 + CAS 兜底，两层防双投）
+    assert run_count["n"] == 1, (
+        f"每个 task_id 应恰好执行一次，实际执行 {run_count['n']} 次"
+    )
+
+
+def test_recover_orphan_running_requeued_once(tmp_path: Path):
+    """孤儿 running 在 recover 时复位 pending 并重投，最终恰好执行一次。
+
+    场景：
+    - 磁盘有一个 running 任务（上次进程死在执行中，成为孤儿）。
+    - recover 应把它复位为 pending，然后 LPUSH 一次。
+    - 断言：run_fn 只被调用一次（不是零次也不是两次）。
+    """
+    run_count: dict[str, int] = {}
+
+    def counting(on_progress=None, **kw):
+        run_count["hit"] = run_count.get("hit", 0) + 1
+        return {"ok": True}
+
+    async def main():
+        store = TaskStore(tmp_path / "tasks")
+
+        # 造一个孤儿 running 任务
+        orphan = store.create("x", {})
+        tid = orphan.task_id
+        store.update_status(tid, "running")
+
+        runner = tr.TaskRunner(store, {"x": counting})
+
+        # recover 先 DEL 旧 List（空的），再 disk-scan 把 running 复位为 pending，lpush 一次
+        await runner.recover_and_start()
+        # cancel 所有 worker（防 brpop 等 5s 拖慢测试）
+        for w in runner._workers:
+            w.cancel()
+
+        # 此时 task 应已被 reset_for_requeue → pending，Redis List 有一条
+        meta_after = store.get_meta(tid)
+        assert meta_after is not None and meta_after.status == "pending", (
+            f"孤儿 running 应已复位为 pending，实际 {meta_after.status}"
+        )
+
+        # 直接调 _run 模拟出队执行
+        await runner._run(tid, "x")
+
+        return store, tid
+
+    store, tid = asyncio.run(main())
+    assert store.get_meta(tid).status == "completed"
+    assert run_count.get("hit", 0) == 1, (
+        f"孤儿恢复后应恰好执行一次，实际 {run_count.get('hit', 0)} 次"
+    )

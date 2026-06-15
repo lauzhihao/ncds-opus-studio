@@ -198,7 +198,7 @@ class _FakeRunner:
         self.quota = quota
         self.submits: list[dict[str, Any]] = []
 
-    def quota_remaining(self, cmd, source=None):  # noqa: ARG002
+    async def quota_remaining(self, cmd, source=None):  # noqa: ARG002
         return self.quota
 
     async def submit(self, cmd, params, source=None, **kw):  # noqa: ARG002

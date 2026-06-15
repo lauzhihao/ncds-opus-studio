@@ -34,6 +34,7 @@ import asyncio
 import json
 import logging
 import shutil
+import time
 from collections.abc import AsyncGenerator
 from dataclasses import asdict
 from typing import Any
@@ -385,40 +386,106 @@ async def put_episode(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str
 # SSE
 # ---------------------------------------------------------------------------
 
+# tail 轮询间隔（秒）：与 tasks.py 保持一致
+_TAIL_POLL_INTERVAL = 0.5
+
+
 @router.get("/jobs/{job_id}/events")
-async def stream_events(job_id: str) -> EventSourceResponse:
+async def stream_events(job_id: str, since_seq: int | None = None) -> EventSourceResponse:
     """SSE：订阅 job 的节点状态变更事件。
 
     协议
     ----
     每条事件 data 字段是一行 JSON：
+        {"type": "snapshot",    "job_id": "...", "state": {...}}  -- 首帧全量
         {"type": "node_status", "job_id": "...", "node": "asr", "state": {...}}
-        {"type": "job_updated",  "job_id": "...", "state": {...}}
+        {"type": "job_updated", "job_id": "...", "state": {...}}
     无终止信号；前端按需 close 连接。
+
+    断线重连
+    --------
+    带 ?since_seq=N 时：发完 snapshot 后，从 events.jsonl 重放 seq>N 的历史事件，
+    再继续 tail 新增——保证断线期间不丢事件。
+    不带时（默认）：snapshot 全量 + 之后的增量，不重放历史，等价于旧行为。
     """
     try:
         PIPELINE_RUNNER.get_job(job_id)
     except KeyError:
         raise HTTPException(404, f"job not found: {job_id}")
 
-    queue = PIPELINE_RUNNER.bus.subscribe(job_id)
+    events_path = PIPELINE_RUNNER._events_file(job_id)
 
     async def gen() -> AsyncGenerator[dict, None]:
-        # 首条：把全量 state 推一遍，让前端不需要再 GET /jobs/{id}
+        # 修复竞态（缺口1）：必须先锁定 tail_start_pos（= 读 snapshot 之前文件的末位）
+        # 再 yield snapshot，再 yield replay，才能保证竞态窗口内的事件：
+        #   - 要么已被 snapshot 覆盖（snapshot 的 _load 在 tail_start_pos 对应的时刻之后）
+        #   - 要么被 tail 重发（tail 从 tail_start_pos 开始）
+        # 旧顺序（snapshot → 记录 offset）有真丢窗口：事件在 get_job 之后、tell() 之前被 _emit
+        # → 不在 snapshot 里、又因 offset 记在它之后不被 tail 读到。
+
+        # 1) 先锁定 tail_start_pos + 收集 replay_lines（since_seq 模式）
+        replay_lines: list[str] = []
+        tail_start_pos = 0
+
+        if events_path.is_file():
+            try:
+                with events_path.open("r", encoding="utf-8") as fh:
+                    if since_seq is not None:
+                        # 重放 seq > since_seq 的历史事件
+                        for raw in fh:
+                            raw = raw.rstrip("\n")
+                            if not raw:
+                                continue
+                            try:
+                                obj = json.loads(raw)
+                                if int(obj.get("seq") or 0) > since_seq:
+                                    replay_lines.append(raw)
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+                    tail_start_pos = fh.tell()
+            except OSError:
+                tail_start_pos = 0
+        else:
+            # 文件不存在时：用 stat().st_size 等价 0，保持安全
+            tail_start_pos = 0
+
+        # 2) 首帧：全量 snapshot（保持前端契约）
+        #    get_job 在 tail_start_pos 锁定之后读取，反映的状态 >= 对应时刻
         snapshot = PIPELINE_RUNNER.get_job(job_id)
+        snapshot_ts = time.time()
         yield {"data": _json_dumps({
             "type": "snapshot",
             "job_id": job_id,
             "state": _serialize_job(snapshot),
+            "ts": snapshot_ts,
         })}
+
+        # 3) 重放断线历史（since_seq 模式）
+        for raw in replay_lines:
+            yield {"data": raw}
+
+        # 4) 持续 tail events.jsonl 新增内容，直到客户端断开
+        last_pos = tail_start_pos
         try:
             while True:
-                event = await queue.get()
-                yield {"data": _json_dumps(event)}
+                await asyncio.sleep(_TAIL_POLL_INTERVAL)
+                if not events_path.is_file():
+                    continue
+                try:
+                    size = events_path.stat().st_size
+                except OSError:
+                    continue
+                if size > last_pos:
+                    with events_path.open("r", encoding="utf-8") as fh:
+                        fh.seek(last_pos)
+                        for raw in fh:
+                            raw = raw.rstrip("\n")
+                            if raw:
+                                yield {"data": raw}
+                        last_pos = fh.tell()
         except asyncio.CancelledError:
+            # 客户端断开，正常退出；无需发 [DONE]（pipeline 无终态信号，前端按需 close）
             raise
-        finally:
-            PIPELINE_RUNNER.bus.unsubscribe(job_id, queue)
 
     return EventSourceResponse(gen())
 

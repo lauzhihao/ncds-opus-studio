@@ -26,12 +26,15 @@ dependencies = [
     # "socksio not installed"。deepseek 已 trust_env=False 绕过代理，此扩展留作其它 httpx 路径的兜底
     "httpx[socks]>=0.27",
     "websockets>=12",
+    # Worker 拆分 S3：跨进程任务队列(nof-worker 消费 / 8810 入队)+ 配额原子计数
+    "redis>=5",
 ]
 
 [project.scripts]
 ncds-opus-factory = "ncds_opus_factory.cli:main"
 nof = "ncds_opus_factory.cli:main"
 nof-server = "ncds_opus_factory.server.app:cli_main"
+nof-worker = "ncds_opus_factory.server.worker:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -47,3 +50,7 @@ pythonpath = ["src"]
 # （旧"三包对等拆分"已作废，packages/studio 空骨架已删。）
 [tool.uv.workspace]
 members = ["packages/*"]
+
+[dependency-groups]
+# 仅测试用：queue_test / task_runner_test 用 fakeredis 跑，免 CI 依赖真 redis-server
+dev = ["fakeredis>=2"]

@@ -3,13 +3,15 @@
 每个 command.run 都是「同步阻塞函数 + on_progress(text) 回调」的统一形态，
 执行仍在 asyncio.to_thread 的工作线程里跑。P2 调度化（docs/WOLONG-DESIGN.md §2）：
 
-1. submit()/requeue() 统一投 per-cmd 等待队列，不再 fire-and-forget——多实例
+1. submit()/requeue() 统一投 per-cmd Redis List 队列，不再 fire-and-forget——多实例
    执行必须收口：沈括撞 TikHub 限流、卧龙耗 sclaude 账号池、柳永吃 scodex 子进程。
 2. worker 在 app startup 钩子里拉起（RUNNER 在 import 期构建，当时无 event loop）；
    出队做 pending→running 的 CAS：排队中被取消、cancel→restore 双入队都不会双跑
    （检查与置位之间无 await，单事件循环上原子）。
-3. 启动恢复：队列在进程内存，重启即蒸发。startup 扫 store 把 pending 积压重新入队、
-   孤儿 running 复位；超过恢复期限的直接判 failed（可见可重发，不留僵尸）。
+3. 启动恢复：队列切为 Redis List（S3 步3），recover 第一步强制 DEL 所有 cmd List，
+   然后磁盘 disk-scan 全量重投——磁盘是真相源，Redis 旧 List 任何残留都作废，
+   杜绝"List 残留 + disk-scan 又投"双份。孤儿 running 复位为 pending 再入队；
+   超过恢复期限的直接判 failed（可见可重发，不留僵尸）。
 4. 配额：派单类（user/wolong/cron）受每日配额，超额直接 failed 并注明原因；
    续跑/复盘类（gate/retro）豁免——闸门任务不能因配额死掉（§4.5）。
 5. 投递：source=cron 的任务完成即自动归档（reviewer=system 写 review）——
@@ -28,6 +30,7 @@ from typing import Any, Callable
 
 from ncds_opus_factory.common import cancel
 from ncds_opus_factory.server.label_store import LabelStore
+from ncds_opus_factory.server.queue import RedisQueue, get_default_queue
 from ncds_opus_factory.server.schemas import Review, TaskMeta
 from ncds_opus_factory.server.task_store import TaskStore
 
@@ -98,18 +101,19 @@ class TaskRunner:
         store: TaskStore,
         registry: dict[str, RunFn],
         labels: LabelStore | None = None,
+        redis_queue: "RedisQueue | None" = None,
     ) -> None:
         self.store = store
         self.registry = registry
         self.labels = labels
-        self._queues: dict[str, asyncio.Queue[str]] = {}
+        # 配额真相源改为 Redis 原子计数（S3 步2），跨进程不再翻倍
+        # 队列机制改为 Redis List（S3 步3），_queues 内存队列已删除
+        self._rq = redis_queue or get_default_queue()
         self._workers: list[asyncio.Task] = []
         self._started = False
         # 终态钩子(round 事件接线,§4.2):app startup 注入 rounds_gate.handle_terminal,
         # 不在此 import——避免 server 子模块循环依赖
         self.on_terminal: Callable[..., Any] | None = None
-        # 配额记账 {(YYYY-MM-DD, 桶key): count}；只留当天,翻天即弃
-        self._quota_used: dict[tuple[str, str], int] = {}
         # 在途集合:出队 CAS 看不见还活着的旧工作线程,restore 必须问这里——
         # 「执行中取消→立刻恢复」否则会双线程跑同一任务
         self._inflight: set[str] = set()
@@ -139,19 +143,15 @@ class TaskRunner:
             return f"retro:{cmd}", max(0, DAILY_QUOTA["_retro"])
         return cmd, max(0, DAILY_QUOTA.get(cmd, DAILY_QUOTA["_default"]))
 
-    def quota_remaining(self, cmd: str, source: str | None = None) -> int:
-        """当日剩余配额（订阅 tick 等生产者在提交前自查,别制造注定失败的任务）。"""
+    async def quota_remaining(self, cmd: str, source: str | None = None) -> int:
+        """当日剩余配额软预查（精确闸在 _run 的 incr_quota 原子判，此处仅供 loop 提前感知）。"""
         key, limit = self._quota_key_and_limit(cmd, source)
-        return max(0, limit - self._quota_used.get((_today(), key), 0))
+        used = await self._rq.get_quota(key, _today())
+        return max(0, limit - used)
 
     def is_inflight(self, task_id: str) -> bool:
         """该任务是否仍有工作线程在执行（restore 据此拒绝过早恢复）。"""
         return task_id in self._inflight
-
-    def _quota_take(self, key: str) -> None:
-        full = (_today(), key)
-        self._quota_used = {k: v for k, v in self._quota_used.items() if k[0] == full[0]}
-        self._quota_used[full] = self._quota_used.get(full, 0) + 1
 
     # ------------------------------------------------------------
     # 提交 / 恢复入队
@@ -179,18 +179,12 @@ class TaskRunner:
             cmd, params, source=source, parent_task_id=parent_task_id,
             round_id=round_id, intent_key=intent_key,
         )
-        # 配额闸门：超额 fail-fast（任务可见、可改天重发），不入队
-        key, quota = self._quota_key_and_limit(cmd, source)
-        if self._quota_used.get((_today(), key), 0) >= quota:
-            msg = f"今日配额已用完(桶 {key}: {quota}/天),任务未入队;明天自动恢复或调大 NOF_DAILY_QUOTA"
-            self.store.append_error(meta.task_id, msg)
-            self.store.update_status(meta.task_id, "failed", error=msg)
-            # 系统任务(cron/gate)被配额拒绝也要自动归档,不准在收件箱点红灯
-            self._maybe_auto_archive(meta, None)
-            logger.warning("[TaskRunner] quota exceeded: bucket=%s task=%s", key, meta.task_id)
-            return meta.task_id
-        self._quota_take(key)
-        self._enqueue(cmd, meta.task_id)
+        # 配额判定移到 _run 出队侧（Redis incr_quota 原子判，跨进程不翻倍）。
+        # 顺序约束（S3 决策 E 死约束）：dedup 扫 store(同步) → store.create(同步) → 最后才 await lpush。
+        # 严禁把 await 挪到 create 之前——planner/rounds_gate「检查→submit」
+        # 两次并发 maybe_resume 在同一 event loop 上仍协作式串行，
+        # 第一次 create 落盘后第二次扫 store 能看到，从而防卧龙双投。
+        await self._enqueue(cmd, meta.task_id)
         return meta.task_id
 
     async def requeue(self, task_id: str, cmd: str) -> None:
@@ -198,47 +192,52 @@ class TaskRunner:
 
         与 submit 同走队列：恢复的任务同样受并发额度约束（不再绕过调度）。
         """
-        self._enqueue(cmd, task_id)
+        await self._enqueue(cmd, task_id)
 
-    def _enqueue(self, cmd: str, task_id: str) -> None:
+    async def _enqueue(self, cmd: str, task_id: str) -> None:
+        """LPUSH 入 Redis List（左进 BRPOP 右出 = FIFO，旧的先跑）。
+
+        重要顺序约束（S3 决策 E 死约束）：
+        submit 体内必须先同步完成 dedup 扫 store + store.create，
+        最后才 await _enqueue(lpush)。
+        绝不把 await 挪到 create 之前——planner/rounds_gate 的「检查→submit」
+        之间无 await 的协作式原子性（防卧龙双投）依赖 create 先于 lpush 落盘。
+        """
         if not self._started:
             # 嵌入方/测试没跑 recover_and_start 时别静默吞任务
             logger.warning("[TaskRunner] runner 未启动,任务 %s 将滞留队列直到 recover_and_start", task_id)
-        self._queue(cmd).put_nowait(task_id)
-
-    def _queue(self, cmd: str) -> asyncio.Queue[str]:
-        if cmd not in self._queues:
-            self._queues[cmd] = asyncio.Queue()
-        return self._queues[cmd]
+        await self._rq.lpush(cmd, task_id)
 
     # ------------------------------------------------------------
     # 启动：恢复积压 + 拉起 worker（必须在运行中的 event loop 上调用）
     # ------------------------------------------------------------
-    def recover_and_start(self) -> int:
-        """扫描 store 恢复积压，按额度拉起 worker。返回重新入队的任务数。"""
+    async def recover_and_start(self) -> int:
+        """扫描 store 恢复积压，按额度拉起 worker。返回重新入队的任务数。
+
+        队列切 Redis（S3 步3）后的 recover 协议：
+        1. 先 DEL 所有 cmd 的旧 Redis List——磁盘是真相源，重启以 disk-scan 全量重建队列，
+           Redis 旧 List 任何残留都作废，杜绝「残留 + disk-scan 又投」双份同一 task_id。
+        2. disk-scan：孤儿 running 复位 pending、超龄判 failed、补写 auto_archive，收集 backlog。
+        3. 按 reversed(backlog)（旧的先跑）await _enqueue（lpush）全量重投。
+        4. 才起 per-cmd BRPOP worker。
+        """
         if self._started:
             return 0
         self._started = True
 
+        # 第一步：DEL 所有 cmd 的旧 Redis List（必须在 disk-scan 重投之前）。
+        # 磁盘是真相源，重启以磁盘 pending 全量重建队列，Redis 旧队列作废。
+        for cmd in self.registry:
+            await self._rq.delete(cmd)
+
         cutoff = datetime.now() - timedelta(hours=RECOVER_MAX_AGE_HOURS)
-        today = _today()
         backlog: list[TaskMeta] = []
         for meta in self.store.list_tasks():
             try:
                 if meta.cmd not in self.registry:
                     continue
-                # 重建当天配额记账。配额拒绝的秒 failed 行(从未入队)不计——
-                # 否则「调大配额+重启」这条逃生通道会被昨天的拒绝记录啃掉
-                quota_rejected = (
-                    meta.status == "failed"
-                    and meta.started_at is None
-                    and "配额" in (meta.error or "")
-                )
-                if meta.created_at.startswith(today) and not quota_rejected:
-                    key, _ = self._quota_key_and_limit(meta.cmd, meta.source)
-                    self._quota_used[(today, key)] = (
-                        self._quota_used.get((today, key), 0) + 1
-                    )
+                # 配额重建段已删除（S3 步2）：配额真相源改 Redis，重启时 Redis 计数天然保留，
+                # 无需从 store 重扫重建内存计数。
                 # 系统任务自动归档的崩溃窗口兜底:终态却没 review 的补写 system 归档
                 # (适用范围由 _maybe_auto_archive 自己判定:cron/卧龙段/无闸阶段)
                 if (
@@ -278,7 +277,7 @@ class TaskRunner:
 
         # 旧的先跑（list_tasks 最新在前,反转即按 created_at 升序）
         for meta in reversed(backlog):
-            self._enqueue(meta.cmd, meta.task_id)
+            await self._enqueue(meta.cmd, meta.task_id)
 
         for cmd in self.registry:
             for i in range(self.concurrency_for(cmd)):
@@ -292,15 +291,21 @@ class TaskRunner:
         return len(backlog)
 
     async def _worker(self, cmd: str) -> None:
-        q = self._queue(cmd)
+        """从 Redis List BRPOP 取任务执行。
+
+        BRPOP timeout=5 超时返回 None，循环重试（不阻塞 event loop，
+        每次 brpop 等待期间 event loop 可以处理其他协程）。
+        ConnectionError 由 brpop 内部退避重连，此处只需 continue。
+        """
         while True:
-            task_id = await q.get()
+            task_id = await self._rq.brpop(cmd, timeout=5)
+            if task_id is None:
+                # 超时或退避期间返回 None，继续轮询
+                continue
             try:
                 await self._run(task_id, cmd)
             except Exception:  # noqa: BLE001 — 单任务异常不能杀 worker
                 logger.exception("[TaskRunner] worker error: cmd=%s task=%s", cmd, task_id)
-            finally:
-                q.task_done()
 
     def _is_cancelled(self, task_id: str) -> bool:
         meta = self.store.get_meta(task_id)
@@ -314,7 +319,22 @@ class TaskRunner:
             logger.info("[TaskRunner] task %s skipped at dequeue (status=%s)",
                         task_id, meta.status if meta else "missing")
             return
+        # Redis 配额原子判定（S3 步2 决策 B）：判定收口到 worker 出队侧，跨进程不翻倍。
+        # 位置：出队 CAS 之后、置 running 之前；语义等价原 submit 闸门，但时机变成「出队时」。
         run_fn = self.registry[cmd]
+        key, limit = self._quota_key_and_limit(cmd, meta.source)
+        _n, ok = await self._rq.incr_quota(key, _today(), limit)
+        if not ok:
+            msg = (
+                f"今日配额已用完(桶 {key}: {limit}/天),任务未执行;"
+                f"明天自动恢复或调大 NOF_DAILY_QUOTA"
+            )
+            self.store.append_error(task_id, msg)
+            self.store.update_status(task_id, "failed", error=msg)
+            # 系统任务被配额拒绝也自动归档，不准在收件箱点红灯
+            self._maybe_auto_archive(meta, None)
+            logger.warning("[TaskRunner] quota exceeded at dequeue: bucket=%s task=%s", key, task_id)
+            return
         self.store.update_status(task_id, "running")
         self._inflight.add(task_id)
         params = meta.params

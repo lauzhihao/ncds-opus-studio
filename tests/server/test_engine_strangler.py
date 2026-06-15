@@ -34,7 +34,7 @@ class _FakeEngine:
         self.calls.append(("reset", iid, node))
         return [node]
 
-    async def run_step(self, iid: str, node: str, step_inputs, on_progress=None):
+    async def run_step(self, iid: str, node: str, step_inputs, on_progress=None, cancel_check=None):
         self.calls.append(("run", iid, node, step_inputs))
         if on_progress is not None:
             on_progress(f"{node} 引擎进度")        # 透传回 facade（绞杀者桥接）
