@@ -54,19 +54,12 @@ from ncds_opus_factory.server.routes import subscriptions as subscriptions_route
 from ncds_opus_factory.server.routes import tasks as tasks_routes
 from ncds_opus_factory.server.routes import templates as templates_routes
 from ncds_opus_factory.server.routes import works as works_routes
-from ncds_opus_factory.server import rounds_gate
 from ncds_opus_factory.server.maintenance import (
-    CRON_TTL_HOURS,
-    DISCARD_TTL_HOURS,
-    _DISCARD_SWEEP_INTERVAL_S,
-    _discard_sweeper,
-    _round_reconciler,
     backfill_labels_once,  # re-export: 保持对外接口兼容（test_labels 经 app_mod 调）
     sweep_cron_once,       # re-export: 同上
     sweep_discarded_once,  # re-export: 同上
 )
 from ncds_opus_factory.server.state import LABELS, RUNNER, STATE_DIR, STORE
-from ncds_opus_factory.server.subscriptions import subscription_loop, subscriptions_path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,37 +144,15 @@ async def health_check() -> dict:
 
 @app.on_event("startup")
 async def _startup_log() -> None:
-    import asyncio
-
+    # S3 步6（切换点）：8810 已瘦身为纯 producer + serve。
+    # 不再在此做 recover_and_start / 起 loop / 挂 on_terminal——
+    # 所有 worker 职责（任务执行、订阅/retro/planner/discard loop）已移入 nof-worker 进程。
+    # 8810 只负责：HTTP 路由 / SSE 文件 tail / POST 入队（lpush）/ GET serve 状态。
     logger.info(
         "[nof-server] ready. state_dir=%s commands=%s",
         STATE_DIR,
         RUNNER.list_commands(),
     )
-    # round 事件接线(§4.2):任务终态 -> 编排层。先挂钩子再恢复积压,别漏事件
-    RUNNER.on_terminal = rounds_gate.handle_terminal
-    # 调度器:恢复积压(重启后 Redis List 先 DEL 再 disk-scan 全量重投) + 按 per-cmd 额度拉起 worker
-    # recover_and_start 改 async（S3 步3），startup 已是 async，直接 await
-    recovered = await RUNNER.recover_and_start()
-    if recovered:
-        logger.info("[nof-server] 重启恢复: %d 个积压任务重新入队", recovered)
-    asyncio.create_task(_discard_sweeper())
-    asyncio.create_task(_round_reconciler())
-    logger.info("[sweep] 弃用清扫已启动: TTL=%.0fh, cron TTL=%.0fh, 间隔=%ds",
-                DISCARD_TTL_HOURS, CRON_TTL_HOURS, _DISCARD_SWEEP_INTERVAL_S)
-    # 订阅传感器(NOF_SUBSCRIPTIONS=0 停用;无订阅文件时空转)
-    if os.environ.get("NOF_SUBSCRIPTIONS", "1") != "0":
-        asyncio.create_task(subscription_loop(RUNNER, STORE, subscriptions_path(STATE_DIR)))
-    # 复盘触发器(P4,§8.3):每晚低峰投递 retro 段。NOF_RETRO=0 停用;样本不足时空转
-    if os.environ.get("NOF_RETRO", "1") != "0":
-        from ncds_opus_factory.server.retro_trigger import retro_loop
-
-        asyncio.create_task(retro_loop(RUNNER, STORE))
-    # 排产策略(P5,§8.4):信号事件→深采→选题补货。NOF_PLANNER=0 停用;冷启动空转
-    if os.environ.get("NOF_PLANNER", "1") != "0":
-        from ncds_opus_factory.server.planner import planner_loop
-
-        asyncio.create_task(planner_loop(RUNNER, STORE))
 
 
 def cli_main() -> None:

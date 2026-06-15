@@ -11,6 +11,7 @@ import logging
 import os
 
 from ncds_opus_factory.server import rounds_gate
+from ncds_opus_factory.server.queue import get_default_queue
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,10 @@ async def _round_reconciler() -> None:
     import asyncio
 
     while True:
+        # Redis 探活：down 时静默跳过本 tick，不创建垃圾 failed meta（决策 D）。
+        if not await get_default_queue().ping():
+            await asyncio.sleep(_ROUND_RECONCILE_INTERVAL_S)
+            continue
         try:
             n = await rounds_gate.reconcile_once()
             if n:

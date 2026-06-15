@@ -276,14 +276,15 @@ def test_inflight_tracking(tmp_path: Path):
             if started.is_set():
                 break
             await asyncio.sleep(0.02)
-        assert runner.is_inflight(tid)
+        # S3 步7：is_inflight 改 async（Redis SISMEMBER）
+        assert await runner.is_inflight(tid)
         # 执行中取消:任务保持 cancelled、结果作废,且退出后 in-flight 清空
         store.update_status(tid, "cancelled")
         for _ in range(100):
-            if not runner.is_inflight(tid):
+            if not await runner.is_inflight(tid):
                 break
             await asyncio.sleep(0.02)
-        assert not runner.is_inflight(tid)
+        assert not await runner.is_inflight(tid)
         return store, tid
 
     store, tid = asyncio.run(main())

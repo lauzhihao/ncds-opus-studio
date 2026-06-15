@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ncds_opus_factory.server.queue import get_default_queue
 from ncds_opus_factory.server.task_runner import TaskRunner
 from ncds_opus_factory.server.task_store import TaskStore
 
@@ -167,6 +168,10 @@ async def subscription_loop(runner: TaskRunner, store: TaskStore, path: Path) ->
     logger.info("[subscriptions] 订阅传感器启动: %s", path)
     while True:
         try:
+            # Redis 探活：down 时静默跳过本 tick，不创建垃圾 failed meta（决策 D）。
+            if not await get_default_queue().ping():
+                await asyncio.sleep(_ERROR_RETRY_S)
+                continue
             n = await run_subscription_tick(runner, store, path)
             if n:
                 logger.info("[subscriptions] 本轮派发 %d 个刷新任务", n)

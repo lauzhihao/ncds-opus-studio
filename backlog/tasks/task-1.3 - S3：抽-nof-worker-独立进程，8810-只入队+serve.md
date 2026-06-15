@@ -1,7 +1,7 @@
 ---
 id: task-1.3
 title: S3：抽 nof-worker 独立进程，8810 只入队+serve
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-15 02:39'
 labels:
@@ -25,10 +25,10 @@ priority: high
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 nof-worker 独立进程能消费队列、执行 pipeline、写 events.jsonl/pipeline_state.json
-- [ ] #2 **TaskRunner 类任务**不在 8810 执行(画布/引擎 run_node/run_step 暂留 8810、S3.x 迁，scope a)；kill -TERM 重启 8810 时 nof-worker 在跑的 agent 任务不中断
-- [ ] #3 端到端：起 8810+nof-worker、发采集任务、重启 8810、任务继续且 SSE 重连续看进度
-- [ ] #4 task_store 并发写无竞态(worker 单写状态/HTTP 入队)；pytest 绿
+- [x] #1 nof-worker 独立进程能消费队列、执行 pipeline、写 events.jsonl/pipeline_state.json
+- [x] #2 **TaskRunner 类任务**不在 8810 执行(画布/引擎 run_node/run_step 暂留 8810、S3.x 迁，scope a)；kill -TERM 重启 8810 时 nof-worker 在跑的 agent 任务不中断
+- [x] #3 端到端：起 8810+nof-worker、发采集任务、重启 8810、任务继续且 SSE 重连续看进度
+- [x] #4 task_store 并发写无竞态(worker 单写状态/HTTP 入队)；pytest 绿
 - [x] #5 (从 S2 移交)取消 running 节点时 spawn 子进程被 SIGTERM：worker 在节点执行的 to_thread 边界 install 读 `is_flagged(cancel_flag)` 的 checker，覆盖 engine + legacy(`_execute_asr`/`_collect_one`) + enrich；`tts_gen`/`video_pipeline` 的 Popen 循环轮询 flag 并 terminate；`cancel_node` 命中时连带 cancel `_enrich_tasks[job_id]`
 <!-- AC:END -->
 

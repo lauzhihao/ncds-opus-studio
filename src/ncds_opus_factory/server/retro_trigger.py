@@ -22,6 +22,7 @@ from datetime import datetime
 
 from ncds_opus_factory.common import rubric_store
 from ncds_opus_factory.commands.wolong_retro import MIN_LABELS
+from ncds_opus_factory.server.queue import get_default_queue
 from ncds_opus_factory.server.task_runner import TaskRunner
 from ncds_opus_factory.server.task_store import TaskStore
 
@@ -84,6 +85,10 @@ async def retro_loop(runner: TaskRunner, store: TaskStore) -> None:
                 RETRO_HOUR, _WINDOW_HOURS, MIN_LABELS)
     while True:
         try:
+            # Redis 探活：down 时静默跳过本 tick，不创建垃圾 failed meta（决策 D）。
+            if not await get_default_queue().ping():
+                await asyncio.sleep(_CHECK_INTERVAL_S)
+                continue
             await retro_tick(runner, store)
             await asyncio.sleep(_CHECK_INTERVAL_S)
         except asyncio.CancelledError:

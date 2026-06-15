@@ -17,6 +17,11 @@ from typing import Optional
 import redis.asyncio as aioredis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
+# TimeoutError 是 RedisError 的子类（与 ConnectionError 兄弟关系）。
+# brpop 设了 socket_timeout 时，服务端正常空轮询（无新任务）会在 socket 层
+# 先于服务端 nil 超时，抛 RedisTimeoutError 而非返回 None——这是正常现象，
+# 不应走退避分支。必须在 except RedisError 之前单独截获。
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +103,14 @@ class RedisQueue:
                 return None
             # result = (key_bytes, value_bytes)
             return result[1].decode()
+        except RedisTimeoutError:
+            # 正常空轮询超时（socket_timeout <= brpop timeout 时，socket 层先于服务端
+            # nil 超时抛出 RedisTimeoutError）——与「brpop 返回 None」语义相同，即无新任务。
+            # 重置退避回初值（不惩罚正常空闲），直接返回 None，不打告警日志。
+            self._brpop_backoff = _BACKOFF_INIT
+            return None
         except (RedisConnectionError, RedisError) as exc:
-            # 连接故障：退避后返回 None，让 worker 外层 while 自然重试。
+            # 真连接故障（网络断开/Redis 宕机）：退避后返回 None，让 worker 外层 while 自然重试。
             # 退避跨调用累积(实例属性)才是真指数；封顶 _BACKOFF_MAX。
             wait = self._brpop_backoff
             logger.warning("brpop connection error, backoff %.1fs: %s", wait, exc)
@@ -164,6 +175,33 @@ class RedisQueue:
             return await self._client.ping()
         except (RedisConnectionError, RedisError):
             return False
+
+    # -------------------------------------------------------------------------
+    # inflight 跨进程 Set（S3 步7，blocker#6）
+    # key: nof:inflight，SADD/SREM/SISMEMBER/DEL
+    # -------------------------------------------------------------------------
+
+    _INFLIGHT_KEY = f"{_PREFIX}inflight"
+
+    async def add_inflight(self, task_id: str) -> None:
+        """SADD nof:inflight task_id：标记任务在途（worker _run 入口调用）。"""
+        await self._client.sadd(self._INFLIGHT_KEY, task_id)
+
+    async def remove_inflight(self, task_id: str) -> None:
+        """SREM nof:inflight task_id：任务结束/取消后清除在途标记（worker _run finally 调用）。"""
+        await self._client.srem(self._INFLIGHT_KEY, task_id)
+
+    async def is_inflight(self, task_id: str) -> bool:
+        """SISMEMBER nof:inflight task_id：跨进程判断任务是否在途（restore 路由调用）。"""
+        return bool(await self._client.sismember(self._INFLIGHT_KEY, task_id))
+
+    async def clear_inflight(self) -> None:
+        """DEL nof:inflight：worker 启动恢复时清除上次进程遗留的脏在途标记。
+
+        worker 进程重启后内存里没有真正在途的任务；Redis inflight Set 里若还有残留，
+        是上次进程崩溃前来不及 SREM 留下的脏状态，不清则 restore 永久返回 409（blocker#6）。
+        """
+        await self._client.delete(self._INFLIGHT_KEY)
 
     async def aclose(self) -> None:
         """关连接归还，优雅停服防泄漏。仅关自己创建的 client。"""

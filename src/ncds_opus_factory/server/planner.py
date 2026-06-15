@@ -46,6 +46,7 @@ from typing import Any
 
 from ncds_opus_factory.commands import wolong_rounds
 from ncds_opus_factory.common import topic_store
+from ncds_opus_factory.server.queue import get_default_queue
 from ncds_opus_factory.server.task_runner import TaskRunner
 from ncds_opus_factory.server.task_store import TaskStore
 
@@ -451,6 +452,10 @@ async def planner_loop(runner: TaskRunner, store: TaskStore) -> None:
             "但生产者(沈括)写死仓库根 state/——口径不一致时事件链将静默空转(模块 docstring)")
     while True:
         try:
+            # Redis 探活：down 时静默跳过本 tick，不创建垃圾 failed meta（决策 D）。
+            if not await get_default_queue().ping():
+                await asyncio.sleep(INTERVAL_S)
+                continue
             stats = await planner_tick(runner, store)
             if any(stats.values()):
                 logger.info("[planner] 本轮: 事件 %d, 链转鬼谷子 %d, 补货 %d",

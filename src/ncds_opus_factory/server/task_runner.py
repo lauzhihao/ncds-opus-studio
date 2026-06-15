@@ -33,10 +33,25 @@ from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.queue import RedisQueue, get_default_queue
 from ncds_opus_factory.server.schemas import Review, TaskMeta
 from ncds_opus_factory.server.task_store import TaskStore
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
 RunFn = Callable[..., dict[str, Any]]
+
+
+class EnqueueUnavailable(RuntimeError):
+    """Redis 入队失败时抛出，携带已创建的 task_id 供调用方返回 503 + task_id。
+
+    语义：meta 已置 failed，task_id 可追踪；调用方（routes/tasks.py）需将
+    HTTP 状态码改为 503 并透出 task_id，让前端得知任务已创建但无法调度。
+    """
+
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"enqueue failed: redis unavailable (task_id={task_id})")
+        self.task_id = task_id
+
 
 # ---------------------------------------------------------------------------
 # 并发与配额配置。env 用 JSON 覆盖单项：NOF_CONCURRENCY='{"shenkuo":1}'
@@ -114,9 +129,8 @@ class TaskRunner:
         # 终态钩子(round 事件接线,§4.2):app startup 注入 rounds_gate.handle_terminal,
         # 不在此 import——避免 server 子模块循环依赖
         self.on_terminal: Callable[..., Any] | None = None
-        # 在途集合:出队 CAS 看不见还活着的旧工作线程,restore 必须问这里——
-        # 「执行中取消→立刻恢复」否则会双线程跑同一任务
-        self._inflight: set[str] = set()
+        # 在途集合已改为 Redis Set（S3 步7，blocker#6）：
+        # 跨进程可见（8810 restore 路由读，worker _run 写），见 queue.py add/remove/is_inflight
 
     def list_commands(self) -> list[str]:
         return sorted(self.registry.keys())
@@ -149,9 +163,13 @@ class TaskRunner:
         used = await self._rq.get_quota(key, _today())
         return max(0, limit - used)
 
-    def is_inflight(self, task_id: str) -> bool:
-        """该任务是否仍有工作线程在执行（restore 据此拒绝过早恢复）。"""
-        return task_id in self._inflight
+    async def is_inflight(self, task_id: str) -> bool:
+        """该任务是否仍有工作线程在执行（restore 据此拒绝过早恢复）。
+
+        S3 步7：改用 Redis SISMEMBER（跨进程可见）替代原内存 set，
+        8810 restore 路由和 nof-worker 执行进程各读各写同一 Redis Key。
+        """
+        return await self._rq.is_inflight(task_id)
 
     # ------------------------------------------------------------
     # 提交 / 恢复入队
@@ -184,7 +202,15 @@ class TaskRunner:
         # 严禁把 await 挪到 create 之前——planner/rounds_gate「检查→submit」
         # 两次并发 maybe_resume 在同一 event loop 上仍协作式串行，
         # 第一次 create 落盘后第二次扫 store 能看到，从而防卧龙双投。
-        await self._enqueue(cmd, meta.task_id)
+        try:
+            await self._enqueue(cmd, meta.task_id)
+        except (RedisConnectionError, RedisError) as exc:
+            # lpush 连不上 Redis：决策 D——将 meta 标为 failed，避免留下幽灵 pending 任务。
+            # 不静默吞异常：抛 EnqueueUnavailable 让路由层返回 503+task_id（前端可追踪）。
+            err_msg = f"enqueue failed: redis unavailable ({exc})"
+            self.store.update_status(meta.task_id, "failed", error=err_msg)
+            logger.error("[TaskRunner] submit failed, task marked failed: %s (%s)", meta.task_id, exc)
+            raise EnqueueUnavailable(meta.task_id) from exc
         return meta.task_id
 
     async def requeue(self, task_id: str, cmd: str) -> None:
@@ -192,7 +218,14 @@ class TaskRunner:
 
         与 submit 同走队列：恢复的任务同样受并发额度约束（不再绕过调度）。
         """
-        await self._enqueue(cmd, task_id)
+        try:
+            await self._enqueue(cmd, task_id)
+        except (RedisConnectionError, RedisError) as exc:
+            # restore 时 redis 挂：同样置 failed 防幽灵，并向上抛告知调用方失败原因。
+            err_msg = f"requeue failed: redis unavailable ({exc})"
+            self.store.update_status(task_id, "failed", error=err_msg)
+            logger.error("[TaskRunner] requeue failed, task marked failed: %s (%s)", task_id, exc)
+            raise EnqueueUnavailable(task_id) from exc
 
     async def _enqueue(self, cmd: str, task_id: str) -> None:
         """LPUSH 入 Redis List（左进 BRPOP 右出 = FIFO，旧的先跑）。
@@ -225,10 +258,13 @@ class TaskRunner:
             return 0
         self._started = True
 
-        # 第一步：DEL 所有 cmd 的旧 Redis List（必须在 disk-scan 重投之前）。
+        # 第一步：DEL 所有 cmd 的旧 Redis List + 清 inflight Set（必须在 disk-scan 重投之前）。
         # 磁盘是真相源，重启以磁盘 pending 全量重建队列，Redis 旧队列作废。
+        # clear_inflight：进程重启后内存里没有真正在途的任务；Redis inflight Set 若残留上次
+        # 进程崩溃前来不及 SREM 的脏 task_id，restore 路由会永久 409（blocker#6 正确性要求）。
         for cmd in self.registry:
             await self._rq.delete(cmd)
+        await self._rq.clear_inflight()
 
         cutoff = datetime.now() - timedelta(hours=RECOVER_MAX_AGE_HOURS)
         backlog: list[TaskMeta] = []
@@ -336,7 +372,8 @@ class TaskRunner:
             logger.warning("[TaskRunner] quota exceeded at dequeue: bucket=%s task=%s", key, task_id)
             return
         self.store.update_status(task_id, "running")
-        self._inflight.add(task_id)
+        # S3 步7：改 Redis SADD，让 8810 restore 路由跨进程可见
+        await self._rq.add_inflight(task_id)
         params = meta.params
         # 卧龙派单段:注入任务 id 让 round_id 确定化(round_<task_id>)——
         # 重启重跑同一任务收敛到同一个 round,绝不双倍生产
@@ -404,7 +441,8 @@ class TaskRunner:
             await self._fire_terminal(meta, "failed", None)
             logger.exception("[TaskRunner] task %s (%s) failed", task_id, cmd)
         finally:
-            self._inflight.discard(task_id)
+            # S3 步7：改 Redis SREM，对称 add_inflight
+            await self._rq.remove_inflight(task_id)
 
     async def _fire_terminal(self, meta: TaskMeta, status: str, result: dict[str, Any] | None) -> None:
         """机器反馈(§4.2):带 round_id 的任务终态通知编排层。失败不影响任务本身。"""

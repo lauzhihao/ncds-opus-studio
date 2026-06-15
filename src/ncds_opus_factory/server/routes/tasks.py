@@ -29,6 +29,7 @@ from ncds_opus_factory.server.schemas import (
 )
 from ncds_opus_factory.server import rounds_gate
 from ncds_opus_factory.server.state import LABELS, RUNNER, STORE
+from ncds_opus_factory.server.task_runner import EnqueueUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +96,21 @@ async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreate
                 status_code=400,
                 detail=f"派生链深度超限(≤2): {body.parent_task_id} 的派生层级已满",
             )
-    task_id = await RUNNER.submit(
-        body.cmd,
-        body.params,
-        source=body.source,
-        parent_task_id=body.parent_task_id,
-        round_id=body.round_id,
-        intent_key=body.intent_key,
-    )
+    try:
+        task_id = await RUNNER.submit(
+            body.cmd,
+            body.params,
+            source=body.source,
+            parent_task_id=body.parent_task_id,
+            round_id=body.round_id,
+            intent_key=body.intent_key,
+        )
+    except EnqueueUnavailable as e:
+        # Redis 不可达：决策 D——meta 已置 failed（非幽灵 pending），返回 503 + task_id。
+        # 不返回 500/201：503 告知调用方"服务暂时不可用、可重试"；task_id 让前端可追踪。
+        response.status_code = 503
+        logger.warning("[server] task enqueue failed (redis down), returning 503: %s", e.task_id)
+        return TaskCreateResponse(task_id=e.task_id, status="failed")
     response.headers["Location"] = f"/tasks/{task_id}"
     logger.info(
         "[server] task submitted: cmd=%s task_id=%s source=%s",
@@ -217,7 +225,7 @@ async def restore_task(task_id: str) -> dict:
         )
     # 执行中取消的任务,工作线程杀不掉还在跑:此时恢复会双线程跑同一任务
     # (旧线程的事件/结果与新跑交错互踩),必须等旧线程退出
-    if RUNNER.is_inflight(task_id):
+    if await RUNNER.is_inflight(task_id):
         raise HTTPException(
             status_code=409, detail="上一次执行尚未退出(取消后台收尾中),请稍后再恢复"
         )
