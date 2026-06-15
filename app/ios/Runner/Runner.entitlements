@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Live Activity 走 APNs 后台推送(中继持 .p8 推状态)需要此能力。上架改 production。 -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

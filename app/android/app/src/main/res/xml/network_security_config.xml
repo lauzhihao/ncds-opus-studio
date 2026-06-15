@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 开发期允许明文 HTTP:工厂后端在 LAN 走 http://liuzhihao-mbp.local:8810。
+     生产接入 HTTPS 后应收紧为按域名白名单。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true"/>
+</network-security-config>

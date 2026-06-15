@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.widgetkit-extension</string>
+	</dict>
+	<!-- 中继迁回 Mac 本机(http://liuzhihao-mbp.local:7321)后,小组件拉 /health、
+	     AppIntents 发 /command 都是局域网明文 HTTP,扩展自己的 plist 也要放行 .local -->
+	<!-- Fraunces(与主 App/studio 同款展示衬线),灵动岛/锁屏状态词用 -->
+	<key>UIAppFonts</key>
+	<array>
+		<string>Fraunces-Regular.ttf</string>
+		<string>Fraunces-Bold.ttf</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<!-- 与主 App 一致:Tailscale MagicDNS 兜底地址的明文 HTTP 例外 -->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>tail009bf5.ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于在同一局域网内连接你 Mac 上的状态中继(agent)，读取 Claude 当前状态。</string>
+</dict>
+</plist>
