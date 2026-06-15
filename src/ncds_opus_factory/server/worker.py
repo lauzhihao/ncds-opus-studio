@@ -22,6 +22,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
+
+# launchd（S4）跑 worker 时不继承 shell env：必须在 import 任何读 os.environ 的模块之前
+# 先加载仓库根 .env —— state.py 顶层读 REDIS_URL/NOF_STATE_DIR、commands/* 读各 API key。
+# 与 app.py 同款（放最早处确保下游 import 全拿得到）；shell 已 export 时 override=False 不覆盖。
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+try:
+    from dotenv import load_dotenv  # python-dotenv 已装
+    load_dotenv(_REPO_ROOT / ".env", override=False)
+except ImportError:
+    pass
 
 from ncds_opus_factory.server import rounds_gate
 from ncds_opus_factory.server.maintenance import _discard_sweeper, _round_reconciler

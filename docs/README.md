@@ -3,6 +3,8 @@
 **ncds-opus-factory** = 内容生产引擎：底层能力（asr/rw/wst/tts/render…）+ FastAPI server（:8810，含 `/studio` 前端）。
 项目说明/执行规约见仓库根 [CLAUDE.md](../CLAUDE.md) 与 [AGENTS.md](../AGENTS.md)；本目录只放设计/契约文档。
 
+> **运行时（S3 后）**：redis(队列) + `nof-server`(:8810，入队+SSE) + `nof-worker`(执行)。重启 server 不打断在跑任务。详见 CLAUDE.md §9 / BACKLOG/docs/S3-redis-worker-design.md。
+
 ## 当前方向与进度（2026-06-13）
 **权威设计 = [PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)**：把 web（作品/内容视角）与 app
 （agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（取代早先的"core/studio/factory 三包对等拆分"）。

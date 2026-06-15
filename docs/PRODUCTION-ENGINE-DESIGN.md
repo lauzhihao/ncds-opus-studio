@@ -337,6 +337,8 @@ content_edit 步（lines/storyboard）跑出 awaiting_review 后由 facade 自�
 新增的 `run_step(on_progress=)` 回桥到 facade SSE（避免 storyboard/image/render running 态进度冻结）。
 浏览器验证：`NOF_ENGINE_NODES=lines,storyboard,tts,image,render nof-server` + 跑 web 画布，那几步即走引擎。
 
+**Worker 拆分(S3)已落地**：离线 TaskRunner 任务执行从 8810 拆到独立 `nof-worker` 进程，跨进程队列/配额/inflight 走 Redis，重启 8810 不打断在跑任务（详见 `BACKLOG/docs/S3-redis-worker-design.md`）。画布 run_node / 015 引擎 run_step 执行暂留 8810（scope a，S3.x 迁）。
+
 **E1-b2 仍待补**（路径 C 高风险段，下一步）：
 - asr/rw 改道引擎：需先给引擎补**步内增量 outputs**（asr `item_progress` / rw `model_progress` 实时面板），否则这两步改道会丢实时逐项/4 模型进度。
 - 全切换：前端直走 `/instances`（退役 /jobs facade）+ 贵步骤后台派发 + 旧 `job_id`/`task_id` → `instance_id` 兼容适配层（§6）。

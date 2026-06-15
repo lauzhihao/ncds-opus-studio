@@ -1,7 +1,7 @@
 ---
 id: task-1
 title: Worker 拆分：离线任务执行移出 8810 到独立 nof-worker 进程
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-15 02:38'
 labels:
@@ -18,7 +18,7 @@ priority: high
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 子任务 S1-S4 全部 Done
-- [ ] #2 端到端：起 8810 + nof-worker，发采集任务，重启 8810，任务继续且 SSE 重连可续看进度
-- [ ] #3 全程 pytest 绿；现有 web /jobs 的 SSE 契约不变(前端不改)
+- [x] #1 子任务 S1-S4 全部 Done（S1 SSE 落盘 / S2 cancel 跨进程 / S3 Redis 队列+worker 拆分 / S4 launchd 托管+文档+激活）
+- [x] #2 端到端：起 8810 + nof-worker，发采集任务，重启 8810，任务继续且 SSE 重连可续看进度（S3 步8 真 redis 三进程 e2e 实证：kill -TERM 8810 后任务 2.4s 才完成、worker 不中断；重启 8810 GET 状态 completed + SSE since_seq 重放）
+- [x] #3 全程 pytest 绿（495 passed 两路核对）；现有 web /jobs 的 SSE 契约不变（wire `{type,job_id,node,state}` 由 S1 保留，S2-S9 未碰，前端不改）
 <!-- AC:END -->

@@ -1,7 +1,7 @@
 ---
 id: task-1.4
 title: S4：nof-worker launchd 托管 + 文档更新
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-15 02:39'
 labels:
@@ -22,9 +22,14 @@ priority: medium
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 scripts/install_nof_worker.sh install/status/logs/restart/uninstall 可用、开机自启
-- [ ] #2 docs 更新：本地运行章节从单 nof-server 改为 nof-server(HTTP)+nof-worker(执行)含启停；PRODUCTION-ENGINE-DESIGN 标注落地
+- [x] #1 scripts/install_nof_worker.sh install/status/logs/restart/uninstall 可用、开机自启 —— **脚本已写+验正确;用户授权后(2026-06-15,dev 机)已实际 `install` 注册成功:launchctl `state=running`,worker 日志 "ready. redis OK",RunAtLoad 开机自启生效**
+- [x] #2 docs 更新：本地运行章节从单 nof-server 改为 nof-server(HTTP)+nof-worker(执行)含启停；PRODUCTION-ENGINE-DESIGN 标注落地
 <!-- AC:END -->
+
+> **S4 交付状态(2026-06-15,委派 haiku×2 + 主线程验收)**：
+> - ✅ **写文件部分完成**：① `scripts/install_nof_worker.sh`(复制 install_map_watchdog.sh 改 LABEL/PYTHON_BIN=venv/ProgramArguments=`-m ncds_opus_factory.server.worker`/日志名;保留 WorkingDirectory/RunAtLoad/KeepAlive/PATH;bash -n 过、chmod +x)；② 三文档(CLAUDE.md §9 / docs/README.md / PRODUCTION-ENGINE-DESIGN.md)加三进程(redis+nof-server+nof-worker)启停说明，只加不删；③ 主线程顺带补 `worker.py` 顶部 load `.env`(launchd 不继承 shell env，与 app.py 同款，ordering 敏感故主线程做)。全量 495 passed。
+> - ✅ **激活已完成**(2026-06-15，用户授权"开发机随便搞"后主线程执行的有序迁移)：① 清场——3 个种子任务(t_mock_wd_pend01/t_mock_sk_run01/t_demo_running_c)标 cancelled，免 recover 误执行；② `brew services start redis`(常驻，label homebrew.mxcl.redis)；③ 停旧 :8810(pid 37442，6h 旧代码内存队列)+ nohup 重起当前代码 nof-server(纯 producer，pid 57328，startup 仅 ready 无 recover/loop)；④ `install_nof_worker.sh install` 注册 launchd nof-worker(state=running，"ready. redis OK")。**活体冒烟**:真 :8810 POST liuyong → HTTP 201 入队 redis → worker 消费 → completed，链路通。
+> - **遗留**：nof-server(57328)是 nohup 起的(脱离会话、存活)，**非 launchd 托管**——若要 nof-server 也开机自启需另写 plist(S4 范围只含 nof-worker，design 决策 G：8810 是 serve、由用户/独立 launchd 管)。`docs/S3-redis-worker-design.md` line~389 陈旧注释("q.get()")仍待随手清。
 
 ## Implementation Plan
 

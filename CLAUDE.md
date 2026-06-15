@@ -136,6 +136,7 @@ You are a **Senior Engineer**, responsible for maintaining and extending **ncds-
   ```
   **不要**用全局 pip，也不要假设 `.venv/bin/pip` 存在（历史上曾有 3.13 残留 pip 把包静默装进 `lib/python3.13/site-packages`，运行时 import 不到，2026-06 已清理；如再看到 `.venv/lib/python3.13/` 说明又被污染了，直接删）。
 - **后端**：`nof-server` 起 FastAPI，默认 `0.0.0.0:8810`（`NOF_SERVER_HOST` / `NOF_SERVER_PORT` 可覆盖）。
+- **Worker 拆分(S3)**：离线任务执行已从 nof-server 拆到独立 `nof-worker` 进程，跨进程队列走 Redis。本地完整跑需三件，**按序起**：① `redis-server`(队列信道，先起；`brew services start redis` 或临时 `redis-server`)；② `nof-server`(:8810，HTTP/SSE/**入队**，S3 后纯 producer、不再执行任务)；③ `nof-worker`(`.venv/bin/python3 -m ncds_opus_factory.server.worker`，唯一消费+执行+写状态)。Redis 连不上→nof-server `POST /tasks` 返 503、nof-worker fail-fast 退出。⚠️ **同 cmd 只能起一个 nof-worker**(出队 CAS 单进程语义)。**重启 nof-server 不再打断 nof-worker 在跑任务**。launchd 常驻见 `scripts/install_nof_worker.sh`(S4)。
 - **`/studio` 前端**（`web/`，React + Vite，挂在 8810 同源路径下），两种模式：
   - dev：`cd web && npm run dev`（vite :5173）+ `NOF_DEV=1 nof-server`，访问 `http://localhost:8810/studio`，HMR WebSocket 同走 8810 反代（依赖 `httpx` + `websockets`，已声明在 pyproject）。
   - prod：`cd web && npm run build` 生成 `web/dist`，再起 `nof-server`。
