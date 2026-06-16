@@ -32,6 +32,9 @@ export default defineConfig(({ mode }) => {
     server: {
       port: VITE_PORT,
       strictPort: true,
+      // 固定绑 IPv4 127.0.0.1：vite 默认 host=localhost 在本机会绑成 IPv6-only(::1),
+      // 而 nof-server dev_proxy 走 IPv4 127.0.0.1 → 连不上 /studio 报 502。对齐协议族。
+      host: '127.0.0.1',
       // dev 环境放行所有 Host header（本机 nginx 用 dev.jwd.group/studio 反代进来）
       allowedHosts: true,
       hmr: {

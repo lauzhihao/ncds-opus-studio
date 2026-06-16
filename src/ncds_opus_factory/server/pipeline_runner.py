@@ -131,6 +131,10 @@ class PipelineRunner:
         self._running_nodes: dict[tuple[str, str], asyncio.Task[Any]] = {}
         # asr（沈括采集）快采 done 后，后台补音轨/抠图的 enrich task（按 job_id；重跑 asr cancel 旧的）。
         self._enrich_tasks: dict[str, asyncio.Task[Any]] = {}
+        # 进画布触发的「数据/评论」后台刷新 task（按 job_id；同 job 已在刷新则去重）。
+        self._refresh_tasks: dict[str, asyncio.Task[Any]] = {}
+        # 鬼谷子选题（评论驱动双模型）后台 task（按 job_id；同 job 在跑则复用，不重派）。
+        self._guiguzi_tasks: dict[str, asyncio.Task[Any]] = {}
         # 绞杀者（E1-b2 #3）：注入的生产引擎 + 命中节点集。每 job 的引擎实例 iid 持久化在
         # JobState.engine_iid（不放内存，避免重启后重建孤儿实例）。
         self._engine: Any = None
@@ -355,7 +359,12 @@ class PipelineRunner:
                                 )
                             except OSError as exc:
                                 logger.warning("[pipeline] title sync write failed %s: %s", sf, exc)
-                # 摘要：不带 nodes 详情，但带一个运行状态标记给作品列表用
+                # 摘要：不带 nodes 全量详情，但带运行标记 + 各节点 status（供作品列表算
+                # agent 级进度灯，前端按 agents.ts 映射成"当前 agent + 红黄绿"）
+                node_status = {
+                    name: (n or {}).get("status", "idle")
+                    for name, n in (data.get("nodes") or {}).items()
+                }
                 out.append({
                     "job_id": data["job_id"],
                     "pipeline_id": data["pipeline_id"],
@@ -364,6 +373,7 @@ class PipelineRunner:
                     "updated_at": data["updated_at"],
                     "running": running_node is not None,
                     "running_node": running_node,
+                    "node_status": node_status,
                 })
             except Exception as exc:
                 logger.warning("[pipeline] read %s failed: %s", sf, exc)
@@ -1604,6 +1614,267 @@ class PipelineRunner:
             self._push_outputs_patch(job_id, "asr", "collected", collected)
             on_progress(f"[{entry.get('index')}] 音轨/抠图已补齐")
 
+    def refresh_shenkuo(self, job_id: str) -> bool:
+        """进画布触发：后台刷新沈括已采作品的播放数据 + 评论（其余产物不动）。
+
+        no-op 的几种情况（返回 False）：job 没 asr / asr 还没采出 collected（首采由
+        asr 节点负责）/ asr 正在采（running/queued，在采的数据已最新）/ 同 job 已有刷新在跑。
+        真起了后台刷新 task 才返回 True。逐条作品的「1 小时内只采一次」节流 + 防并发由
+        _refresh_shenkuo_collected 里的 Redis 锁把关。
+        """
+        try:
+            state = self._load(job_id)
+        except FileNotFoundError as e:
+            raise KeyError(job_id) from e
+        asr = state.nodes.get("asr")
+        if asr is None or asr.status in ("running", "queued"):
+            return False
+        collected = list((asr.outputs or {}).get("collected") or [])
+        if not collected:
+            return False
+        old = self._refresh_tasks.get(job_id)
+        if old is not None and not old.done():
+            return False  # 同 job 已在刷新，去重
+        self._refresh_tasks[job_id] = asyncio.create_task(self._refresh_shenkuo_collected(job_id))
+        return True
+
+    async def _refresh_shenkuo_collected(self, job_id: str) -> None:
+        """后台刷新：逐条对 asr.outputs.collected 重取播放数据 + 评论，字段级合并回 entry 并增量推送。
+
+        节流/防并发：每条作品采集前先抢 Redis 锁（nof:shenkuo:refresh:{aweme_id}，SET NX EX
+        1h）——抢到才调 tikhub 接口，抢不到（1 小时内已刷过 / 别处正在刷）直接跳过省 API 成本。
+        单条失败/跳过不影响其它条；全程不碰文案/音轨/抠图等重产物。
+        """
+        from ncds_opus_factory.commands import shenkuo
+        from ncds_opus_factory.server.queue import get_default_queue
+
+        try:
+            state = self._load(job_id)
+        except FileNotFoundError:
+            return
+        asr = state.nodes.get("asr")
+        if asr is None:
+            return
+        collected = list((asr.outputs or {}).get("collected") or [])
+        if not collected:
+            return
+        queue = get_default_queue()
+
+        def on_progress(text: str) -> None:
+            self._push_progress(job_id, "asr", text)
+
+        for entry in collected:
+            aweme_id = entry.get("aweme_id")
+            if entry.get("error") or not aweme_id:
+                continue
+            if not await queue.acquire_shenkuo_refresh(aweme_id):
+                on_progress(f"[{entry.get('index')}] 1 小时内已刷新，跳过（省 API）")
+                continue
+            platform = entry.get("platform") or "douyin"
+            try:
+                patch = await asyncio.to_thread(
+                    shenkuo.refresh_stats_comments, aweme_id, platform,
+                    on_progress=on_progress,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 后台刷新失败不影响主链路
+                on_progress(f"[{entry.get('index')}] 数据/评论刷新失败（不影响）：{exc}")
+                continue
+            if not patch:
+                continue
+            # 字段级合并：只覆盖 stats/digg/comments/top_comments，保留文案/音轨/抠图/封面等。
+            entry.update(patch)
+            self._push_outputs_patch(job_id, "asr", "collected", collected)
+            on_progress(f"[{entry.get('index')}] 数据/评论已刷新")
+
+    # ====================================================================== 鬼谷子选题
+    # 鬼谷子是 virtual agent（引擎 DAG 无此节点）：选题结果落 per-job guiguzi.json
+    # （仿 episode 的 per-job 文件持久化），前端轮询 GET /jobs/{id}/guiguzi 取状态。
+    # 双模型各分钟级，必须后台跑（fire-and-forget），不阻塞 HTTP 请求。
+
+    def _guiguzi_path(self, job_id: str) -> Path:
+        return self.video_jobs_dir / job_id / "guiguzi.json"
+
+    def get_guiguzi(self, job_id: str) -> dict[str, Any] | None:
+        """读 per-job 选题结果 guiguzi.json（无则 None）。前端轮询此接口取 running/done。"""
+        p = self._guiguzi_path(job_id)
+        if not p.exists():
+            return None
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+
+    def _write_guiguzi(self, job_id: str, doc: dict[str, Any]) -> None:
+        p = self._guiguzi_path(job_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _norm_guiguzi_items(items: list[dict[str, Any]]) -> list[dict[str, str]]:
+        return [
+            {"text": str(it.get("text") or "").strip(), "comment": str(it.get("comment") or "").strip()}
+            for it in (items or [])
+            if isinstance(it, dict) and str(it.get("comment") or "").strip()
+        ]
+
+    def _guiguzi_progress(self, job_id: str):
+        def on_progress(text: str) -> None:
+            # 工作线程内调：只碰文件(线程安全),不碰 asyncio 总线。更新 running doc 的 progress。
+            cur = self.get_guiguzi(job_id)
+            if cur and cur.get("status") == "running":
+                cur["progress"] = text
+                cur["updated_at"] = time.time()
+                self._write_guiguzi(job_id, cur)
+        return on_progress
+
+    # —— 第一步：分析爆款原因 ——
+    def analyze_guiguzi(self, job_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """第一步：双模型并行反推爆款原因。立即返回 analyzing doc，后台跑，前端轮询取 analyzed。"""
+        try:
+            self._load(job_id)
+        except FileNotFoundError as e:
+            raise KeyError(job_id) from e
+        norm = self._norm_guiguzi_items(items)
+        if not norm:
+            raise ValueError("items 为空：需要 [{text, comment}, ...]（至少一条带 comment）")
+        old = self._guiguzi_tasks.get(job_id)
+        if old is not None and not old.done():
+            return self.get_guiguzi(job_id) or {"status": "running", "stage": "analyzing", "items": norm}
+        # 重新分析 → 重置分析与选题(分析变了,旧题作废)
+        doc = {"stage": "analyzing", "status": "running", "items": norm, "analysis": None,
+               "chosen_analysis": None, "candidates": None, "topics": None, "out": None,
+               "error": None, "progress": "分析爆款原因中…", "updated_at": time.time()}
+        self._write_guiguzi(job_id, doc)
+        self._guiguzi_tasks[job_id] = asyncio.create_task(self._run_guiguzi_analyze_bg(job_id, norm))
+        return doc
+
+    async def _run_guiguzi_analyze_bg(self, job_id: str, items: list[dict[str, Any]]) -> None:
+        from ncds_opus_factory.commands import guiguzi
+        from ncds_opus_factory.server.mock_agents import mock_guiguzi_analyze
+
+        try:
+            mock = self._load(job_id).mock
+        except FileNotFoundError:
+            return
+        on_progress = self._guiguzi_progress(job_id)
+        try:
+            if mock:
+                analyses = await asyncio.to_thread(lambda: mock_guiguzi_analyze(on_progress))
+            else:
+                analyses = await asyncio.to_thread(guiguzi.analyze, items, on_progress=on_progress)
+            doc = {"stage": "analyzed", "status": "analyzed", "items": items,
+                   "analysis": analyses, "chosen_analysis": None, "candidates": None,
+                   "topics": None, "out": None, "error": None,
+                   "progress": "", "updated_at": time.time()}
+        except Exception as exc:  # noqa: BLE001 — 失败收成 doc.error,不冒泡
+            doc = {"stage": "failed", "status": "failed", "items": items, "analysis": None,
+                   "chosen_analysis": None, "candidates": None, "topics": None, "out": None,
+                   "error": f"{type(exc).__name__}: {exc}", "progress": "", "updated_at": time.time()}
+            logger.warning("[pipeline] guiguzi analyze failed for %s: %s", job_id, exc)
+        self._write_guiguzi(job_id, doc)
+        self._emit(job_id, {"type": "job_updated", "job_id": job_id})
+
+    # —— 第二步：以选定分析出选题（支持增量/全量）——
+    def generate_guiguzi(self, job_id: str, items: list[dict[str, Any]],
+                         analysis: dict[str, Any] | None, prompt: str | None = None,
+                         force: bool = False) -> dict[str, Any]:
+        """第二步：以(用户选定/编辑的)analysis 出选题。
+
+        prompt 传入(用户编辑后的提示词模板,含 $source)则用它,且按全量重出(自定义 prompt 不做增量)。
+        prompt 为空时按 analysis 拼默认模板:force=False（增量,只为新评论补题）/ True（全部重出）。mock 一律全量。
+        """
+        try:
+            mock = self._load(job_id).mock
+        except FileNotFoundError as e:
+            raise KeyError(job_id) from e
+        norm = self._norm_guiguzi_items(items)
+        if not norm:
+            raise ValueError("items 为空：需要 [{text, comment}, ...]（至少一条带 comment）")
+        old = self._guiguzi_tasks.get(job_id)
+        if old is not None and not old.done():
+            return self.get_guiguzi(job_id) or {"status": "running", "stage": "generating", "items": norm}
+
+        has_prompt = bool(prompt and prompt.strip())
+        existing = self.get_guiguzi(job_id) or {}
+        base: dict[str, list[dict[str, Any]]] = {"opus": [], "deepseek": []}
+        gen = norm
+        # 自定义 prompt 总是全量(prompt 已把 N 条评论拼死);否则按 force 决定增量。
+        if not force and not has_prompt and not mock and existing.get("candidates"):
+            cur_comments = {it["comment"] for it in norm}
+            covered: set[str] = set()
+            cands = existing.get("candidates") or {}
+            for m in ("opus", "deepseek"):
+                kept = [t for t in ((cands.get(m) or {}).get("topics") or [])
+                        if t.get("anchor_comment") in cur_comments]
+                base[m] = kept
+                covered |= {t.get("anchor_comment") for t in kept}
+            gen = [it for it in norm if it["comment"] not in covered]
+
+        # generating 期间保留已有的双栏分析(analysis)，记录本次选定 chosen_analysis
+        doc = {"stage": "generating", "status": "running", "items": norm,
+               "analysis": existing.get("analysis"), "chosen_analysis": analysis,
+               "candidates": existing.get("candidates"), "topics": existing.get("topics"),
+               "prompt": existing.get("prompt"), "out": existing.get("out"), "error": None,
+               "progress": "出题中…", "updated_at": time.time()}
+        self._write_guiguzi(job_id, doc)
+        self._guiguzi_tasks[job_id] = asyncio.create_task(
+            self._run_guiguzi_generate_bg(job_id, norm, gen, base, analysis,
+                                          prompt if has_prompt else None))
+        return doc
+
+    async def _run_guiguzi_generate_bg(
+        self, job_id: str, full_items: list[dict[str, Any]], gen_items: list[dict[str, Any]],
+        base: dict[str, list[dict[str, Any]]], analysis: dict[str, Any] | None,
+        prompt: str | None,
+    ) -> None:
+        """后台：对 gen_items 跑 guiguzi.generate_topics（analysis/prompt 指导），与 base 合并，写 guiguzi.json。"""
+        from ncds_opus_factory.commands import guiguzi
+        from ncds_opus_factory.server.mock_agents import mock_guiguzi_topics
+
+        try:
+            mock = self._load(job_id).mock
+        except FileNotFoundError:
+            return
+        on_progress = self._guiguzi_progress(job_id)
+        kept_analysis = (self.get_guiguzi(job_id) or {}).get("analysis")
+        used_prompt = (self.get_guiguzi(job_id) or {}).get("prompt")
+        try:
+            out = None
+            if gen_items:
+                if mock:
+                    result = await asyncio.to_thread(lambda: mock_guiguzi_topics(on_progress))
+                else:
+                    result = await asyncio.to_thread(
+                        guiguzi.generate_topics, gen_items, analysis, prompt, on_progress=on_progress)
+                new_cands = result.get("candidates") or {}
+                out = result.get("out")
+                used_prompt = result.get("prompt") or used_prompt  # 回填本次模板(含 $source)供前端回显
+            else:
+                # 纯移除（没有新评论）：无需跑模型，只落保留的旧题。
+                new_cands = {}
+            candidates: dict[str, Any] = {}
+            for m in ("opus", "deepseek"):
+                new_m = new_cands.get(m) or {"topics": [], "error": None}
+                candidates[m] = {
+                    "topics": list(base.get(m) or []) + list(new_m.get("topics") or []),
+                    "error": new_m.get("error"),
+                }
+            flat = [t for m in ("opus", "deepseek") for t in candidates[m]["topics"]]
+            doc = {"stage": "done", "status": "done", "items": full_items,
+                   "analysis": kept_analysis, "chosen_analysis": analysis,
+                   "candidates": candidates, "topics": flat, "prompt": used_prompt,
+                   "out": out, "error": None, "progress": "", "updated_at": time.time()}
+        except Exception as exc:  # noqa: BLE001 — 失败收成 doc.error,前端展示,不冒泡
+            doc = {"stage": "failed", "status": "failed", "items": full_items,
+                   "analysis": kept_analysis, "chosen_analysis": analysis,
+                   "candidates": None, "topics": None, "prompt": used_prompt, "out": None,
+                   "error": f"{type(exc).__name__}: {exc}", "progress": "", "updated_at": time.time()}
+            logger.warning("[pipeline] guiguzi generate failed for %s: %s", job_id, exc)
+        self._write_guiguzi(job_id, doc)
+        self._emit(job_id, {"type": "job_updated", "job_id": job_id})
+
     async def _execute_asr_collect(self, job_id: str) -> dict[str, Any]:
         """沈括采集（统一走 collect_one 快采趟）：对 inputs.urls 每条作品解析 aweme_id →
         取展示元数据 → collect_one(do_audio/do_frames=False) 只跑下载+转写+清洗+评论，
@@ -2683,65 +2954,14 @@ def _build_codex_user_prompt(
 
 
 def _call_deepseek_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> str:
-    """走 DeepSeek HTTP API（OpenAI 兼容协议）。参数沿用远程 runDeepSeekChat：
-    thinking.enabled=true + reasoning_effort=high，吃 reasoner 模型。
+    """rw 改写候选的 DeepSeek 调用 —— 现委托 common.deepseek_cli.call_deepseek（单点实现）。
 
-    模型字段示例：'deepseek-v4-pro'。若 API 返回 4xx 说明型号名失效，
-    在 .env 或 MODEL_CANDIDATES 里调整。
+    DeepSeek HTTP 调用已收口到 common（鬼谷子选题也复用），本函数保留名/签名仅作 rw 侧
+    适配薄层（_invoke_rw_candidate 按名引用）。模型字段示例：'deepseek-v4-pro'。
     """
-    import httpx
+    from ncds_opus_factory.common.deepseek_cli import call_deepseek
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY missing")
-
-    messages: list[dict[str, str]] = []
-    if system_prompt and system_prompt.strip():
-        messages.append({"role": "system", "content": system_prompt.strip()})
-    messages.append({"role": "user", "content": user_prompt})
-
-    body = {
-        "model": model_id,
-        "messages": messages,
-        "thinking": {"type": "enabled"},
-        "reasoning_effort": "high",
-        "stream": False,
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    }
-    try:
-        # DeepSeek 是域内 API：trust_env=False 显式绕过环境里的 SOCKS/HTTP 代理（如 10808），
-        # 既不依赖 httpx 的 socksio 扩展，也避免域内流量被绕到国外出口（慢/被拒）。
-        # 对标 commands/rw.py 给飞书域名设 NO_PROXY 的既有做法。
-        with httpx.Client(trust_env=False, timeout=900.0) as client:
-            resp = client.post(
-                "https://api.deepseek.com/chat/completions",
-                json=body,
-                headers=headers,
-            )
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"deepseek HTTP error: {exc}") from exc
-    if resp.status_code >= 400:
-        raise RuntimeError(f"deepseek http {resp.status_code}: {resp.text[:500]}")
-    try:
-        payload = resp.json()
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"deepseek non-json response: {resp.text[:500]}") from exc
-
-    choices = payload.get("choices") or []
-    if not choices:
-        raise RuntimeError(f"deepseek empty choices; payload tail={resp.text[-300:]}")
-    message = choices[0].get("message") or {}
-    content = (message.get("content") or "").strip()
-    if not content:
-        # 极端情况看 reasoning_content
-        reasoning = (message.get("reasoning_content") or "").strip()
-        if not reasoning:
-            raise RuntimeError(f"deepseek returned empty content; message keys={list(message.keys())}")
-        return reasoning
-    return content
+    return call_deepseek(user_prompt, system_prompt=system_prompt, model=model_id)
 
 
 # RW 体裁 profile（对应飞书 /rw -p 参数）。每个 profile 给一段「体裁定调」task 正文，

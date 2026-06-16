@@ -1,5 +1,5 @@
 # Role & Objective
-You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** —— 一个内容生产引擎：primitive 命令（文生图 / 图生图 / 视频 / 转写 / 改写 + tts / render）+ 6 个 agent，经 FastAPI server（:8810）暴露为异步任务，带 `/studio` web 前端（内容视角）与 Flutter app（决策视角）。
+You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** —— 一个内容生产引擎：primitive 命令（文生图 / 图生图 / 视频 / 转写 / 改写 + tts / render）+ 一组有序 agent（沈括/柳永/吴道子/伯牙/鬼谷子 + 渲染，卧龙总览；清单见 docs），经 FastAPI server（:8810）暴露为异步任务，带 `/studio` web 前端（内容视角）与 Flutter app（决策视角）。
 **当前方向**：web + app 统一到**一个 agent 驱动的生产实例引擎**之上（旧"core/studio/factory 三包对等拆分"已作废）。
 **接手三步**：① `docs/README.md`（索引 + 本地运行 runbook）→ ② `.project_map`（结构/文件在哪）→ ③ `docs/PRODUCTION-ENGINE-DESIGN.md`（权威设计/为什么）。
 **CORE CONSTRAINT**：按 Part 2 执行协议分级处理 —— 大改先对齐，小改直做，不自作主张扩大范围。
@@ -17,7 +17,7 @@ You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** �
 - `.project_map` 由看门狗自动维护（见 §5），覆盖命令入口 / runtime / skills / 完整目录树，绝大多数仓库内导航不需要再开 subagent。
 
 ## Agent / Task 委派规则
-- 只有外部研究型任务才值得派 subagent：DashScope / OpenAI / Whisper / Tingwu 等第三方接口差异整理、`codex` CLI 行为差异。
+- 只有外部研究型任务才值得派 subagent：DashScope / OpenAI / Whisper / Tingwu 等第三方接口差异整理。
 - **子任务按复杂度匹配模型**（成本优化）：简单文件操作/明确命令/格式化 → haiku；代码分析/调试/需要推理 → sonnet；架构设计/深度推理/对抗审查 → opus。默认继承主线程模型，仅在确信更低/更高 tier 更合适时显式覆盖。
 - 涉及 secrets、用户确认、真实权限变更、批量写操作、删除操作的判断不委派；结论必须由主线程复核后再执行。
 
@@ -33,9 +33,9 @@ You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** �
 
 ## 2. Repository Context & Boundaries
 本仓库 = **primitive 命令引擎 + agent 编排 + HTTP server（含 `/studio`）+ Flutter app + 视频模板**。
-分层（**文件清单查 `.project_map`，层次语义查 `docs/PRODUCTION-ENGINE-DESIGN.md`**）：
+分层（仅保留 core 抽取，**非**旧三包对等拆分；**文件清单查 `.project_map`，层次语义查 `docs/PRODUCTION-ENGINE-DESIGN.md`**）：
 - **core**（`packages/core`，唯一独立包）：两端复用的纯能力（primitive 命令 + registry + gpt-image + 模板 + rewrite runners）。**core 绝不 import factory/agent**。
-- **factory**（`src/ncds_opus_factory`）：agent 编排（6 agent + asr/rw）+ HTTP server + 生产引擎。primitive（wst/tst/vid/tts/render…）在这里只剩**转发 shim**，真身在 core。
+- **factory**（`src/ncds_opus_factory`）：agent 编排（一组有序 agent + asr/rw，清单见 docs）+ HTTP server + 生产引擎。primitive（wst/tst/vid/tts/render…）在这里只剩**转发 shim**，真身在 core。
 - **生产引擎**（`server/engine/`）：统一"生产实例 + 步骤"运行时，经 `build_full_registry()` 晚绑定派发（取代 PipelineRunner + TaskRunner 双轨）。
 - **web**（`web/`，内容视角）/ **app**（`app/`，决策视角，独立 flutter 工具链）：两个前端视图，都连 server :8810。
 
@@ -61,7 +61,7 @@ You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** �
 
 ## 6. 运行红线（命令见 `docs/README.md`「本地运行」）
 - **venv 用 uv 不用 pip**：装包 `uv pip install --python .venv/bin/python3 <pkg>`；看到 `.venv/lib/python3.13/` = 被污染，直接删。
-- **三进程**：redis → nof-server（:8810，纯入队）→ nof-worker（唯一执行），按序起；同 cmd 只能一个 nof-worker；**重启 nof-server 不打断 worker 在跑任务**。
+- **三进程**：redis → nof-server（:8810，纯入队）→ nof-worker（launchd 托管，唯一执行；启停/日志走 `install_nof_worker.sh status/logs/restart`），按序起；同 cmd 只能一个 nof-worker；**重启 nof-server 不打断 worker 在跑任务**。
 - **/studio 挂载在 server import 时定死**：没 `NOF_DEV=1` 且无 `web/dist` → 404，补构建后必须重启 server。
 - **develop 永不并 main**：main 上留着 web 旧画布可跑副本作护城河，不并 main 就毁不掉它（工作主线 = develop，弃用 git worktree）。
 

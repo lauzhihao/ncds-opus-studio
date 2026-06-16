@@ -1,17 +1,14 @@
-"""排产策略协程（docs/WOLONG-DESIGN.md §8.4 第 1 条）：信号事件→深采→选题补货。
+"""排产策略协程（docs/WOLONG-DESIGN.md §8.4 第 1 条）：信号事件 → 沈括深采。
 
-每 NOF_PLANNER_INTERVAL_S（默认 300s）一轮 tick，三件事：
+每 NOF_PLANNER_INTERVAL_S（默认 300s）一轮 tick：
 
 1. 事件消费：续读 state/shenkuo/events.jsonl（字节偏移存 events_offset.json），
    new_post/spike → 深采该条（shenkuo {"aweme": id}, source=cron）并登记链
-   （planner_chains.json）；
-2. 链推进：深采到终态（completed/failed/cancelled 任一——失败也不阻塞选题，
-   author_{sec_uid}/all_posts.json 由订阅刷新轮持续在写，不依赖本次深采）→
-   用该文件作 benchmark_path 派鬼谷子（category 必须显式 None——guiguzi 默认
-   'growth' 过滤不匹配会 ValueError；avoid=库内全部非 expired title）；
-3. 库存补货：选题库 fresh < NOF_TOPIC_LOW_WATER（默认 5）→
-   wolong_rounds.discover_benchmark() 自动发现对标派鬼谷子（server import
-   commands 方向合法）。
+   （planner_chains.json，供深采溯源/防重）。
+
+> 历史上 planner 还有「链推进 → benchmark 派鬼谷子」与「选题库低水位补货」两步，
+> 已废弃：鬼谷子改为评论驱动（提取文案 + 用户选中高赞评论），只由画布前端/卧龙
+> 显式触发，不再由 planner 用 all_posts.json 自动出题。
 
 纪律（§8.4 已裁定）：
 - source 一律 cron：复用 _maybe_auto_archive 豁免与 _cron 配额桶，不新增 TaskSource；
@@ -44,8 +41,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from ncds_opus_factory.commands import wolong_rounds
-from ncds_opus_factory.common import topic_store
 from ncds_opus_factory.server.queue import get_default_queue
 from ncds_opus_factory.server.task_runner import TaskRunner
 from ncds_opus_factory.server.task_store import TaskStore
@@ -185,10 +180,6 @@ def save_chains(chains: list[dict[str, Any]]) -> None:
 class _Index:
     # aweme_id -> 最近一个(在途或 24h 内创建)cron 深采任务 id
     shenkuo_recent: dict[str, str] = field(default_factory=dict)
-    # 在途或 24h 内创建的 cron 鬼谷子的 benchmark_path 集合
-    guiguzi_recent_bench: set[str] = field(default_factory=set)
-    # 是否存在在途(pending/running) cron 鬼谷子(补货防堆积闸)
-    guiguzi_inflight: bool = False
 
 
 def _build_index(store: TaskStore) -> _Index:
@@ -205,12 +196,6 @@ def _build_index(store: TaskStore) -> _Index:
             aweme = str(m.params.get("aweme") or "")
             if aweme and recent:
                 idx.shenkuo_recent.setdefault(aweme, m.task_id)
-        elif m.cmd == "guiguzi":
-            if inflight:
-                idx.guiguzi_inflight = True
-            bench = str(m.params.get("benchmark_path") or "")
-            if bench and recent:
-                idx.guiguzi_recent_bench.add(bench)
     return idx
 
 
@@ -310,145 +295,30 @@ async def _consume_events(
 
 
 # ---------------------------------------------------------------------------
-# 2) 链推进:深采终态 -> 派鬼谷子
+# 链推进 / 库存补货(鬼谷子自动派发)—— 已废弃。
+# 鬼谷子改为评论驱动(提取文案 + 用户选中的高赞评论),只由画布前端/卧龙显式触发,
+# 不再由 planner 用 benchmark(all_posts.json)自动出题。planner 现仅保留
+# 「信号事件 -> 沈括深采」一职;链文件仍登记(供深采溯源/防重),但不再转派鬼谷子。
 # ---------------------------------------------------------------------------
-async def _advance_chains(
-    runner: TaskRunner, store: TaskStore, idx: _Index,
-    chains: list[dict[str, Any]],
-) -> int:
-    """扫链文件,终态的深采转派鬼谷子。返回本轮派出的鬼谷子数。"""
-    if not chains:
-        return 0
-    submitted = 0
-    dirty = False
-    halted = False
-    kept: list[dict[str, Any]] = []
-    now = datetime.now()
-    for chain in chains:
-        if halted:  # 配额中断:剩余链原样保留,下轮再推
-            kept.append(chain)
-            continue
-        aweme = str(chain.get("aweme_id") or "")
-        sec_uid = str(chain.get("sec_uid") or "")
-        task_id = str(chain.get("shenkuo_task_id") or "")
-        if not sec_uid or not task_id:
-            logger.warning("[planner] 链条目缺字段,丢弃: %r", chain)
-            dirty = True
-            continue
-        created = _parse_iso(chain.get("created_at"))
-        if created is None or now - created > _CHAIN_MAX_AGE:
-            logger.warning("[planner] 链超龄(>%dh),强制丢弃: aweme=%s",
-                           int(_CHAIN_MAX_AGE.total_seconds() // 3600), aweme)
-            dirty = True
-            continue
-        meta = store.get_meta(task_id)
-        if meta is None:
-            logger.warning("[planner] 链指向的深采任务不存在(已清扫?),丢弃: %s", task_id)
-            dirty = True
-            continue
-        if meta.status not in _TERMINAL:
-            kept.append(chain)  # 深采未到终态,下轮再看
-            continue
-        # 终态(失败也不阻塞选题——all_posts.json 由订阅刷新轮持续在写)
-        bench = benchmark_path_for(sec_uid)
-        if not bench.exists():
-            logger.warning("[planner] 对标数据缺失,销链: %s", bench)
-            dirty = True
-            continue
-        bench_str = str(bench)
-        if bench_str in idx.guiguzi_recent_bench:
-            logger.info("[planner] 24h 内已有同对标的 cron 鬼谷子,销链不派: %s",
-                        sec_uid[:16])
-            dirty = True
-            continue
-        if await runner.quota_remaining("guiguzi", source="cron") <= 0:
-            logger.warning("[planner] cron 配额耗尽,链推进暂停")
-            kept.append(chain)
-            halted = True
-            continue
-        avoid = topic_store.active_titles()  # 纯文件 IO,非 await
-        try:
-            # category 必须显式 None:guiguzi 默认 'growth' 过滤不匹配会 ValueError(§8.4)
-            gid = await runner.submit(
-                "guiguzi",
-                {"benchmark_path": bench_str, "category": None, "avoid": avoid},
-                source="cron",
-            )
-        except Exception:  # noqa: BLE001 — 单链失败保留,下轮重试
-            logger.exception("[planner] 鬼谷子派发失败,链保留: %s", sec_uid[:16])
-            kept.append(chain)
-            continue
-        idx.guiguzi_recent_bench.add(bench_str)
-        idx.guiguzi_inflight = True
-        submitted += 1
-        dirty = True
-        logger.info("[planner] 链推进派鬼谷子: %s -> %s", sec_uid[:16], gid)
-    if dirty:
-        chains[:] = kept
-        save_chains(chains)
-    return submitted
-
-
-# ---------------------------------------------------------------------------
-# 3) 库存补货
-# ---------------------------------------------------------------------------
-async def _maybe_restock(runner: TaskRunner, idx: _Index) -> str | None:
-    """选题库 fresh 低水位 -> 自动发现对标派鬼谷子。返回 task_id(未派返回 None)。"""
-    fresh = topic_store.count_fresh()
-    if fresh >= LOW_WATER:
-        return None
-    benchmark = wolong_rounds.discover_benchmark()
-    if not benchmark:
-        logger.debug("[planner] 库存低(%d/%d)但无对标数据,补货空转", fresh, LOW_WATER)
-        return None
-    if benchmark in idx.guiguzi_recent_bench:
-        # 与链推进同口径的 24h 防重:鬼谷子产出撞 avoid 抬不动库存时,
-        # 没有这道闸会每 tick 对同一对标反复烧 LLM 直到当日 cron 配额耗尽
-        logger.info("[planner] 库存低(%d/%d)但 24h 内已对该对标派过 cron 鬼谷子,补货冷却",
-                    fresh, LOW_WATER)
-        return None
-    if idx.guiguzi_inflight:
-        logger.info("[planner] 库存低(%d/%d)但已有在途 cron 鬼谷子,跳过补货(防堆积)",
-                    fresh, LOW_WATER)
-        return None
-    if await runner.quota_remaining("guiguzi", source="cron") <= 0:
-        logger.warning("[planner] 库存低(%d/%d)但 cron 配额耗尽,补货暂缓", fresh, LOW_WATER)
-        return None
-    avoid = topic_store.active_titles()
-    # 「防重检查(guiguzi_inflight)→submit」之间无 await
-    task_id = await runner.submit(
-        "guiguzi",
-        {"benchmark_path": benchmark, "category": None, "avoid": avoid},
-        source="cron",
-    )
-    idx.guiguzi_inflight = True
-    logger.info("[planner] 库存补货派鬼谷子: fresh=%d/%d -> %s", fresh, LOW_WATER, task_id)
-    return task_id
 
 
 # ---------------------------------------------------------------------------
 # tick / loop
 # ---------------------------------------------------------------------------
 async def planner_tick(runner: TaskRunner, store: TaskStore) -> dict[str, int]:
-    """跑一轮排产。冷启动三缺失(事件/选题库/对标)一律静默空转。"""
+    """跑一轮排产:消费信号事件派沈括深采。冷启动(无事件)静默空转。"""
     idx = _build_index(store)
     chains = load_chains()
     events = await _consume_events(runner, idx, chains)
-    guiguzi = await _advance_chains(runner, store, idx, chains)
-    restock = await _maybe_restock(runner, idx)
-    return {
-        "events_consumed": events,
-        "guiguzi_dispatched": guiguzi,
-        "restock_dispatched": 1 if restock else 0,
-    }
+    return {"events_consumed": events}
 
 
 async def planner_loop(runner: TaskRunner, store: TaskStore) -> None:
     """常驻循环:每 NOF_PLANNER_INTERVAL_S 一轮。"""
-    logger.info("[planner] 排产协程启动: 周期 %.0fs, 选题低水位 %d", INTERVAL_S, LOW_WATER)
+    logger.info("[planner] 排产协程启动: 周期 %.0fs", INTERVAL_S)
     if os.environ.get("NOF_STATE_DIR"):
         logger.warning(
-            "[planner] NOF_STATE_DIR 已设置:排产按其父目录读 events/all_posts,"
+            "[planner] NOF_STATE_DIR 已设置:排产按其父目录读 events,"
             "但生产者(沈括)写死仓库根 state/——口径不一致时事件链将静默空转(模块 docstring)")
     while True:
         try:
@@ -458,9 +328,7 @@ async def planner_loop(runner: TaskRunner, store: TaskStore) -> None:
                 continue
             stats = await planner_tick(runner, store)
             if any(stats.values()):
-                logger.info("[planner] 本轮: 事件 %d, 链转鬼谷子 %d, 补货 %d",
-                            stats["events_consumed"], stats["guiguzi_dispatched"],
-                            stats["restock_dispatched"])
+                logger.info("[planner] 本轮: 事件消费 %d", stats["events_consumed"])
             await asyncio.sleep(INTERVAL_S)
         except asyncio.CancelledError:
             raise

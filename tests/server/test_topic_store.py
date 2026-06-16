@@ -22,9 +22,15 @@ from tests.server.test_rounds import FakeTransport, _topics
 
 @pytest.fixture()
 def bench(tmp_path: Path) -> str:
-    p = tmp_path / "all_posts.json"
-    p.write_text("[]", encoding="utf-8")
-    return str(p)
+    # all_posts.json + 旁边 collected.json(深采条目带 text + 高赞评论):
+    # 鬼谷子改评论驱动后卧龙从 collected.json 取评论作选题种子,fixture 要备齐。
+    (tmp_path / "all_posts.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "collected.json").write_text(json.dumps({
+        "items": [{"aweme_id": "a1", "digg": 100, "text": "提取文案正文",
+                   "top_comments": [{"text": "高赞评论一", "digg": 50},
+                                    {"text": "高赞评论二", "digg": 30}]}],
+    }, ensure_ascii=False), encoding="utf-8")
+    return str(tmp_path / "all_posts.json")
 
 
 def _age_topic(title: str, days: int) -> None:
@@ -264,8 +270,8 @@ def test_start_round_replays_empty_shell_after_crash(tmp_path: Path, monkeypatch
     assert len(consumed) == 3 and all(t["consumed_by"] == rid for t in consumed)
 
 
-def test_low_stock_dispatches_guiguzi_with_library_avoid(tmp_path: Path, bench: str):
-    """库存 < count:照旧派鬼谷子;avoid = 用户串 + 库内非 expired title。"""
+def test_low_stock_dispatches_guiguzi_with_comment_items(tmp_path: Path, bench: str):
+    """库存 < count:照旧派鬼谷子;评论驱动后 params 携带 collected.json 取的 items。"""
     topic_store.merge(_topics(3), source="guiguzi")
     topic_store.consume([topic_store.fresh()[0]["topic_id"]], "round_z")  # 选题0 consumed
     _age_topic("选题1", days=20)                                          # 选题1 expired
@@ -276,8 +282,11 @@ def test_low_stock_dispatches_guiguzi_with_library_avoid(tmp_path: Path, bench: 
     assert out["stage"] == "topics"
     s = tp.submits[0]
     assert s["cmd"] == "guiguzi" and s["intent_key"] == "guiguzi:0"
-    # 用户 avoid 在前,库内非 expired 合并去重;expired 的 选题1 不避(允许重提)
-    assert s["params"]["avoid"] == ["旧题", "选题2", "选题0"]
+    # 评论驱动:items = collected.json 里高赞评论 + 提取文案(不再传 avoid)
+    assert s["params"]["items"] == [
+        {"text": "提取文案正文", "comment": "高赞评论一"},
+        {"text": "提取文案正文", "comment": "高赞评论二"},
+    ]
 
 
 def test_plan_scripts_reads_store_not_task_result(tmp_path: Path, bench: str):
@@ -319,30 +328,57 @@ def test_plan_scripts_empty_store_terminates(tmp_path: Path, bench: str):
 # 生产入库方:guiguzi.run 与 mock_guiguzi
 # ---------------------------------------------------------------------------
 
-def test_guiguzi_run_merges_and_keeps_result_shape(tmp_path: Path, monkeypatch):
-    bench = tmp_path / "all_posts.json"
-    bench.write_text(json.dumps([{"desc": "搞钱认知破局", "digg": 100}]), encoding="utf-8")
+def _fake_caller(topics_json):
+    """两步流 fake：analyze 阶段(prompt 含 hook_reason)返分析对象,出题阶段返 topics 数组。"""
+    def caller(prompt, **kw):
+        if "hook_reason" in prompt:  # analyze prompt schema 带该字段
+            return json.dumps({"hook_reason": "因为反差", "audience": "打工人",
+                               "hooks": ["钩子1", "钩子2"], "direction": "做反差"}, ensure_ascii=False)
+        return topics_json
+    return caller
+
+
+def test_guiguzi_run_two_step_merges_and_keeps_result_shape(monkeypatch):
+    """两步流:run = analyze + generate_topics;candidates 双栏 + topics 扁平入库 + 带 analysis。"""
     captured = {}
 
-    def fake_scodex(prompt, env, timeout):
-        captured["prompt"] = prompt
-        return json.dumps([
-            {"title": "题A", "motif": "m", "angle": "反差视角", "source": "对标X",
-             "why": "w", "potential": 9},
-            {"title": "题A", "potential": 5},  # 模型重复产出,入库去重
-        ], ensure_ascii=False)
+    opus_topics = json.dumps([
+        {"index": 1, "title": "题A", "angle": "反差视角", "why": "w", "potential": 9},
+        {"index": 2, "title": "题B", "angle": "升维", "why": "w2", "potential": 7},
+    ], ensure_ascii=False)
+    deepseek_topics = json.dumps([
+        {"index": 1, "title": "题A", "angle": "另一视角", "potential": 6},
+        {"index": 2, "title": "题C", "angle": "博弈", "potential": 8},
+    ], ensure_ascii=False)
 
-    monkeypatch.setattr(guiguzi, "_scodex", fake_scodex)
-    res = guiguzi.run(benchmark_path=str(bench))
+    def fake_opus(prompt, **kw):
+        if "hook_reason" not in prompt:
+            captured["opus_topic_prompt"] = prompt
+        return _fake_caller(opus_topics)(prompt, **kw)
 
-    assert '"angle"' in captured["prompt"]  # prompt schema 带角度字段
-    # result["topics"] 保持原始解析列表(label_store/iOS 依赖);out 指向库文件
-    assert len(res["topics"]) == 2 and res["topics"][0]["angle"] == "反差视角"
+    monkeypatch.setattr(guiguzi, "call_opus", fake_opus)
+    monkeypatch.setattr(guiguzi, "call_deepseek", _fake_caller(deepseek_topics))
+    items = [{"text": "搞钱认知破局原文", "comment": "评论一"},
+             {"text": "搞钱认知破局原文", "comment": "评论二"}]
+    res = guiguzi.run(items=items)
+
+    # 出题 prompt 带评论 + 自动选定的分析(爆款原因作指导)
+    assert "评论一" in captured["opus_topic_prompt"]
+    assert "因为反差" in captured["opus_topic_prompt"]
+    # 双模型分析都在;chosen_analysis 自动取 opus
+    assert res["analysis"]["opus"]["analysis"]["hook_reason"] == "因为反差"
+    assert res["chosen_analysis"]["audience"] == "打工人"
+    # 双栏各 2 题(锚定评论以入参为准)
+    assert [t["title"] for t in res["candidates"]["opus"]["topics"]] == ["题A", "题B"]
+    assert res["candidates"]["opus"]["topics"][0]["anchor_comment"] == "评论一"
+    assert res["candidates"]["opus"]["topics"][0]["source_model"] == "opus"
+    assert [t["title"] for t in res["candidates"]["deepseek"]["topics"]] == ["题A", "题C"]
+    # topics 扁平 = opus + deepseek;out 指向库文件;入库按 title 去重(题A/题B/题C)
+    assert len(res["topics"]) == 4
     assert res["out"] == str(topic_store.default_topics_path())
     lib = topic_store.load()["topics"]
-    assert len(lib) == 1
-    assert lib[0]["status"] == "fresh" and lib[0]["source"] == "guiguzi"
-    assert lib[0]["bench_source"] == "对标X" and lib[0]["angle"] == "反差视角"
+    assert {t["title"] for t in lib} == {"题A", "题B", "题C"}
+    assert all(t["status"] == "fresh" and t["source"] == "guiguzi" for t in lib)
 
 
 def test_mock_guiguzi_merges_into_store():

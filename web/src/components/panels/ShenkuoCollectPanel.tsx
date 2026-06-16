@@ -3,10 +3,10 @@
 // 内联播放）/ 高赞评论（可折叠）/ 抠图素材（横滑）。不放原视频。
 //
 // 数据来自 asr 节点 outputs.collected（沈括 collect_one 产出），媒体相对路径走 /artifacts/files/。
-// 采集自动触发（input 的「开始创作」→ runNode('asr')），本面板纯展示、无手动按钮；
+// 采集在进画布时自动触发（JobCanvasPage 进画布即 runNode('asr')，后端有采集缓存），本面板纯展示、无手动按钮；
 // 音轨/抠图由后台第二趟补，字段后到（前端按字段在否渲染，缺失即不显示该区块）。
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
@@ -16,6 +16,7 @@ import {
   Circle,
   ExternalLink,
   Heart,
+  Lightbulb,
   MessageCircle,
   Music,
   Play,
@@ -27,8 +28,62 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import type { NodeState, PipelineNodeDef, ShenkuoComment, ShenkuoEntry } from '../../api/types';
+import type { GuiguziItem, NodeState, PipelineNodeDef, ShenkuoComment, ShenkuoEntry } from '../../api/types';
+import { GUIGUZI_MAX_ITEMS, guiguziItemsStorageKey } from '../../config/agents';
 import { DurationBadge } from '../WorkCards';
+
+// 沈括「备选题评论」选择态：选中的高赞评论（连同所属作品提取文案）存 localStorage（按 jobId），
+// 鬼谷子面板读它出选题。沈括/鬼谷子是不同 agent 抽屉、各自挂载，用 localStorage 跨面板传递。
+interface CommentSelection {
+  isSelected: (text: string, comment: string) => boolean;
+  toggle: (text: string, comment: string, digg?: number) => void;
+  count: number;
+  full: boolean;
+}
+
+function useCommentSelection(jobId: string): CommentSelection {
+  const key = guiguziItemsStorageKey(jobId);
+  const [items, setItems] = useState<GuiguziItem[]>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? (JSON.parse(raw) as GuiguziItem[]) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const persist = useCallback(
+    (next: GuiguziItem[]) => {
+      setItems(next);
+      try {
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {
+        /* localStorage 不可用时忽略 */
+      }
+    },
+    [key],
+  );
+
+  const isSelected = useCallback(
+    (text: string, comment: string) => items.some((it) => it.text === text && it.comment === comment),
+    [items],
+  );
+
+  const toggle = useCallback(
+    (text: string, comment: string, digg?: number) => {
+      const exists = items.some((it) => it.text === text && it.comment === comment);
+      if (exists) {
+        persist(items.filter((it) => !(it.text === text && it.comment === comment)));
+      } else if (items.length < GUIGUZI_MAX_ITEMS) {
+        persist([...items, { text, comment, digg }]);
+      }
+      // 超额（>=5 且未选中）静默忽略：UI 上 full 态把图标置灰
+    },
+    [items, persist],
+  );
+
+  return { isSelected, toggle, count: items.length, full: items.length >= GUIGUZI_MAX_ITEMS };
+}
 
 interface Props {
   jobId: string;
@@ -57,14 +112,15 @@ function cleanTitle(e: ShenkuoEntry): string {
   return cleaned || e.desc || e.aweme_id || '?';
 }
 
-export function ShenkuoCollectPanel({ nodeState, onAdvanced }: Props) {
+export function ShenkuoCollectPanel({ jobId, nodeState, onAdvanced }: Props) {
   const collected = (nodeState.outputs?.collected as ShenkuoEntry[] | undefined) ?? [];
   const status = nodeState.status;
   const ok = collected.filter((e) => !e.error);
+  const selection = useCommentSelection(jobId);
 
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
   if (collected.length === 0 && status === 'idle') {
-    hint = { tone: 'info', text: '在「采集源」粘贴对标作品链接并点「开始创作」，沈括会自动采集。' };
+    hint = { tone: 'info', text: '采集会自动开始，请稍候…' };
   } else if (collected.length === 0 && (status === 'running' || status === 'queued')) {
     hint = { tone: 'info', text: nodeState.progress || '采集中…' };
   } else if (collected.length === 0 && status === 'done') {
@@ -90,8 +146,15 @@ export function ShenkuoCollectPanel({ nodeState, onAdvanced }: Props) {
         </div>
       )}
 
+      {collected.length > 0 && (
+        <div className="dim-mono" style={{ margin: '0 0 var(--s-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Lightbulb size={11} strokeWidth={1.8} style={{ color: 'var(--accent)' }} />
+          点评论选作选题方案，已选 {selection.count}/{GUIGUZI_MAX_ITEMS}（交鬼谷子出选题）
+        </div>
+      )}
+
       {collected.map((e, i) => (
-        <EntryCard key={e.aweme_id || e.url || i} entry={e} />
+        <EntryCard key={e.aweme_id || e.url || i} entry={e} selection={selection} />
       ))}
 
       {ok.length > 0 && status === 'done' && onAdvanced && (
@@ -113,7 +176,7 @@ const STAGES: Array<[string, string]> = [
   ['comments', '评论'],
 ];
 
-function EntryCard({ entry }: { entry: ShenkuoEntry }) {
+function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: CommentSelection }) {
   const [textOpen, setTextOpen] = useState(false);
   const [audioOpen, setAudioOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -200,7 +263,7 @@ function EntryCard({ entry }: { entry: ShenkuoEntry }) {
               // 清洗稿本身是空行分段的纯文本；不保留换行会被 HTML 折叠成一坨，pre-wrap 还原段落
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              ...(textOpen ? {} : clamp6),
+              ...(textOpen ? {} : clamp12),
             }}
           >
             {entry.text}
@@ -228,19 +291,61 @@ function EntryCard({ entry }: { entry: ShenkuoEntry }) {
         </article>
       )}
 
-      {/* 卡片：高赞评论 */}
+      {/* 卡片：高赞评论 —— 默认展示前 3 条，超过 3 条才给"展开全部"按钮 */}
       {comments.length > 0 && (
-        <article className="shenkuo-card" style={cardStyle}>
+        <article className="shenkuo-card" style={{ ...cardStyle, position: 'relative' }}>
           <SectionHead
             icon={<MessageCircle size={13} />}
             label={`高赞评论 · Top ${comments.length}`}
-            right={<CardToggle open={commentsOpen} onToggle={() => setCommentsOpen((v) => !v)} />}
-            mb={commentsOpen ? 6 : 0}
+            right={
+              comments.length > 3 ? (
+                <CardToggle
+                  open={commentsOpen}
+                  onToggle={() => setCommentsOpen((v) => !v)}
+                  closedText={`展开全部 ${comments.length}`}
+                />
+              ) : undefined
+            }
           />
-          {commentsOpen &&
-            comments.map((c, i) => (
-              <CommentRow key={i} idx={i} c={c} />
+          {/* 每条评论是一个可交互行：hover 放大 + 浅遮罩 + 选题图标，点击选作选题方案 */}
+          <div className="shenkuo-comment-list">
+            {(commentsOpen ? comments : comments.slice(0, 3)).map((c, i) => (
+              <CommentRow
+                key={i}
+                idx={i}
+                c={c}
+                entryText={entry.text || ''}
+                selection={selection}
+              />
             ))}
+          </div>
+          {/* 展开/收起角标：骑在卡片下边框中点（绝对定位 + translateY(50%)，同色底切断边框） */}
+          {comments.length > 3 && (
+            <button
+              type="button"
+              className="dim-mono"
+              onClick={() => setCommentsOpen((v) => !v)}
+              style={{
+                position: 'absolute',
+                left: '50%',
+                bottom: 0,
+                transform: 'translate(-50%, 50%)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                padding: '2px 10px',
+                border: 'none',
+                background: 'var(--bg-surface)',
+                cursor: 'pointer',
+                fontSize: 'var(--text-2xs)',
+                lineHeight: 1.4,
+                color: '#e5484d',
+              }}
+            >
+              {commentsOpen ? '收起' : `展开全部 ${comments.length}`}
+              {commentsOpen ? <ChevronDown size={12} style={{ transform: 'rotate(180deg)' }} /> : <ChevronDown size={12} />}
+            </button>
+          )}
         </article>
       )}
 
@@ -470,40 +575,51 @@ function CardToggle({
   );
 }
 
-function CommentRow({ idx, c }: { idx: number; c: ShenkuoComment }) {
+// 一条评论 = 一个可交互行（内部 3 列：序号 / 内容 / 点赞）。
+// hover 放大 + 浅遮罩 + 选题图标；点击把它（连同所属作品提取文案）选作鬼谷子选题方案。
+// 行内 3 列与底部虚线分割线（左实右淡的渐变虚线）用 SCSS（见 _node-panels.scss）。
+function CommentRow({
+  idx,
+  c,
+  entryText,
+  selection,
+}: {
+  idx: number;
+  c: ShenkuoComment;
+  entryText: string;
+  selection: CommentSelection;
+}) {
   const top = idx < 3;
+  const comment = c.text || '';
+  const selected = comment ? selection.isSelected(entryText, comment) : false;
+  // 已选满且当前未选中 → 不可再选（图标置灰）
+  const disabled = !selected && selection.full;
+
+  const tip = selected
+    ? '已选作选题参考 · 点击取消'
+    : disabled
+      ? `已选满 ${GUIGUZI_MAX_ITEMS} 条`
+      : '选作选题参考';
+
   return (
-    // 三列网格：序号 / 内容(自动换行) / 点赞量；序号列与点赞列水平垂直居中
     <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'auto 1fr auto',
-        alignItems: 'center',
-        gap: 8,
-        marginBottom: 8,
+      className={`shenkuo-comment-row${selected ? ' selected' : ''}${disabled ? ' disabled' : ''}`}
+      role="button"
+      tabIndex={0}
+      title={tip}
+      onClick={() => comment && selection.toggle(entryText, comment, c.digg)}
+      onKeyDown={(e) => {
+        if ((e.key === 'Enter' || e.key === ' ') && comment) {
+          e.preventDefault();
+          selection.toggle(entryText, comment, c.digg);
+        }
       }}
     >
-      {/* 圆标签序号：前三名用 accent 实心，其余用浅底 */}
-      <span
-        style={{
-          width: 18,
-          height: 18,
-          borderRadius: '50%',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontWeight: 700,
-          fontSize: 'var(--text-2xs)',
-          lineHeight: 1,
-          color: top ? '#fff' : 'var(--ink-3)',
-          background: top ? 'var(--accent)' : 'var(--ink-7, rgba(0,0,0,0.06))',
-        }}
-      >
-        {idx + 1}
-      </span>
+      {/* 圆标签序号：前三名用 accent 实心，其余用浅底；已选则用 accent 实心打勾感 */}
+      <span className={`shenkuo-comment-idx${top || selected ? ' top' : ''}`}>{idx + 1}</span>
       {/* 内容列：隐藏作者昵称与归属 IP，仅显示文案，自动换行 */}
       <div style={{ minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--ink-2)', overflowWrap: 'anywhere' }}>
-        {c.text}
+        {comment}
       </div>
       {/* 点赞量列：水平垂直居中 */}
       <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 2, color: '#e5484d', fontSize: 'var(--text-2xs)', whiteSpace: 'nowrap' }}>
@@ -513,6 +629,11 @@ function CommentRow({ idx, c }: { idx: number; c: ShenkuoComment }) {
           </>
         )}
       </span>
+      {/* hover/selected 遮罩 + 选题图标（pointer-events:none，点击穿透到行本身） */}
+      <div className="shenkuo-comment-overlay">
+        <Lightbulb size={13} strokeWidth={2} fill={selected ? 'currentColor' : 'none'} />
+        {selected ? '已选' : '选题参考'}
+      </div>
     </div>
   );
 }
@@ -560,9 +681,10 @@ const linkBtnStyle: CSSProperties = {
   fontWeight: 600,
 };
 
-const clamp6: CSSProperties = {
+// 折叠态提取文案高度：12 行（在原 6 行基础上翻倍）
+const clamp12: CSSProperties = {
   display: '-webkit-box',
-  WebkitLineClamp: 6,
+  WebkitLineClamp: 12,
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
 };

@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, Check, Image as ImageIcon, Link2, Loader2, Radar, RotateCw, Sparkles, Trash2, UserPlus } from 'lucide-react';
+import { AlertCircle, Check, Image as ImageIcon, Link2, Loader2, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { api } from '../api/client';
@@ -13,7 +13,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { Select } from '../components/Select';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
-import { AccountCard, AddCard, JobCard } from '../components/WorkCards';
+import { AccountCard, JobCard } from '../components/WorkCards';
 import { useToast } from '../components/Toast';
 import { formatCount } from '../utils/format';
 
@@ -41,8 +41,8 @@ function CardSection({
   icon: Icon,
   dataCount,
   cards,
-  addCard,
-  addPosition,
+  addLabel,
+  onAdd,
   loading,
   rows = 2,
 }: {
@@ -50,8 +50,8 @@ function CardSection({
   icon: LucideIcon;
   dataCount: number;
   cards: ReactNode[];
-  addCard: ReactNode;
-  addPosition: 'first' | 'last';
+  addLabel: string;
+  onAdd: () => void;
   loading?: boolean;
   rows?: number;
 }) {
@@ -60,10 +60,8 @@ function CardSection({
   const [expanded, setExpanded] = useState(false);
 
   const capacity = cols * rows; // N 行总格数
-  const maxData = Math.max(1, capacity - 1); // 预留 1 格给新增框
-  const overflow = cards.length > maxData;
-  const visible = expanded ? cards : cards.slice(0, maxData);
-  const children = addPosition === 'first' ? [addCard, ...visible] : [...visible, addCard];
+  const overflow = cards.length > capacity;
+  const visible = expanded ? cards : cards.slice(0, capacity);
 
   return (
     <section className="card-section">
@@ -71,6 +69,11 @@ function CardSection({
         <Icon size={14} strokeWidth={1.6} className="dim" />
         <span className="label">{title}</span>
         <span className="count">{dataCount.toString().padStart(2, '0')}</span>
+        {/* 主题色新增按钮：紧贴 02/03 右侧、分割线最左侧；点击行为不变（开弹窗） */}
+        <button type="button" className="section-add" onClick={onAdd}>
+          <Plus size={17} strokeWidth={2} />
+          <span>{addLabel}</span>
+        </button>
         {overflow && (
           <button type="button" className="section-toggle" onClick={() => setExpanded((e) => !e)}>
             {expanded ? '收起' : `展开全部 ${dataCount}`}
@@ -86,7 +89,7 @@ function CardSection({
                 <div className="body"><div className="name">加载中…</div></div>
               </div>
             ))
-          : children}
+          : visible}
       </div>
     </section>
   );
@@ -216,7 +219,7 @@ export function HomePage() {
     <div className="page">
       <div className="topbar">
         <div className="brand">
-          <span className="mark">Opus Studio</span>
+          <span className="mark">NCDS Opus Studio</span>
         </div>
         <div className="spacer" />
         <ThemeSwitcher />
@@ -238,8 +241,8 @@ export function HomePage() {
           icon={Radar}
           dataCount={authors.length}
           cards={accountCards}
-          addCard={<AddCard key="__add" label="新增对标账号" onClick={() => setShowAddAccount(true)} />}
-          addPosition="first"
+          addLabel="对标账号"
+          onAdd={() => setShowAddAccount(true)}
           loading={loadingAcc}
         />
       </div>
@@ -249,8 +252,8 @@ export function HomePage() {
         icon={Link2}
         dataCount={jobs.length}
         cards={jobCards}
-        addCard={<AddCard key="__add" label="新建临时任务" onClick={() => setShowAddTemp(true)} />}
-        addPosition="first"
+        addLabel="临时作品"
+        onAdd={() => setShowAddTemp(true)}
         loading={loadingJobs}
       />
 

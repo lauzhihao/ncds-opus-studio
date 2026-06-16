@@ -50,8 +50,8 @@ export const AGENTS: AgentDef[] = [
     role: '采集供料',
     description: '采集对标作品的文案/评论/音轨/数据，作为创作素材。',
     icon: Radar,
+    // 采集源不再是抽屉标签页：进画布即自动采集（后端有采集缓存），沈括只展示采集成果。
     members: [
-      { node: 'input', label: '采集源' },
       { node: 'asr', label: '采集成果' },
     ],
   },
@@ -67,20 +67,21 @@ export const AGENTS: AgentDef[] = [
     id: 'liuyong',
     name: '柳永',
     role: '出稿',
-    description: '多模型改写出稿，并切分为台词稿。',
+    description: '多模型改写出稿。',
     icon: PenLine,
     members: [
       { node: 'rw', label: '改写' },
-      { node: 'lines', label: '台词' },
     ],
   },
   {
     id: 'wudaozi',
     name: '吴道子',
     role: '美术',
-    description: '分镜设计与画面生成。',
+    // 台词(切 beats)是分镜的前置：切台词 -> 分镜 -> 画面，归到美术线一气呵成。
+    description: '把口播稿切成台词行，再做分镜与画面。',
     icon: Palette,
     members: [
+      { node: 'lines', label: '台词' },
       { node: 'storyboard', label: '分镜' },
       { node: 'image', label: '画面' },
     ],
@@ -123,6 +124,9 @@ export const WOLONG = {
 export const AGENT_BY_NODE: Record<string, AgentId> = (() => {
   const m: Record<string, AgentId> = {};
   for (const a of AGENTS) for (const mem of a.members) m[mem.node] = a.id;
+  // input 不再是沈括的抽屉成员（采集源 tab 已移除、改为进画布自动采集），但它仍是
+  // 沈括名下的采集源持有节点：保留映射，使首页进度灯 / NODE_ORDER 的归属与之前一致。
+  m.input = 'shenkuo';
   return m;
 })();
 
@@ -149,6 +153,22 @@ export function agentIndex(id: AgentId): number {
 // 真持久化 + 注入柳永 rewrite 随 guiguzi.run 接引擎后续做）。
 export function angleStorageKey(jobId: string): string {
   return `nof:angle:${jobId}`;
+}
+
+// 沈括面板「备选题评论」的前端持久化 key：用户在沈括选中的高赞评论（连同所属作品提取文案）
+// 存这里（GuiguziItem[]），鬼谷子面板读它出选题。沈括与鬼谷子是不同 agent 抽屉、各自挂载，
+// 用 localStorage 跨面板传递（同 angle 的既有做法），解耦且抗刷新/重挂载。
+export function guiguziItemsStorageKey(jobId: string): string {
+  return `nof:guiguzi:items:${jobId}`;
+}
+
+// 最多可选作选题参考的评论数。
+export const GUIGUZI_MAX_ITEMS = 5;
+
+// 鬼谷子双栏选题结果里「N 选 1」选定的那个选题（GuiguziTopic）。选定即交柳永出稿，
+// 同样走 localStorage（按 jobId）持久化，供柳永后续读取注入。
+export function guiguziChosenStorageKey(jobId: string): string {
+  return `nof:guiguzi:chosen:${jobId}`;
 }
 
 // —— 状态聚合 ——
@@ -183,6 +203,52 @@ export function agentStatus(
   ctx: { angleConfirmed?: boolean } = {},
 ): NodeStatus {
   return aggregateAgentStatus(agentMemberStatuses(agent, jobNodes, ctx));
+}
+
+// —— 作品列表的「设计进度灯」——
+// 把底层节点 status 收敛成「当前 agent + 红黄绿灯」，供首页作品卡左下角显示
+// （替代原先无信息量的 pipeline_id）。鬼谷子是 virtual gate、无后端节点，自然不参与；
+// 等它补上后端步后会自动纳入。
+
+export type ProgressLight = 'red' | 'yellow' | 'green';
+
+export interface JobProgress {
+  light: ProgressLight;
+  agentName: string;
+}
+
+// 按引擎 NEXT 链得到真实节点的有序列表（跳过 virtual 成员，如鬼谷子）。
+const NODE_ORDER: string[] = (() => {
+  const order: string[] = [];
+  const seen = new Set<string>();
+  let cur: string | null = 'input';
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    const aid = AGENT_BY_NODE[cur];
+    const virtual = AGENTS.find((a) => a.id === aid)?.members.find((m) => m.node === cur)?.virtual;
+    if (!virtual) order.push(cur);
+    cur = NODE_NEXT[cur] ?? null;
+  }
+  return order;
+})();
+
+function nodeAgentName(node: string): string {
+  const aid = AGENT_BY_NODE[node];
+  return AGENTS.find((a) => a.id === aid)?.name ?? '';
+}
+
+// 灯色 + 当前 agent 判定优先级：failed(红) > running/queued(黄) > 全 done(绿·已出片)
+// > 首个未完成真实节点所属 agent(绿) > 全 idle 则首个 agent(绿)。
+export function jobProgress(nodeStatus: Record<string, NodeStatus> | undefined): JobProgress {
+  const ns = nodeStatus ?? {};
+  const failed = NODE_ORDER.find((n) => ns[n] === 'failed');
+  if (failed) return { light: 'red', agentName: nodeAgentName(failed) };
+  const active = NODE_ORDER.find((n) => ns[n] === 'running' || ns[n] === 'queued');
+  if (active) return { light: 'yellow', agentName: nodeAgentName(active) };
+  const allDone = NODE_ORDER.length > 0 && NODE_ORDER.every((n) => ns[n] === 'done');
+  if (allDone) return { light: 'green', agentName: '已出片' };
+  const next = NODE_ORDER.find((n) => ns[n] !== 'done') ?? NODE_ORDER[0] ?? '';
+  return { light: 'green', agentName: nodeAgentName(next) };
 }
 
 // agent 卡上浮的进度文本：取首个 running 成员的 progress，没有就空串。

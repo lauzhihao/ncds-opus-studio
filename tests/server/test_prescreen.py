@@ -24,9 +24,14 @@ RUBRIC_TEXT = "# Leader 审美备忘录\n\n- 开头三句内必须有具体钩�
 
 @pytest.fixture()
 def bench(tmp_path: Path) -> str:
-    p = tmp_path / "all_posts.json"
-    p.write_text("[]", encoding="utf-8")
-    return str(p)
+    # all_posts.json + 旁边 collected.json(深采条目带 text + 高赞评论):鬼谷子改评论驱动后
+    # 卧龙从 collected.json 取评论作选题种子,start_round 需要它存在。
+    (tmp_path / "all_posts.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "collected.json").write_text(json.dumps({
+        "items": [{"aweme_id": "a1", "digg": 100, "text": "提取文案正文",
+                   "top_comments": [{"text": "高赞评论一", "digg": 50}]}],
+    }, ensure_ascii=False), encoding="utf-8")
+    return str(tmp_path / "all_posts.json")
 
 
 def _seeded_round(tmp_path: Path, bench: str, count: int = 1):

@@ -65,6 +65,37 @@ export function JobCanvasPage() {
     api.getPipeline(job.pipeline_id).then(setPipeline).catch(console.error);
   }, [job?.pipeline_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 进画布即自动采集：无论从哪个入口（账号作品 / 临时任务 / 历史作品）进来，只要采集源已就位
+  // 且沈括(asr) 还没起步，就自动触发一次 collect。后端有采集缓存，已采过的作品直接返回结果。
+  const autoCollectFired = useRef(false);
+  useEffect(() => {
+    if (!job || !jobId || autoCollectFired.current) return;
+    const asr = job.nodes.asr?.status ?? 'idle';
+    // 仅在 idle / failed 时自动采集；queued/running/done 不重复触发。
+    if (asr !== 'idle' && asr !== 'failed') return;
+    const input = (job.nodes.input?.outputs ?? {}) as { urls?: unknown; shares?: unknown };
+    const hasSource =
+      (Array.isArray(input.shares) && input.shares.length > 0) ||
+      (Array.isArray(input.urls) && input.urls.length > 0);
+    if (!hasSource) return; // 空作品（无采集源）不触发
+    autoCollectFired.current = true;
+    api.runNode(jobId, 'asr').catch((e) => {
+      autoCollectFired.current = false; // 失败放行，下次 job 更新时可重试
+      console.error('[JobCanvasPage] 自动采集触发失败', e);
+    });
+  }, [job, jobId]);
+
+  // 进画布即后台刷新沈括的播放数据 + 评论（与抽屉是否打开无关）。fire-and-forget：后端逐条
+  // 作品 1 小时内只采一次（Redis 节流锁）省 API 成本，没采过 / 正在采则后端自动 no-op。
+  const refreshFired = useRef(false);
+  useEffect(() => {
+    if (!job || !jobId || refreshFired.current) return;
+    refreshFired.current = true;
+    api.refreshShenkuo(jobId).catch((e) => {
+      console.error('[JobCanvasPage] 沈括数据/评论刷新触发失败', e);
+    });
+  }, [job, jobId]);
+
   // 鬼谷子选题"已确认"= 柳永(rw) 已起步（确认选题即触发 rw）。可靠且响应式，无需 localStorage。
   const angleConfirmed = useMemo(
     () => ['queued', 'running', 'done'].includes(job?.nodes.rw?.status ?? 'idle'),

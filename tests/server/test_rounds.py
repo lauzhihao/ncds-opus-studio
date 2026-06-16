@@ -47,9 +47,17 @@ class FakeTransport:
 
 @pytest.fixture()
 def bench(tmp_path: Path) -> str:
-    p = tmp_path / "all_posts.json"
-    p.write_text("[]", encoding="utf-8")
-    return str(p)
+    # all_posts.json(精简列表)+ 旁边的 collected.json(深采条目,带 text + 高赞评论)。
+    # 鬼谷子改评论驱动后,卧龙从 collected.json 取评论作选题种子,故 fixture 要备齐。
+    (tmp_path / "all_posts.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "collected.json").write_text(json.dumps({
+        "items": [{
+            "aweme_id": "a1", "digg": 100, "text": "提取文案正文",
+            "top_comments": [{"text": "高赞评论一", "digg": 50},
+                             {"text": "高赞评论二", "digg": 30}],
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    return str(tmp_path / "all_posts.json")
 
 
 def _topics(n=5):
@@ -105,7 +113,11 @@ def test_start_round_dispatches_guiguzi(tmp_path: Path, bench: str):
     assert len(tp.submits) == 1
     s = tp.submits[0]
     assert s["cmd"] == "guiguzi" and s["source"] == "wolong" and s["intent_key"] == "guiguzi:0"
-    assert s["params"]["avoid"] == ["旧题"]
+    # 评论驱动:params 携带从 collected.json 取的 items(评论 + 提取文案),不再传 benchmark/avoid
+    assert s["params"]["items"] == [
+        {"text": "提取文案正文", "comment": "高赞评论一"},
+        {"text": "提取文案正文", "comment": "高赞评论二"},
+    ]
     r = rs.load(out["round_id"])
     assert r["intents"]["guiguzi:0"]["task_id"] == s["task_id"]
 

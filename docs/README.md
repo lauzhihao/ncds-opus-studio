@@ -24,6 +24,14 @@ uv pip install --python .venv/bin/python3 <pkg>
 
 Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退出。同 cmd 只能起一个 nof-worker（出队 CAS 单进程语义）。重启 nof-server 不打断 worker 在跑任务。launchd 常驻见 `scripts/install_nof_worker.sh`。
 
+**后端热重载（dev）**：worker 拆分后 8810 是纯 producer，任务都在 worker 跑，给 nof-server 加 `--reload` 已**不再**误杀长任务（旧红线作废）。dev 起法：
+```bash
+.venv/bin/uvicorn ncds_opus_factory.server.app:app --host 0.0.0.0 --port 8810 --reload --reload-dir src
+```
+`--reload-dir src` 只盯后端源码；存 `.py` 自动重启（会断掉当时挂着的 SSE/in-flight 请求，客户端自动重连）。**只热重载后端**——前端改动仍要 `npm run build`（见下）。生产别长开 `--reload`。
+
+**一键起 HMR 三件套（前后端都免 build 免刷）**：`scripts/dev_up.sh {up|down|restart|status}` —— 确保 redis → 起 vite(:5173) → 起 `NOF_DEV=1` + `--reload` 的 nof-server，访问入口 `http://localhost:8810/studio/`（带尾斜杠走 dev 反代，HMR WS 同走 8810）。**不碰 nof-worker**（只查状态提示；worker 起停仍走 `install_nof_worker.sh`）。注意：`up`/`restart` 要**在交互终端里跑**——常驻进程靠 `nohup+disown` detach，别在会被回收的子 shell（如 agent 后台任务）里跑，否则进程组被杀牵连。dev 专用，正式部署仍要 `npm run build`。
+
 ### /studio 前端（web/，React + Vite）
 - dev：`cd web && npm run dev`（vite :5173）+ `NOF_DEV=1 nof-server`，访问 `http://localhost:8810/studio`，HMR 同走 8810 反代（依赖 httpx + websockets，已声明 pyproject）。
 - prod：`cd web && npm run build` 生成 `web/dist`，再起 `nof-server`。

@@ -189,6 +189,97 @@
   flex-shrink: 0;
   line-height: 0;
 }
+
+/* —— 沈括高赞评论：可交互行（选作鬼谷子选题方案）—— */
+.shenkuo-comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 一行 = 序号 / 内容 / 点赞 三列；relative 承载 hover 遮罩；每行底部一条左实右淡的渐变虚线 */
+.shenkuo-comment-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+.shenkuo-comment-row::after {
+  /* 底部虚线分割线：横向 gradient（左实右淡）+ repeating mask 切成虚线 */
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line, rgba(0, 0, 0, 0.18)), transparent);
+  -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 5px, transparent 5px 10px);
+  mask-image: repeating-linear-gradient(90deg, #000 0 5px, transparent 5px 10px);
+}
+.shenkuo-comment-row:hover {
+  transform: scale(1.03);
+  background: var(--bg-page);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  z-index: 2;
+}
+.shenkuo-comment-row.selected {
+  background: var(--accent-tint);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.shenkuo-comment-row.disabled {
+  cursor: not-allowed;
+}
+/* 序号圆标签：前三名 / 已选用 accent 实心，其余浅底 */
+.shenkuo-comment-idx {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--ink-3);
+  background: var(--ink-7, rgba(0, 0, 0, 0.06));
+}
+.shenkuo-comment-idx.top {
+  color: #fff;
+  background: var(--accent);
+}
+/* hover/selected 浅遮罩 + 选题图标：pointer-events:none，点击穿透到行 */
+.shenkuo-comment-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  pointer-events: none;
+}
+.shenkuo-comment-row:hover .shenkuo-comment-overlay {
+  display: flex;
+}
+.shenkuo-comment-row.disabled:hover .shenkuo-comment-overlay {
+  background: rgba(0, 0, 0, 0.35);
+}
+/* 已选态：常驻右下角小角标（不盖正文，accent 色），hover 时仍走上面的全幅黑遮罩 */
+.shenkuo-comment-row.selected .shenkuo-comment-overlay {
+  display: flex;
+  inset: auto 6px 6px auto;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+}
 .tpl-card .cover .tpl-running-mask {
   position: absolute;
   inset: 0;

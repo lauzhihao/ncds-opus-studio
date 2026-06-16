@@ -1,17 +1,19 @@
-"""tests：P5 排产策略协程——事件消费/offset 语义/链推进/配额停/库存补货。
+"""tests：排产策略协程——事件消费 / offset 语义 / 配额停。
 
 目录解析全部走 NOF_STATE_DIR(tests/conftest.py 已隔离到 tmp)。
 鸭子假件(同 test_retro.py):不起 uvicorn,不碰真 TaskRunner。
+
+注:鬼谷子已改评论驱动,planner 不再「链推进 -> benchmark 派鬼谷子」与「低水位补货」,
+本文件相应只覆盖「信号事件 -> 沈括深采」一职(链文件仍登记,供深采溯源/防重)。
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
-from ncds_opus_factory.common import topic_store
 from ncds_opus_factory.server import planner
 from ncds_opus_factory.server.schemas import TaskMeta
 
@@ -77,46 +79,18 @@ def _write_events(lines: list[str], tail: str | None = None) -> None:
         f.write(payload)
 
 
-def _seed_chain(aweme: str, sec_uid: str, task_id: str,
-                created_at: str | None = None) -> None:
-    chains = planner.load_chains()
-    chains.append({"aweme_id": aweme, "sec_uid": sec_uid,
-                   "shenkuo_task_id": task_id,
-                   "created_at": created_at or datetime.now().isoformat()})
-    planner.save_chains(chains)
-
-
-def _make_all_posts(sec_uid: str) -> str:
-    p = planner.benchmark_path_for(sec_uid)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("[]", encoding="utf-8")
-    return str(p)
-
-
-def _stock_topics(n: int) -> None:
-    topic_store.merge([{"title": f"库存选题{i}", "potential": 5 + i} for i in range(n)],
-                      source="guiguzi")
-
-
 def _tick(runner, store) -> dict[str, int]:
     return asyncio.run(planner.planner_tick(runner, store))
 
 
-def _no_benchmark(monkeypatch) -> None:
-    """模拟「无对标数据」:开发机仓库根 state/ 可能有真数据,必须隔离。"""
-    monkeypatch.setattr(planner.wolong_rounds, "discover_benchmark", lambda: None)
-
-
 # ---------------------------------------------------------------------------
-# 冷启动:三缺失静默空转
+# 冷启动:无事件静默空转
 # ---------------------------------------------------------------------------
-def test_cold_start_silent_noop(monkeypatch):
-    _no_benchmark(monkeypatch)
+def test_cold_start_silent_noop():
     runner = _FakeRunner()
     stats = _tick(runner, _FakeStore())
     assert runner.submits == []
-    assert stats == {"events_consumed": 0, "guiguzi_dispatched": 0,
-                     "restock_dispatched": 0}
+    assert stats == {"events_consumed": 0}
     # offset/链文件都不强制创建
     assert not planner.offset_path().exists()
     assert not planner.chains_path().exists()
@@ -125,8 +99,7 @@ def test_cold_start_silent_noop(monkeypatch):
 # ---------------------------------------------------------------------------
 # 事件消费
 # ---------------------------------------------------------------------------
-def test_events_dispatch_shenkuo_and_register_chains(monkeypatch):
-    _no_benchmark(monkeypatch)
+def test_events_dispatch_shenkuo_and_register_chains():
     # 第三行重复 aweme a1:同批内防重,链按 aweme_id 幂等
     _write_events([_event("a1", "uidA"), _event("a2", "uidB", "spike"),
                    _event("a1", "uidA", "spike")])
@@ -159,9 +132,8 @@ def test_events_dispatch_shenkuo_and_register_chains(monkeypatch):
     assert planner.read_offset() == planner.events_path().stat().st_size
 
 
-def test_dedup_skip_still_registers_missing_chain(monkeypatch):
+def test_dedup_skip_still_registers_missing_chain():
     """crash 在 submit 后、链落盘前:重放时防重命中也要补登记链,事件不丢。"""
-    _no_benchmark(monkeypatch)
     _write_events([_event("a9", "uidZ")])
     store = _FakeStore([_meta("t_old", "shenkuo", {"aweme": "a9"}, status="running")])
     runner = _FakeRunner()
@@ -171,8 +143,7 @@ def test_dedup_skip_still_registers_missing_chain(monkeypatch):
     assert len(chains) == 1 and chains[0]["shenkuo_task_id"] == "t_old"
 
 
-def test_bad_line_skipped_offset_advances(monkeypatch):
-    _no_benchmark(monkeypatch)
+def test_bad_line_skipped_offset_advances():
     _write_events(["{这不是json", _event("a1", "uidA"),
                    json.dumps({"type": "unknown_event"})])
     store = _FakeStore()
@@ -183,8 +154,7 @@ def test_bad_line_skipped_offset_advances(monkeypatch):
     assert planner.read_offset() == planner.events_path().stat().st_size
 
 
-def test_offset_beyond_file_size_resets(monkeypatch):
-    _no_benchmark(monkeypatch)
+def test_offset_beyond_file_size_resets():
     _write_events([_event("a1", "uidA")])
     planner.write_offset(99999)  # 文件被换的形态
     store = _FakeStore()
@@ -194,8 +164,7 @@ def test_offset_beyond_file_size_resets(monkeypatch):
     assert planner.read_offset() == planner.events_path().stat().st_size
 
 
-def test_incomplete_tail_line_not_consumed(monkeypatch):
-    _no_benchmark(monkeypatch)
+def test_incomplete_tail_line_not_consumed():
     _write_events([_event("a1", "uidA")], tail='{"type":"new_post","aweme_id":"a2"')
     store = _FakeStore()
     runner = _FakeRunner(store=store)
@@ -214,8 +183,7 @@ def test_incomplete_tail_line_not_consumed(monkeypatch):
     assert planner.read_offset() == planner.events_path().stat().st_size
 
 
-def test_quota_exhausted_stops_events_offset_frozen(monkeypatch):
-    _no_benchmark(monkeypatch)
+def test_quota_exhausted_stops_events_offset_frozen():
     _write_events([_event("a1", "uidA"), _event("a2", "uidB")])
     runner = _FakeRunner(quota=0)
     _tick(runner, _FakeStore())
@@ -225,9 +193,8 @@ def test_quota_exhausted_stops_events_offset_frozen(monkeypatch):
     assert not planner.chains_path().exists()
 
 
-def test_quota_midway_offset_advances_to_last_processed(monkeypatch):
+def test_quota_midway_offset_advances_to_last_processed():
     """配额只够一条:offset 推进到已成功处理的最后一行之后,不过推。"""
-    _no_benchmark(monkeypatch)
     line1, line2 = _event("a1", "uidA"), _event("a2", "uidB")
     _write_events([line1, line2])
 
@@ -243,9 +210,8 @@ def test_quota_midway_offset_advances_to_last_processed(monkeypatch):
     assert len(planner.load_chains()) == 1  # 已处理那条的链已落盘
 
 
-def test_event_submit_exception_freezes_offset(monkeypatch):
+def test_event_submit_exception_freezes_offset():
     """派发异常(非配额):该行不消费,offset 停在已成功行后,下轮重试不丢事件。"""
-    _no_benchmark(monkeypatch)
     line1, line2 = _event("a1", "uidA"), _event("a2", "uidB")
     _write_events([line1, line2])
 
@@ -269,181 +235,10 @@ def test_event_submit_exception_freezes_offset(monkeypatch):
     assert planner.read_offset() == planner.events_path().stat().st_size
 
 
-def test_quota_check_passes_cron_bucket(monkeypatch):
+def test_quota_check_passes_cron_bucket():
     """配额自查必须走 cron 桶(§8.4):quota_remaining 收到 source=\"cron\"。"""
-    _no_benchmark(monkeypatch)
     _write_events([_event("a1", "uidA")])
-    _make_all_posts("uidB")
-    _seed_chain("a2", "uidB", "t_s2")
-    store = _FakeStore([_meta("t_s2", "shenkuo", {"aweme": "a2"}, status="completed")])
+    store = _FakeStore()
     runner = _FakeRunner(store=store)
     _tick(runner, store)
     assert ("shenkuo", "cron") in runner.quota_calls
-    assert ("guiguzi", "cron") in runner.quota_calls
-
-
-# ---------------------------------------------------------------------------
-# 链推进
-# ---------------------------------------------------------------------------
-def test_chain_advances_to_guiguzi_on_terminal(monkeypatch):
-    _no_benchmark(monkeypatch)
-    _stock_topics(2)  # < 低水位,但链派发后 inflight 置位 -> 补货也不会双派
-    bench = _make_all_posts("uidA")
-    _seed_chain("a1", "uidA", "t_s1")
-    store = _FakeStore([_meta("t_s1", "shenkuo", {"aweme": "a1"}, status="failed")])
-    runner = _FakeRunner()
-    stats = _tick(runner, store)
-
-    assert stats["guiguzi_dispatched"] == 1 and stats["restock_dispatched"] == 0
-    assert len(runner.submits) == 1
-    sub = runner.submits[0]
-    assert sub["cmd"] == "guiguzi" and sub["source"] == "cron"
-    assert sub["params"]["benchmark_path"] == bench
-    assert sub["params"]["category"] is None  # 显式 None,默认 'growth' 会 ValueError
-    assert sorted(sub["params"]["avoid"]) == sorted(topic_store.active_titles())
-    assert "库存选题0" in sub["params"]["avoid"]
-    assert planner.load_chains() == []  # 派发成功即销链
-
-    # 幂等:链已销,重跑不再派
-    runner2 = _FakeRunner()
-    _tick(runner2, store)
-    assert [s for s in runner2.submits if s["cmd"] == "guiguzi"
-            and s["params"]["benchmark_path"] == bench] == []
-
-
-def test_chain_waits_until_terminal(monkeypatch):
-    _no_benchmark(monkeypatch)
-    _seed_chain("a1", "uidA", "t_s1")
-    _make_all_posts("uidA")
-    store = _FakeStore([_meta("t_s1", "shenkuo", {"aweme": "a1"}, status="running")])
-    runner = _FakeRunner()
-    _tick(runner, store)
-    assert runner.submits == []
-    assert len(planner.load_chains()) == 1  # 未终态,链保留
-
-
-def test_chain_dropped_when_all_posts_missing(monkeypatch):
-    _no_benchmark(monkeypatch)
-    _seed_chain("a1", "uidNoData", "t_s1")
-    store = _FakeStore([_meta("t_s1", "shenkuo", {"aweme": "a1"}, status="completed")])
-    runner = _FakeRunner()
-    _tick(runner, store)
-    assert runner.submits == []
-    assert planner.load_chains() == []  # 对标缺失 -> 丢链(警告)
-
-
-def test_chain_24h_dedup_destroys_without_dispatch(monkeypatch):
-    _no_benchmark(monkeypatch)
-    bench = _make_all_posts("uidA")
-    _seed_chain("a1", "uidA", "t_s1")
-    store = _FakeStore([
-        _meta("t_s1", "shenkuo", {"aweme": "a1"}, status="completed"),
-        # 24h 内已有同 benchmark_path 的 cron 鬼谷子(在途,兼挡补货)
-        _meta("t_g1", "guiguzi", {"benchmark_path": bench, "category": None},
-              status="pending"),
-    ])
-    runner = _FakeRunner()
-    _tick(runner, store)
-    assert runner.submits == []
-    assert planner.load_chains() == []  # 直接销链不派
-
-
-def test_chain_over_48h_force_dropped(monkeypatch):
-    _no_benchmark(monkeypatch)
-    _make_all_posts("uidA")
-    old = (datetime.now() - timedelta(hours=49)).isoformat()
-    _seed_chain("a1", "uidA", "t_s1", created_at=old)
-    store = _FakeStore([_meta("t_s1", "shenkuo", {"aweme": "a1"}, status="running")])
-    runner = _FakeRunner()
-    _tick(runner, store)
-    assert runner.submits == []
-    assert planner.load_chains() == []
-
-
-def test_chain_submit_exception_keeps_chain(monkeypatch):
-    """鬼谷子派发异常:链保留,下轮重试(宁可重派不丢事件)。"""
-    _no_benchmark(monkeypatch)
-    _make_all_posts("uidA")
-    _seed_chain("a1", "uidA", "t_s1")
-    store = _FakeStore([_meta("t_s1", "shenkuo", {"aweme": "a1"}, status="completed")])
-
-    class _Boom(_FakeRunner):
-        async def submit(self, cmd, params, source=None, **kw):
-            if cmd == "guiguzi":
-                raise RuntimeError("boom")
-            return await super().submit(cmd, params, source=source, **kw)
-
-    runner = _Boom(store=store)
-    stats = _tick(runner, store)
-    assert stats["guiguzi_dispatched"] == 0
-    assert len(planner.load_chains()) == 1
-
-
-def test_chain_quota_exhausted_keeps_chain(monkeypatch):
-    _no_benchmark(monkeypatch)
-    _make_all_posts("uidA")
-    _seed_chain("a1", "uidA", "t_s1")
-    store = _FakeStore([_meta("t_s1", "shenkuo", {"aweme": "a1"}, status="completed")])
-    runner = _FakeRunner(quota={"shenkuo": 99, "guiguzi": 0})
-    _tick(runner, store)
-    assert runner.submits == []
-    assert len(planner.load_chains()) == 1  # 配额停:链保留下轮再推
-
-
-# ---------------------------------------------------------------------------
-# 库存补货
-# ---------------------------------------------------------------------------
-def test_restock_when_below_low_water(monkeypatch):
-    _stock_topics(2)  # fresh=2 < 5
-    monkeypatch.setattr(planner.wolong_rounds, "discover_benchmark",
-                        lambda: "/tmp/bench/author_x/all_posts.json")
-    runner = _FakeRunner()
-    stats = _tick(runner, _FakeStore())
-    assert stats["restock_dispatched"] == 1
-    assert len(runner.submits) == 1
-    sub = runner.submits[0]
-    assert sub["cmd"] == "guiguzi" and sub["source"] == "cron"
-    assert sub["params"]["benchmark_path"] == "/tmp/bench/author_x/all_posts.json"
-    assert sub["params"]["category"] is None
-    assert sorted(sub["params"]["avoid"]) == sorted(topic_store.active_titles())
-
-
-def test_restock_skipped_when_stock_sufficient(monkeypatch):
-    _stock_topics(6)  # fresh=6 >= 5
-    monkeypatch.setattr(planner.wolong_rounds, "discover_benchmark",
-                        lambda: "/tmp/bench/author_x/all_posts.json")
-    runner = _FakeRunner()
-    _tick(runner, _FakeStore())
-    assert runner.submits == []
-
-
-def test_restock_skipped_when_inflight_guiguzi(monkeypatch):
-    _stock_topics(1)
-    monkeypatch.setattr(planner.wolong_rounds, "discover_benchmark",
-                        lambda: "/tmp/bench/author_x/all_posts.json")
-    store = _FakeStore([_meta("t_g1", "guiguzi", {"benchmark_path": "/x"},
-                              status="running")])
-    runner = _FakeRunner()
-    _tick(runner, store)
-    assert runner.submits == []  # 在途 cron 鬼谷子,防堆积
-
-
-def test_restock_cooldown_same_benchmark(monkeypatch):
-    """补货防重(与链推进同口径):24h 内已有同对标 cron 鬼谷子 -> 冷却不派。"""
-    _stock_topics(1)  # fresh=1 < 5
-    bench = "/tmp/bench/author_x/all_posts.json"
-    monkeypatch.setattr(planner.wolong_rounds, "discover_benchmark", lambda: bench)
-    store = _FakeStore([_meta("t_g0", "guiguzi", {"benchmark_path": bench},
-                              status="completed")])
-    runner = _FakeRunner()
-    _tick(runner, store)
-    assert runner.submits == []  # 同对标刚跑过:不反复烧配额
-
-
-def test_restock_quota_exhausted_no_submit(monkeypatch):
-    _stock_topics(1)
-    monkeypatch.setattr(planner.wolong_rounds, "discover_benchmark",
-                        lambda: "/tmp/bench/author_x/all_posts.json")
-    runner = _FakeRunner(quota=0)
-    _tick(runner, _FakeStore())
-    assert runner.submits == []

@@ -73,6 +73,37 @@ def test_fifo_order():
 
 
 # ---------------------------------------------------------------------------
+# 沈括刷新节流锁：窗口内只有首次抢到
+# ---------------------------------------------------------------------------
+
+def test_acquire_shenkuo_refresh_first_wins_then_throttled():
+    """同一 aweme_id：首次 acquire 抢到 True，窗口内再 acquire 一律 False（节流 + 防并发）。"""
+    async def _run():
+        queue, client = make_queue()
+        first = await queue.acquire_shenkuo_refresh("aw-1", ttl_seconds=3600)
+        second = await queue.acquire_shenkuo_refresh("aw-1", ttl_seconds=3600)
+        assert first is True
+        assert second is False
+        # 落了带 TTL 的 key
+        assert await client.ttl("nof:shenkuo:refresh:aw-1") > 0
+        # 不同作品互不影响
+        assert await queue.acquire_shenkuo_refresh("aw-2", ttl_seconds=3600) is True
+    asyncio.run(_run())
+
+
+def test_acquire_shenkuo_refresh_fail_open_on_redis_error():
+    """Redis 故障时 fail-open 返回 True（功能降级为每次都刷，不卡死）。"""
+    class _ErrorClient:
+        async def set(self, *a, **k):
+            raise redis.exceptions.ConnectionError("boom")
+
+    async def _run():
+        queue = RedisQueue(client=_ErrorClient())
+        assert await queue.acquire_shenkuo_refresh("aw-x") is True
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # brpop 超时返回 None
 # ---------------------------------------------------------------------------
 

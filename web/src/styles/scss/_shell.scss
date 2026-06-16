@@ -100,7 +100,7 @@
 
 .section-title {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--s-3);
   padding: 0 var(--s-6);
   margin: var(--s-6) 0 var(--s-3);
@@ -316,6 +316,37 @@
   padding: 3px var(--s-2);
   border-radius: var(--r-1);
 }
+/* footer 设计进度灯：灰色标签 chip 里放 红黄绿点 + 当前 agent 名（替代原 pipeline_id badge） */
+.tpl-card .body .footer .progress-light {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 3px var(--s-2);
+  border-radius: var(--r-1);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  font-size: var(--text-2xs);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.tpl-card .body .footer .progress-light .dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+.tpl-card .body .footer .progress-light.red .dot { background: var(--status-failed, #d1242f); }
+.tpl-card .body .footer .progress-light.yellow .dot {
+  background: var(--status-warn, #d4a017);
+  animation: light-pulse 1.2s ease-in-out infinite;
+}
+.tpl-card .body .footer .progress-light.green .dot { background: var(--status-done, #2ea043); }
+@keyframes light-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .tpl-card .body .meta {
   font-family: var(--font-mono);
   font-size: var(--text-xs);

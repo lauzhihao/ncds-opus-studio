@@ -313,6 +313,20 @@ async def regen_tts_scene(job_id: str, scene_id: str) -> dict[str, Any]:
     return {"ok": True, "job_id": job_id, "scene_id": scene_id}
 
 
+@router.post("/jobs/{job_id}/shenkuo/refresh")
+async def refresh_shenkuo(job_id: str) -> dict[str, Any]:
+    """进画布触发：后台刷新沈括已采作品的播放数据 + 评论（仅这两项，其余产物不动）。
+
+    立即返回（fire-and-forget）；逐条作品 1 小时内只采一次（Redis 节流锁）省 API 成本。
+    refreshing=False 表示没起刷新（未采过 / 正在采 / 已有刷新在跑），属正常 no-op。
+    """
+    try:
+        refreshing = PIPELINE_RUNNER.refresh_shenkuo(job_id)
+    except KeyError as e:
+        raise HTTPException(404, _exc_msg(e))
+    return {"ok": True, "job_id": job_id, "refreshing": refreshing}
+
+
 @router.put("/jobs/{job_id}/inputs")
 async def update_inputs(job_id: str, body: UpdateInputsRequest) -> dict[str, Any]:
     """更新 input 节点：urls / raw_text / shares 任一组合都接受。
@@ -380,6 +394,59 @@ async def put_episode(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str
         raise HTTPException(404, f"job not found: {job_id}")
     PIPELINE_RUNNER.write_episode(job_id, body)
     return {"ok": True, "beats": len(body.get("beats", [])), "scenes": len(body.get("scenes", {}))}
+
+
+# ---------------------------------------------------------------------------
+# 鬼谷子选题（评论驱动双模型）—— virtual agent，结果落 per-job guiguzi.json，前端轮询
+# ---------------------------------------------------------------------------
+@router.post("/jobs/{job_id}/guiguzi/analyze")
+async def analyze_guiguzi(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """第一步：双模型反推爆款原因。立即返回 analyzing，后台跑，前端轮询取 analyzed。
+
+    body: {"items": [{text, comment}, ...](≤5)}。
+    """
+    items = body.get("items") if isinstance(body, dict) else None
+    try:
+        doc = PIPELINE_RUNNER.analyze_guiguzi(job_id, items or [])
+    except KeyError as e:
+        raise HTTPException(404, _exc_msg(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return doc
+
+
+@router.post("/jobs/{job_id}/guiguzi/topics")
+async def generate_guiguzi(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """第二步：以(用户选定/编辑的)分析为指导出选题。立即返回 generating，后台跑。
+
+    body: {"items": [{text, comment}, ...], "analysis": {...}, "prompt": str?, "force": bool}。
+    prompt 传入(用户编辑后的提示词,含 $source 占位)则用它且全量重出;否则按 analysis 拼默认模板。
+    force=False（默认·增量）：只为新评论补题，保留已出题评论；force=True（重新选题）：全部重出。
+    """
+    items = body.get("items") if isinstance(body, dict) else None
+    analysis = body.get("analysis") if isinstance(body, dict) else None
+    prompt = body.get("prompt") if isinstance(body, dict) else None
+    force = bool(body.get("force")) if isinstance(body, dict) else False
+    try:
+        doc = PIPELINE_RUNNER.generate_guiguzi(job_id, items or [], analysis, prompt=prompt, force=force)
+    except KeyError as e:
+        raise HTTPException(404, _exc_msg(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return doc
+
+
+@router.get("/jobs/{job_id}/guiguzi")
+async def get_guiguzi(job_id: str) -> dict[str, Any]:
+    """读 per-job 选题结果（running/done/failed）。前端轮询取双栏 candidates。"""
+    try:
+        PIPELINE_RUNNER.get_job(job_id)
+    except KeyError:
+        raise HTTPException(404, f"job not found: {job_id}")
+    doc = PIPELINE_RUNNER.get_guiguzi(job_id)
+    if doc is None:
+        raise HTTPException(404, "guiguzi not run yet")
+    return doc
 
 
 # ---------------------------------------------------------------------------

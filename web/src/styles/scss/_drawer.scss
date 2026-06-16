@@ -25,6 +25,18 @@
   box-shadow: var(--shadow-4);
   animation: slide-in var(--dur-base) var(--ease-out);
 }
+/* 宽抽屉（鬼谷子选题双栏文字多）：在基准宽上再放宽 */
+.drawer.wide {
+  width: min(806px, 96vw);
+  /* 鬼谷子抽屉文字整体放大 1.2 倍：在本作用域覆盖字号 token，
+     子元素的 var(--text-*)（含内联样式）自动跟随，不必逐处改。 */
+  --text-2xs: 12.6px;
+  --text-xs: 13.8px;
+  --text-sm: 15px;
+  --text-base: 16.2px;
+  --text-md: 18px;
+  --text-lg: 20.4px;
+}
 .drawer .head {
   display: flex;
   align-items: center;
@@ -81,6 +93,9 @@
   flex: 1;
   overflow: auto;
   padding: var(--s-5);
+  /* 隐藏竖向滚动条（仍可滚）：滚动条出现/消失会让正文与评论文字左右抖动 */
+  scrollbar-width: none; /* Firefox */
+  &::-webkit-scrollbar { display: none; } /* WebKit */
 }
 
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }

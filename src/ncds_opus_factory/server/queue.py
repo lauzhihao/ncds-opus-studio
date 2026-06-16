@@ -12,6 +12,7 @@ server/queue.py — async Redis 封装，供 8810 producer 与 nof-worker consum
 import asyncio
 import logging
 import os
+import time
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -31,6 +32,9 @@ _PREFIX = "nof:"
 # 配额 key 默认 TTL（秒），可通过环境变量覆盖
 _DEFAULT_QUOTA_TTL_HOURS = 48
 _QUOTA_TTL_SECONDS = int(os.environ.get("NOF_QUOTA_TTL_HOURS", _DEFAULT_QUOTA_TTL_HOURS)) * 3600
+
+# 沈括「数据/评论」刷新节流窗口（秒）：同一作品在窗口内只采一次，省 tikhub API 成本 + 防并发。
+_SHENKUO_REFRESH_TTL_SECONDS = int(os.environ.get("NOF_SHENKUO_REFRESH_TTL_SECONDS", 3600))
 
 # brpop 连接故障退避参数（秒）
 _BACKOFF_INIT = 0.5
@@ -165,6 +169,29 @@ class RedisQueue:
     # -------------------------------------------------------------------------
     # 探活 / 生命周期
     # -------------------------------------------------------------------------
+
+    # -------------------------------------------------------------------------
+    # 沈括刷新节流锁（数据/评论）
+    # key: nof:shenkuo:refresh:{aweme_id}，值=写入时的 epoch 秒（仅供观测）
+    # SET NX EX 一把原子操作同时实现「1 小时内只采一次」+「跨进程防并发」。
+    # -------------------------------------------------------------------------
+
+    async def acquire_shenkuo_refresh(
+        self, aweme_id: str, ttl_seconds: int = _SHENKUO_REFRESH_TTL_SECONDS
+    ) -> bool:
+        """抢沈括某作品的刷新权：SET nof:shenkuo:refresh:{aweme_id} <ts> NX EX ttl。
+
+        返回 True = 本次抢到（key 原先不存在，已写入并起 ttl 窗口），可去调采集接口；
+        返回 False = 窗口内已刷新过（不足 ttl 秒），直接跳过省 API + 防并发。
+        Redis 故障时 fail-open 返回 True（功能降级为「每次都刷」，不因 Redis 抖动卡死）。
+        """
+        key = f"{_PREFIX}shenkuo:refresh:{aweme_id}"
+        try:
+            ok = await self._client.set(key, str(int(time.time())), nx=True, ex=ttl_seconds)
+            return bool(ok)
+        except (RedisConnectionError, RedisError) as exc:
+            logger.warning("acquire_shenkuo_refresh redis error (fail-open): %s", exc)
+            return True
 
     async def ping(self) -> bool:
         """

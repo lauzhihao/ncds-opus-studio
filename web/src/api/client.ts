@@ -3,6 +3,9 @@ import type {
   AccountPost,
   AccountResolveResult,
   Episode,
+  GuiguziAnalysis,
+  GuiguziItem,
+  GuiguziResult,
   JobState,
   JobSummary,
   ParsedShare,
@@ -73,6 +76,27 @@ export const api = {
     post<{ cancelled: boolean; job_id: string; node: string }>(
       `/jobs/${jobId}/nodes/${node}/cancel`,
     ),
+  // 进画布触发：后台刷新沈括已采作品的播放数据 + 评论（fire-and-forget；后端 1h 节流省 API）。
+  refreshShenkuo: (jobId: string) =>
+    post<{ ok: boolean; job_id: string; refreshing: boolean }>(`/jobs/${jobId}/shenkuo/refresh`),
+  // 鬼谷子两步流。第一步：双模型反推爆款原因（立即返回 analyzing，轮询取 analyzed）。
+  analyzeGuiguzi: (jobId: string, items: GuiguziItem[]) =>
+    post<GuiguziResult>(`/jobs/${jobId}/guiguzi/analyze`, { items }),
+  // 第二步：以(选定/编辑的)分析为指导出选题。prompt 传入(用户编辑后的提示词)则用它且全量；
+  // 否则按 analysis 拼默认模板，force=false 增量、true 全部重出。
+  generateGuiguzi: (
+    jobId: string,
+    items: GuiguziItem[],
+    analysis: GuiguziAnalysis,
+    opts: { force?: boolean; prompt?: string } = {},
+  ) =>
+    post<GuiguziResult>(`/jobs/${jobId}/guiguzi/topics`, {
+      items,
+      analysis,
+      ...(opts.force ? { force: true } : {}),
+      ...(opts.prompt ? { prompt: opts.prompt } : {}),
+    }),
+  getGuiguzi: (jobId: string) => get<GuiguziResult>(`/jobs/${jobId}/guiguzi`),
   rewriteRwModel: (jobId: string, modelId: string) =>
     post<{ ok: boolean; job_id: string; model_id: string }>(
       `/jobs/${jobId}/nodes/rw/rewrite/${modelId}`,

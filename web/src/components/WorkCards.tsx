@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { ChevronRight, Clock, Image as ImageIcon, Loader2, PenBox, Plus, Trash2 } from 'lucide-react';
 
 import type { JobSummary, SubscriptionAuthor } from '../api/types';
+import { jobProgress } from '../config/agents';
 import { formatCount, formatDuration, timeAgo } from '../utils/format';
 
 // 虚线"+"新增框：与作品卡同尺寸（grid stretch 对齐行高），点击触发弹窗。
@@ -114,6 +115,7 @@ export function JobCard({
     const m = /(\d{2,})/.exec(job.pipeline_id);
     return m ? m[1] : job.job_id.slice(0, 2).toUpperCase();
   })();
+  const progress = jobProgress(job.node_status);
   return (
     <article className={`tpl-card${job.running ? ' is-running' : ''}`} onClick={onOpen}>
       <div className="cover">
@@ -134,7 +136,10 @@ export function JobCard({
           上次更新 {updated}
         </div>
         <div className="footer">
-          <span className="badge">{job.pipeline_id}</span>
+          <span className={`progress-light ${progress.light}`} title={`设计进度：${progress.agentName}`}>
+            <span className="dot" />
+            {progress.agentName}
+          </span>
           <div style={{ flex: 1 }} />
           <button
             className="btn sm icon-only accent"

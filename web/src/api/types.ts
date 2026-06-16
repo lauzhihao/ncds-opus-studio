@@ -53,6 +53,8 @@ export interface JobSummary {
   // 任一节点 running/queued 时为 true；running_node 是首个执行中节点名
   running?: boolean;
   running_node?: string | null;
+  // 各底层节点 status（节点名→status），供作品列表算 agent 级进度灯
+  node_status?: Record<string, NodeStatus>;
 }
 
 // 柳永质检：ai_taste（AI 味）报告，对齐后端 ai_taste.scan（打回重写后的终判）。
@@ -172,6 +174,60 @@ export interface ShenkuoEntry {
   cutouts?: string[]; // 抠图相对路径（后台补）
   status?: Record<string, string>; // download/transcribe/audio/cutout/comments -> ok/cached/error:*
   error?: string | null;
+}
+
+// 鬼谷子选题种子：一条评论 + 它所属作品的提取文案（前端从沈括面板选出，传给后端逐条锚定）。
+export interface GuiguziItem {
+  text: string; // 提取文案（背景）
+  comment: string; // 高赞评论（选题切入点）
+  digg?: number; // 该评论点赞量（仅前端展示用，后端不读）
+}
+
+// 鬼谷子单条选题（双模型各产出，锚定一条评论）。
+export interface GuiguziTopic {
+  title: string;
+  angle?: string;
+  why?: string;
+  potential?: number;
+  anchor_comment?: string; // 锚定的评论
+  source_model?: 'opus' | 'deepseek' | string;
+}
+
+// 单模型一栏产出（双栏对比用）。
+export interface GuiguziCandidate {
+  topics: GuiguziTopic[];
+  error?: string | null; // 该模型失败（如 deepseek key 未设）时的文案，另一栏仍出
+}
+
+// 第一步「爆款原因分析」的结构化字段（双模型各产一份，用户可编辑后 2 选 1）。
+export interface GuiguziAnalysis {
+  hook_reason?: string; // 爆款原因（核心吸引力）
+  audience?: string; // 目标受众
+  hooks?: string[]; // 可复制钩子
+  direction?: string; // 衍生选题建议方向
+}
+
+// 单模型一栏的分析产出。
+export interface GuiguziAnalysisColumn {
+  analysis?: GuiguziAnalysis | null;
+  error?: string | null;
+}
+
+// 鬼谷子两步流结果（per-job guiguzi.json；前端轮询 GET /jobs/{id}/guiguzi）。
+//   analyzing → analyzed（用户介入：编辑分析 + 2选1）→ generating → done
+export interface GuiguziResult {
+  // 粗粒度轮询信号：running(分析/出题中) / analyzed(分析完待用户) / done / failed
+  status: 'running' | 'analyzed' | 'done' | 'failed';
+  stage?: 'analyzing' | 'analyzed' | 'generating' | 'done' | 'failed';
+  items?: GuiguziItem[];
+  analysis?: { opus?: GuiguziAnalysisColumn; deepseek?: GuiguziAnalysisColumn } | null; // 第一步双栏
+  chosen_analysis?: GuiguziAnalysis | null; // 第二步选定/编辑的那份
+  candidates?: { opus?: GuiguziCandidate; deepseek?: GuiguziCandidate } | null; // 第二步选题
+  prompt?: string | null; // 本次出选题用的提示词模板（含 $source 占位），供前端回显/编辑
+  topics?: GuiguziTopic[] | null;
+  error?: string | null;
+  progress?: string;
+  updated_at?: number;
 }
 
 // 前端从抖音分享文本里 regex 解析出的一条作品。

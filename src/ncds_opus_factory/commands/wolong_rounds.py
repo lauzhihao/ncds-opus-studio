@@ -132,6 +132,42 @@ def discover_benchmark() -> str | None:
     return max(candidates, key=os.path.getmtime)
 
 
+def _build_items_from_benchmark(bench_str: str, max_items: int = 5) -> list[dict[str, str]]:
+    """从 benchmark(all_posts.json) 同目录的 collected.json 拼评论驱动 items。
+
+    鬼谷子已改评论驱动,吃 [{text, comment}, ...]。卧龙 cron/自动场景没有人工选评论:
+    取深采条目(collected.json,按赞数降序)的高赞评论,每条评论配它所属作品的提取文案,
+    凑满 max_items。all_posts.json 是精简格式(无文案/无评论),故必须读旁边的 collected.json;
+    无深采/无评论则返回 [](调用方据此优雅终止,提示先跑沈括深采)。
+    """
+    try:
+        doc = json.loads((Path(bench_str).parent / "collected.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    entries = doc.get("items") if isinstance(doc, dict) else None
+    if not isinstance(entries, list):
+        return []
+
+    def _digg(e: dict) -> int:
+        return int(e.get("digg") or (e.get("stats") or {}).get("digg") or 0)
+
+    ranked = sorted(
+        [e for e in entries if isinstance(e, dict) and not e.get("error")],
+        key=_digg, reverse=True,
+    )
+    items: list[dict[str, str]] = []
+    for e in ranked:
+        text = str(e.get("text") or "").strip()
+        for c in e.get("top_comments") or []:
+            comment = str((c.get("text") if isinstance(c, dict) else c) or "").strip()
+            if not comment:
+                continue
+            items.append({"text": text, "comment": comment})
+            if len(items) >= max_items:
+                return items
+    return items
+
+
 # ---------------------------------------------------------------------------
 # 派单段
 # ---------------------------------------------------------------------------
@@ -216,13 +252,18 @@ def start_round(
             )
         on_progress("选题库存被并发取空,退回鬼谷子选题")
 
-    # 防撞题 = 用户手填 avoid + 库内全部非 expired 选题(fresh/consumed;
-    # expired 老题允许被重新提出,见 topic_store)
-    avoid_list = [s.strip() for s in (avoid or "").split(",") if s.strip()]
-    avoid_list += [t for t in topic_store.active_titles() if t not in avoid_list]
+    # 鬼谷子改评论驱动:从对标深采(collected.json)取高赞评论 + 提取文案作选题种子。
+    # 撞题由 topic_store.merge 按 title 去重兜底(库内同名题自动跳过),不再传 avoid。
+    items = _build_items_from_benchmark(bench_str)
+    if not items:
+        with rounds.mutate(round_id) as r:
+            _terminate(r, reason="对标无深采评论(collected.json)可作选题种子")
+        raise FileNotFoundError(
+            "对标目录缺 collected.json 或无高赞评论:先跑沈括深采(author 模式)再开盘"
+        )
 
     key = "guiguzi:0"
-    params = {"benchmark_path": bench_str, "avoid": avoid_list}
+    params = {"items": items}
     with rounds.mutate(round_id) as r:
         r["intents"][key] = {"cmd": "guiguzi", "params": params, "task_id": None,
                              "at": datetime.now().isoformat()}

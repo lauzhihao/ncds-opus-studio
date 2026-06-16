@@ -251,8 +251,9 @@
   padding-top: var(--s-2);
 }
 
-/* —— 鬼谷子选题 —— */
-.guiguzi-sources {
+/* —— 鬼谷子选题（评论驱动双模型）—— */
+/* 已选评论（选题方案种子） */
+.guiguzi-seed-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -260,27 +261,334 @@
   flex-direction: column;
   gap: 6px;
 }
-.guiguzi-source {
+/* 已选评论：序号(顶) / 评论(占满) / 点赞量(末行最右) */
+.guiguzi-seed {
   display: flex;
-  align-items: baseline;
+  align-items: flex-end;
   gap: var(--s-2);
   padding: 6px 10px;
   border: 1px solid var(--bg-overlay);
   border-radius: var(--r-1);
   background: var(--bg-surface);
-
-  .guiguzi-source-title { color: var(--ink-1); font-size: var(--text-sm); }
 }
-.guiguzi-angle {
-  width: 100%;
-  resize: vertical;
-  padding: var(--s-3);
+.guiguzi-seed-idx {
+  flex-shrink: 0;
+  align-self: flex-start;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+}
+.guiguzi-seed-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink-1);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+/* 点赞量：贴末行最右，垂直与最后一行对齐 */
+.guiguzi-seed-digg {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: #e5484d;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 双栏对比：opus | deepseek */
+.guiguzi-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-3);
+}
+.guiguzi-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.guiguzi-col-head {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  padding-bottom: 4px;
+  border-bottom: 2px solid var(--accent);
+}
+.guiguzi-col.model-deepseek .guiguzi-col-head {
+  border-bottom-color: var(--ink-3);
+}
+.guiguzi-col-error {
+  font-size: var(--text-2xs);
+  color: var(--danger, #e5484d);
+  padding: var(--s-2);
+}
+/* 选题卡：可 hover 选定（N 选 1）—— relative 承载遮罩，overflow 裁掉缩放溢出圆角 */
+.guiguzi-topic {
+  position: relative;
+  padding: 10px;
   border: 1px solid var(--bg-overlay);
   border-radius: var(--r-1);
-  background: var(--bg-input);
+  background: var(--bg-surface);
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.guiguzi-topic:hover {
+  transform: scale(1.03);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  z-index: 2;
+}
+.guiguzi-topic.chosen {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* 引用块：锚定的高赞评论（灰色），左竖线 + 浅灰底；只显前 3 行，余截断
+   （完整评论已在上方「已选评论」列出，这里只作提示） */
+.guiguzi-topic-quote {
+  margin: 0 0 8px;
+  padding: 5px 9px;
+  border-left: 3px solid var(--ink-3);
+  border-radius: 0 4px 4px 0;
+  background: var(--bg-page);
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 标题栏：左「备选 N」+ 右上「潜力 N 分」分值标签 */
+.guiguzi-topic-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--bg-overlay);
+}
+.guiguzi-topic-no {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+.guiguzi-topic-pot {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+/* 内容行：颜色标签前缀 + 内容 */
+.gg-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 7px;
+  line-height: 1.5;
+}
+.gg-tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--r-1, 4px);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 1.5;
+}
+/* 三类标签不同颜色：备选标题=accent / 选题理由=绿 / 切入角度=橙 */
+.gg-tag.tag-title {
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.gg-tag.tag-why {
+  color: #2f8f57;
+  background: rgba(58, 165, 93, 0.14);
+}
+.gg-tag.tag-angle {
+  color: #c77d12;
+  background: rgba(245, 166, 35, 0.16);
+}
+.gg-tag.tag-dir {
+  color: #6b54c8;
+  background: rgba(107, 84, 200, 0.14);
+}
+
+/* —— 第一步：爆款原因分析栏（结构化字段可编辑）—— */
+.gg-field {
+  display: block;
+  margin-top: 8px;
+}
+.gg-field-tag {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 1px 6px;
+  border-radius: var(--r-1, 4px);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+.gg-field-tag.tag-title {
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.gg-field-tag.tag-why {
+  color: #2f8f57;
+  background: rgba(58, 165, 93, 0.14);
+}
+.gg-field-tag.tag-angle {
+  color: #c77d12;
+  background: rgba(245, 166, 35, 0.16);
+}
+.gg-field-tag.tag-dir {
+  color: #6b54c8;
+  background: rgba(107, 84, 200, 0.14);
+}
+.gg-field-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  overflow: hidden;
+  padding: 6px 8px;
+  border: 1px solid var(--bg-overlay);
+  border-radius: var(--r-1);
+  background: var(--bg-input, var(--bg-surface));
   color: var(--ink-1);
   font: inherit;
+  font-size: var(--text-sm);
   line-height: 1.5;
+}
+.gg-field-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.gg-use-btn {
+  width: 100%;
+  margin-top: 10px;
+  justify-content: center;
+}
+/* 提示条里的内联文字按钮（增量「更新选题」） */
+.link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+}
+.link-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 分析/出题进行中：水平垂直居中的转圈 + 文案 */
+.gg-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  min-height: 180px;
+  color: var(--accent);
+  text-align: center;
+}
+
+/* 选题提示词折叠编辑区（含 $source 原文占位） */
+.gg-prompt {
+  margin-bottom: var(--s-3);
+  border: 1px solid var(--bg-overlay);
+  border-radius: var(--r-1);
+  background: var(--bg-page);
+  overflow: hidden;
+}
+.gg-prompt > summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  font-size: var(--text-2xs);
+  color: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+}
+.gg-prompt-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  overflow-y: auto; /* 高度由 JS 按内容贴合一次；编辑变长则框内滚动 */
+  padding: 8px 10px;
+  border: none;
+  border-top: 1px solid var(--bg-overlay);
+  background: var(--bg-input, var(--bg-surface));
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.gg-prompt-input:focus {
+  outline: none;
+}
+.gg-line-text {
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.gg-line-text.strong {
+  font-size: var(--text-base, 15px);
+  font-weight: 700;
+  color: var(--ink-1);
+}
+.gg-line-text.dim {
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+/* hover/选定 遮罩 + 选题图标（低透明黑 + 白字，pointer-events:none） */
+.guiguzi-topic-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  pointer-events: none;
+}
+.guiguzi-topic:hover .guiguzi-topic-overlay {
+  display: flex;
+}
+/* 选定态常驻右下角小角标（accent 色，不盖正文）；hover 时仍走全幅黑遮罩 */
+.guiguzi-topic.chosen .guiguzi-topic-overlay {
+  display: flex;
+  inset: auto 6px 6px auto;
+  background: none;
+  color: var(--accent);
+}
+.guiguzi-topic.chosen:hover .guiguzi-topic-overlay {
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
 }
 
 /* —— 通用命令步面板 —— */
@@ -361,6 +669,26 @@
     transition: border-color 0.15s, color 0.15s;
 
     &:hover { border-color: var(--accent); color: var(--ink-1); }
+  }
+
+  /* 主题色新增按钮：贴在 02/03 计数右侧、分割线最左侧，与图标/名称同基线居中 */
+  .section-add {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s-1) * 1.2);
+    /* 直角 + 整体放大 1.2 倍 */
+    padding: calc(3px * 1.2) calc(12px * 1.2);
+    border: 1px solid var(--accent);
+    border-radius: 0;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-size: calc(var(--text-xs) * 1.2);
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+
+    &:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   }
 }
 

@@ -76,6 +76,44 @@ def _fake_cut(frames, od, **kw):
     return [c]
 
 
+def test_top_comments_from_items_filters_and_sorts():
+    """>10 赞才入选,按赞降序,取前 top_n,塑成精简结构。"""
+    items = [
+        {"nickname": "a", "text": "低赞", "digg": 5, "ip": "x"},     # <=10 被滤
+        {"nickname": "b", "text": "中", "digg": 50, "ip": "y"},
+        {"nickname": "c", "text": "高", "digg": 200, "ip": "z"},
+        {"nickname": "d", "text": "边界", "digg": 11, "ip": "w"},
+    ]
+    top = shenkuo.top_comments_from_items(items, top_n=2)
+    assert [c["text"] for c in top] == ["高", "中"]
+    assert top[0] == {"nickname": "c", "text": "高", "digg": 200, "ip": "z"}
+
+
+def test_refresh_stats_comments(tmp_path, monkeypatch):
+    """轻量刷新:重取播放数据 + 强制重取评论,只产出 stats/digg/comments/top_comments。"""
+    _works_env(tmp_path, monkeypatch)
+    aid = "555"
+    monkeypatch.setattr(
+        shenkuo.tikhub_client, "fetch_one_video_detail", lambda a, token=None: {"id": a})
+    monkeypatch.setattr(
+        shenkuo.tikhub_client, "extract_meta",
+        lambda d: {"digg": 300, "comment": 20, "share": 5, "collect": 8})
+    monkeypatch.setattr(
+        shenkuo.tikhub_client, "fetch_top_comments",
+        lambda a, top_n=20, on_progress=None: [
+            {"nickname": "u", "text": "好", "digg": 99, "ip": "p"},
+            {"nickname": "v", "text": "弱", "digg": 1, "ip": "q"},  # 被 >10 阈值滤掉
+        ])
+
+    patch = shenkuo.refresh_stats_comments(aid, platform="douyin", top_comments=20)
+    assert patch["stats"] == {"digg": 300, "comment": 20, "share": 5, "collect": 8}
+    assert patch["digg"] == 300
+    assert [c["text"] for c in patch["top_comments"]] == ["好"]
+    # comments.json 落盘(覆写)
+    wdir = shenkuo.works_repo.work_dir("douyin", aid)
+    assert (wdir / "comments.json").exists()
+
+
 def test_collect_one_idempotent(tmp_path, monkeypatch):
     """作品仓库里产物齐全 -> 全 cached、不调任何真函数。"""
     _works_env(tmp_path, monkeypatch)

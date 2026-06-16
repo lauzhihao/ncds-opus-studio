@@ -86,24 +86,60 @@ def _generic_mock(cmd: str) -> RunFn:
     return run
 
 
-def mock_guiguzi(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
-    """逼真 mock：返回带 potential 的选题数组（卧龙 round 续跑段挑题要用）。
+_MOCK_KWS = ["钱越省越穷", "老板都爱画饼", "副业先亏后赚", "存款利率一直降", "年轻人不买房了"]
 
-    与真 run 一样经 topic_store.merge 落库、out 指向真实库文件——卧龙永远真跑
+
+def mock_guiguzi_analyze(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
+    """第一步 mock：双模型各产一份罐头爆款原因分析（结构化）。"""
+    on_progress("鬼谷子启动(MOCK): 双模型分析爆款原因")
+    time.sleep(0.3)
+
+    def _analysis(model: str) -> dict[str, Any]:
+        return {
+            "hook_reason": f"({model} MOCK) 用反差+具体场景戳中打工人的钱焦虑",
+            "audience": "20-35 岁一二线打工人",
+            "hooks": ["开头一句反常识断言", "给可照搬的具体话术", "结尾留钩子"],
+            "direction": "顺着'省钱反而穷'的反差,做认知反转型短口播",
+        }
+
+    return {m: {"analysis": _analysis(m), "error": None} for m in ("opus", "deepseek")}
+
+
+def mock_guiguzi_topics(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
+    """第二步 mock：评论驱动双模型选题（candidates 双栏 + topics 扁平兼容）。
+
+    与真 generate_topics 一样经 topic_store.merge 落库、out 指向真实库文件——卧龙永远真跑
     round 逻辑,续跑段从**库**里挑题(P5),mock 不落库 E2E 就测不到这条链。
     """
-    on_progress("鬼谷子启动(MOCK): 读对标数据,提炼母题")
+    on_progress("鬼谷子(MOCK): 评论驱动双模型出题")
     time.sleep(0.4)
-    topics = [
-        {"title": f"为什么{kw},多数人都想反了", "angle": "反直觉", "potential": 95 - i * 8,
-         "source": "mock"}
-        for i, kw in enumerate(["钱越省越穷", "老板都爱画饼", "副业先亏后赚", "存款利率一直降", "年轻人不买房了"])
-    ]
+
+    def _topic(kw: str, i: int, model: str) -> dict[str, Any]:
+        return {"title": f"为什么{kw},多数人都想反了", "angle": "反直觉",
+                "why": "落地反击感", "potential": 95 - i * 8,
+                "anchor_comment": f"评论:{kw}", "source_model": model, "source": "mock"}
+
+    # 双栏:opus 与 deepseek 各按同样的 5 条评论各出 5 个选题(标题去重,入库不翻倍)
+    opus = [_topic(kw, i, "opus") for i, kw in enumerate(_MOCK_KWS)]
+    deepseek = [_topic(kw, i, "deepseek") for i, kw in enumerate(_MOCK_KWS)]
+    candidates = {"opus": {"topics": opus, "error": None},
+                  "deepseek": {"topics": deepseek, "error": None}}
+    flat = opus + deepseek
     # 溯源如实记 mock(条目自带 source=mock,相等则不挪 bench_source):
     # 谎报 guiguzi 会让误开 mock 混入生产库的罐头题事后无法按 source 清理
-    merged = topic_store.merge(topics, source="mock")
-    on_progress(f"鬼谷子完成(MOCK): {len(topics)} 个选题(入库 {merged['added']} 新/{merged['skipped']} 重复)")
-    return {"topics": topics, "out": str(topic_store.default_topics_path()), "raw_len": 0}
+    merged = topic_store.merge(flat, source="mock")
+    on_progress(f"鬼谷子完成(MOCK): 双模型各 {len(_MOCK_KWS)} 个(入库 {merged['added']} 新/{merged['skipped']} 重复)")
+    return {"candidates": candidates, "topics": flat,
+            "out": str(topic_store.default_topics_path()), "added": merged["added"]}
+
+
+def mock_guiguzi(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
+    """端到端 mock（替 guiguzi.run，给卧龙/task-runner）：analyze + topics 组合，附 analysis。"""
+    analyses = mock_guiguzi_analyze(on_progress)
+    result = mock_guiguzi_topics(on_progress, **params)
+    result["analysis"] = analyses
+    result["chosen_analysis"] = analyses["opus"]["analysis"]
+    return result
 
 
 MOCK_RUNS: dict[str, RunFn] = {

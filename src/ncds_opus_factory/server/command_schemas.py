@@ -26,15 +26,10 @@ AGENT_SCHEMAS: dict[str, dict[str, Any]] = {
     "guiguzi": {
         "label": "鬼谷子 · 选题官",
         "group": "agent",
-        "summary": "读对标爆款数据，提炼母题，迁移成本赛道产出新选题",
+        "summary": "提取文案+评论为种子，双模型先反推爆款原因、再逐条锚定出选题（两步流）",
         "fields": [
-            _f("benchmark_path", "对标数据路径", "string", required=True,
-               help="all_posts.json 路径（沈括采集产出）"),
-            _f("niche", "目标赛道", "string", default="职场/认知/成长"),
-            _f("avoid", "避开的已发选题", "string[]", help="防撞题"),
-            _f("top_n", "产出选题数", "int", default=10),
-            _f("category", "对标分类筛选", "enum", default="growth",
-               enum=["growth", "beauty", "other"]),
+            _f("items", "选题种子", "string[]", required=True,
+               help="[{text:提取文案, comment:评论}, ...]（≤5，每条评论各出 1 选题）"),
         ],
     },
     "liuyong": {

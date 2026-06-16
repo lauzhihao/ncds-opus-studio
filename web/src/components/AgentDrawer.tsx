@@ -217,7 +217,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
       <div className="drawer-backdrop" onClick={onClose} />
       <aside
         ref={asideRef}
-        className={`drawer${isFullscreen ? ' fullscreen' : ''}`}
+        className={`drawer${isFullscreen ? ' fullscreen' : ''}${agent.id === 'guiguzi' ? ' wide' : ''}`}
         role="dialog"
         aria-modal
         aria-labelledby="agent-drawer-title"

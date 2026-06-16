@@ -73,6 +73,20 @@ def _adopt_legacy(aweme_id: str, author_dir: Path, mapping: dict[Path, Path]) ->
             pass
 
 
+def top_comments_from_items(items: list[dict], top_n: int) -> list[dict]:
+    """从评论原始列表筛高赞(>10 赞)、按赞降序、取前 top_n,塑成前端直接渲染的精简结构。
+
+    collect_one 的 branch_comments 与轻量刷新 refresh_stats_comments 共用,口径一致。
+    """
+    items = [c for c in items if c.get("digg", 0) > 10]
+    items.sort(key=lambda c: c.get("digg", 0), reverse=True)
+    return [
+        {"nickname": c.get("nickname", ""), "text": c.get("text", ""),
+         "digg": c.get("digg", 0), "ip": c.get("ip", "")}
+        for c in items[:top_n]
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # 采集单条作品(幂等:每步看产物存在跳过)
 #
@@ -262,13 +276,7 @@ def collect_one(
             # 高赞评论嵌进 entry(>10 赞阈值,按赞数排好),App 直接渲染
             try:
                 items = json.loads(comments_path.read_text(encoding="utf-8")).get("items", [])
-                items = [c for c in items if c.get("digg", 0) > 10]
-                items.sort(key=lambda c: c.get("digg", 0), reverse=True)
-                top = [
-                    {"nickname": c.get("nickname", ""), "text": c.get("text", ""),
-                     "digg": c.get("digg", 0), "ip": c.get("ip", "")}
-                    for c in items[:top_comments]
-                ]
+                top = top_comments_from_items(items, top_comments)
                 if top:
                     entry["top_comments"] = top
             except Exception:  # noqa: BLE001 — 评论嵌入失败不影响 entry 主体
@@ -306,6 +314,47 @@ def collect_one(
         "cutouts": entry.get("cutouts"),
     }, status=entry["status"], collected_at=int(time.time()))
     return entry
+
+
+def refresh_stats_comments(
+    aweme_id: str, platform: str = "douyin", top_comments: int = 20,
+    on_progress: ProgressFn = _noop,
+) -> dict[str, Any]:
+    """轻量刷新单条作品的「播放数据(stats)」+「评论(top_comments)」,强制重取,
+    不碰下载/转写/音轨/抠图。供进画布时的后台刷新用(节流由调用方的 Redis 锁把关)。
+
+    返回只含变化字段的 patch:{stats?, digg?, comments?, top_comments?};某项失败则
+    该项不进 patch(不抛错),保证单项故障不影响其它项。
+    """
+    patch: dict[str, Any] = {}
+
+    # 1) 播放数据:重取作品详情 -> meta -> 四项数据。
+    try:
+        meta = tikhub_client.extract_meta(tikhub_client.fetch_one_video_detail(aweme_id))
+        stats = {k: meta[k] for k in ("digg", "comment", "share", "collect") if meta.get(k) is not None}
+        if stats:
+            patch["stats"] = stats
+            if "digg" in stats:
+                patch["digg"] = stats["digg"]
+    except Exception as exc:  # noqa: BLE001 — 数据刷新失败不影响评论刷新
+        on_progress(f"[{aweme_id}] 播放数据刷新失败(不影响): {type(exc).__name__}: {exc}")
+
+    # 2) 评论:强制重取(覆写 comments.json),重算高赞 top_comments。
+    if top_comments > 0:
+        try:
+            rows = tikhub_client.fetch_top_comments(aweme_id, top_n=top_comments, on_progress=on_progress)
+            wdir = works_repo.work_dir(platform, aweme_id)
+            comments_path = wdir / "comments.json"
+            comments_path.write_text(json.dumps(
+                {"aweme_id": aweme_id, "generated_at": int(time.time()), "top_n": top_comments, "items": rows},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+            patch["comments"] = _rel(comments_path)
+            patch["top_comments"] = top_comments_from_items(rows, top_comments)
+            on_progress(f"[{aweme_id}] 评论已刷新(top {len(patch['top_comments'])})")
+        except Exception as exc:  # noqa: BLE001 — 评论刷新失败不影响数据刷新
+            on_progress(f"[{aweme_id}] 评论刷新失败(不影响): {type(exc).__name__}: {exc}")
+
+    return patch
 
 
 def _write_collected(author_dir: Path, collected: list[dict]) -> Path:
