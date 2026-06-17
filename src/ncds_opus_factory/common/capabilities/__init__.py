@@ -8,7 +8,8 @@
     capabilities.separate_audio(video, out_dir)   # 抽原声 + Demucs 分离
     capabilities.extract_frames(video, out_dir)   # 静止帧检测
     capabilities.cutout(frames, out_dir)          # 裁舞台区 + 阈值抠图
-    capabilities.fetch_video_url / download_video / download_cover  # 下载(真身 tikhub_client)
+    capabilities.fetch_and_download               # 下载(yt-dlp 匿名优先 + TikHub 兜底)
+    capabilities.fetch_video_url / download_video / download_cover  # 下载原语(真身 tikhub_client)
     capabilities.fetch_top_comments               # 评论(真身 tikhub_client)
 
 边界说明：URL→文章管线（skills/video-pipeline + asr_service）是**另一条**链路（产出清洗成文章，
@@ -21,7 +22,7 @@ from ._base import ProgressFn, noop
 from .audio import separate_audio
 from .comments import fetch_top_comments
 from .cutout import crop_stage, cutout, rembg_cutout, threshold_cutout
-from .download import download_cover, download_video, fetch_video_url
+from .download import download_cover, download_video, fetch_and_download, fetch_video_url
 from .frames import extract_frames
 from .transcribe import clean_transcript, read_dashscope_key, transcribe
 
@@ -37,6 +38,7 @@ __all__ = [
     "crop_stage",
     "threshold_cutout",
     "rembg_cutout",
+    "fetch_and_download",
     "fetch_video_url",
     "download_video",
     "download_cover",

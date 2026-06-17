@@ -10,6 +10,9 @@ requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
     "yt-dlp>=2024.1",
+    # yt-dlp 的 impersonation 依赖：抖音 extractor 靠它模拟浏览器 TLS 指纹绕反爬，
+    # 缺它时报 "no impersonate target available"、抖音加强反爬后下载可能失效。
+    "curl_cffi>=0.7",
     "openai-whisper>=20231117",
     "python-docx>=1.1",
     "dashscope>=1.20",

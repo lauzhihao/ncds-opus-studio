@@ -167,13 +167,17 @@ def collect_one(
             report(f"[{aweme_id}] mp4 已存在,跳过下载")
             entry["status"]["download"] = "cached"
         else:
-            url = tikhub_client.fetch_video_url(aweme_id)
-            if not url:
-                entry["status"]["download"] = "no_url"
+            # yt-dlp 匿名优先(免费)，失败回退 TikHub(付费)；两条都没出片才算 failed。
+            try:
+                capabilities.fetch_and_download(aweme_id, video, on_progress=report, check=_check)
+                report(f"[{aweme_id}] 下载完成")
+                entry["status"]["download"] = "ok"
+            except cancel.TaskCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001 — 单条下载失败不拖垮整批,降级跳过下游
+                report(f"[{aweme_id}] 下载失败: {type(e).__name__}: {e}")
+                entry["status"]["download"] = "failed"
                 return False
-            tikhub_client.download_video(url, video)
-            report(f"[{aweme_id}] 下载完成")
-            entry["status"]["download"] = "ok"
         entry["video"] = _rel(video)
         return True
 

@@ -4,8 +4,17 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from ncds_opus_factory.commands import shenkuo
 from ncds_opus_factory.common import tikhub_client
+
+
+@pytest.fixture(autouse=True)
+def _disable_ytdlp(monkeypatch):
+    """单测禁用 yt-dlp 优先,让下载走 TikHub 兜底,复用现有 tikhub_client 打桩。
+    yt-dlp 优先/回退路径由 capabilities/download_test.py 专门覆盖。"""
+    monkeypatch.setattr(shenkuo.capabilities.download, "_ytdlp_download", lambda *a, **k: None)
 
 
 # --------------------------------------------------------------------------- #

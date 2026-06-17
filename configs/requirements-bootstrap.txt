@@ -1,5 +1,6 @@
 requests
 yt-dlp
+curl_cffi  # yt-dlp impersonation 依赖(模拟浏览器 TLS 指纹绕抖音反爬)
 openai-whisper
 python-docx
 dashscope

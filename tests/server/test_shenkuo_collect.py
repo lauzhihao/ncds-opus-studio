@@ -8,8 +8,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ncds_opus_factory.commands import shenkuo
 from ncds_opus_factory.server.pipeline_runner import _rw_source_text
+
+
+@pytest.fixture(autouse=True)
+def _disable_ytdlp(monkeypatch):
+    """禁用 yt-dlp 优先,让下载走 TikHub 兜底,复用现有 tikhub_client 打桩。"""
+    monkeypatch.setattr(shenkuo.capabilities.download, "_ytdlp_download", lambda *a, **k: None)
 
 
 def _works_env(tmp_path, monkeypatch):
