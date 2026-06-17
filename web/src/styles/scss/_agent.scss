@@ -1041,11 +1041,12 @@
   50% { opacity: 0.45; }
 }
 
-/* —— 首页：对标账号 domain 过滤标签（显示在分割线上方） —— */
+/* —— 首页：对标账号 domain 过滤标签（在 section-title 行内） —— */
 .section-filters {
   display: flex;
   gap: var(--s-2);
   align-items: center;
+  margin-left: var(--s-3);
 }
 
 .domain-tab {
