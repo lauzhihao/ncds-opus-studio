@@ -1046,7 +1046,19 @@
   display: flex;
   gap: var(--s-2);
   align-items: center;
-  margin-left: var(--s-3);
+  margin-left: var(--s-5);
+  position: relative;
+  /* 左侧短线段，制造标签"压在分割线上"的视觉效果 */
+  &::before {
+    content: '';
+    position: absolute;
+    right: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    width: var(--s-4);
+    height: 1px;
+    background: var(--border);
+  }
 }
 
 .domain-tab {
