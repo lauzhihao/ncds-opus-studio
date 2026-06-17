@@ -53,12 +53,31 @@ kill_pattern() {
   # $1 = pgrep pattern, $2 = human name
   local pids
   pids="$(pgrep -f "$1" || true)"
-  if [[ -n "$pids" ]]; then
-    # shellcheck disable=SC2086
-    kill $pids 2>/dev/null || true
-    log "$2: stopped (pids: $pids)"
-  else
+  if [[ -z "$pids" ]]; then
     log "$2: not running"
+    return
+  fi
+  # 先 SIGTERM 优雅退出；uvicorn --reload 的 reloader 偶尔不理 SIGTERM，
+  # 轮询确认退出，超时(~5s)仍在就升级 SIGKILL，避免旧进程赖着不走、占住端口。
+  # shellcheck disable=SC2086
+  kill $pids 2>/dev/null || true
+  local i
+  for i in $(seq 1 10); do
+    if ! pgrep -f "$1" >/dev/null 2>&1; then
+      log "$2: stopped (pids: $pids)"
+      return
+    fi
+    sleep 0.5
+  done
+  local survivors
+  survivors="$(pgrep -f "$1" || true)"
+  # shellcheck disable=SC2086
+  kill -9 $survivors 2>/dev/null || true
+  sleep 0.5
+  if pgrep -f "$1" >/dev/null 2>&1; then
+    log "$2: WARN still alive after SIGKILL (pids: $(pgrep -f "$1" | tr '\n' ' '))"
+  else
+    log "$2: stopped via SIGKILL (pids: $survivors)"
   fi
 }
 
@@ -79,22 +98,44 @@ start_vite() {
   fi
 }
 
+# 等 :PORT 释放(最多 ~5s)：旧 server 退出后内核回收 listen socket 有延迟，
+# 不等就 bind 会撞 "address already in use"，新 server 起不来。
+wait_port_free() {
+  local i
+  for i in $(seq 1 10); do
+    if ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
 start_server() {
   kill_pattern "$SERVER_PATTERN" "nof-server (old)"
-  sleep 1
+  if ! wait_port_free; then
+    log "ERROR: :$PORT 仍被占用，无法启动 nof-server (查: lsof -nP -iTCP:$PORT -sTCP:LISTEN)" >&2
+    exit 1
+  fi
   mkdir -p "$STATE_DIR"
   NOF_DEV=1 nohup "$VENV_UVICORN" ncds_opus_factory.server.app:app \
     --host "$HOST" --port "$PORT" --reload --reload-dir src \
     > "$SERVER_LOG" 2>&1 < /dev/null &
   echo $! > "$SERVER_PID_FILE"
   disown 2>/dev/null || true
-  sleep 4
-  local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/studio/" || true)"
+  # 健康检查：带超时 + 重试，绝不无限挂起(curl 无 --max-time 时若 server 没起会永久阻塞)。
+  local code="" i
+  for i in $(seq 1 10); do
+    sleep 1
+    code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://localhost:$PORT/studio/" 2>/dev/null || true)"
+    if [[ "$code" == "200" ]]; then
+      break
+    fi
+  done
   if [[ "$code" == "200" ]]; then
     log "nof-server: up (NOF_DEV=1 + --reload, :$PORT, /studio/ -> $code)"
   else
-    log "WARN: nof-server /studio/ returned $code (vite up? see $SERVER_LOG)"
+    log "WARN: nof-server /studio/ returned '${code:-timeout}' (vite up? see $SERVER_LOG)"
   fi
 }
 
