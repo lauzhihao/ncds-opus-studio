@@ -45,6 +45,7 @@ function CardSection({
   onAdd,
   loading,
   rows = 2,
+  filters,
 }: {
   title: string;
   icon: LucideIcon;
@@ -54,6 +55,7 @@ function CardSection({
   onAdd: () => void;
   loading?: boolean;
   rows?: number;
+  filters?: ReactNode;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const cols = useGridColumns(gridRef);
@@ -81,6 +83,7 @@ function CardSection({
         )}
         <span className="line" />
       </div>
+      {filters && <div className="section-filters">{filters}</div>}
       <div ref={gridRef} className="tpl-grid">
         {loading
           ? Array.from({ length: 3 }).map((_, i) => (
@@ -263,25 +266,6 @@ export function HomePage() {
       )}
 
       <div style={{ marginTop: 'var(--s-6)' }}>
-        {/* domain 过滤 tab 贴着分割线上方 */}
-        <div className="domain-filter-tabs">
-          <button
-            className={`domain-tab${selectedDomain === null ? ' active' : ''}`}
-            onClick={() => setSelectedDomain(null)}
-          >
-            不限
-          </button>
-          {DOMAINS.map((d) => (
-            <button
-              key={d.key}
-              className={`domain-tab${selectedDomain === d.key ? ' active' : ''}`}
-              onClick={() => setSelectedDomain(d.key)}
-            >
-              {d.label}
-            </button>
-          ))}
-        </div>
-
         <CardSection
           title="时刻关注作者动态"
           icon={Radar}
@@ -290,6 +274,25 @@ export function HomePage() {
           addLabel="优质作者"
           onAdd={() => setShowAddAccount(true)}
           loading={loadingAcc}
+          filters={
+            <>
+              <button
+                className={`domain-tab${selectedDomain === null ? ' active' : ''}`}
+                onClick={() => setSelectedDomain(null)}
+              >
+                不限
+              </button>
+              {DOMAINS.map((d) => (
+                <button
+                  key={d.key}
+                  className={`domain-tab${selectedDomain === d.key ? ' active' : ''}`}
+                  onClick={() => setSelectedDomain(d.key)}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </>
+          }
         />
       </div>
 
