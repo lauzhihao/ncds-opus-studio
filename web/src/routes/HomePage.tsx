@@ -71,7 +71,6 @@ function CardSection({
         <Icon size={14} strokeWidth={1.6} className="dim" />
         <span className="label">{title}</span>
         <span className="count">{dataCount.toString().padStart(2, '0')}</span>
-        {filters && <div className="section-filters">{filters}</div>}
         {/* 主题色新增按钮：紧贴 02/03 右侧、分割线最左侧；点击行为不变（开弹窗） */}
         <button type="button" className="section-add" onClick={onAdd}>
           <Plus size={17} strokeWidth={2} />
@@ -82,6 +81,7 @@ function CardSection({
             {expanded ? '收起' : `展开全部 ${dataCount}`}
           </button>
         )}
+        {filters && <div className="section-filters">{filters}</div>}
         <span className="line" />
       </div>
       <div ref={gridRef} className="tpl-grid">
