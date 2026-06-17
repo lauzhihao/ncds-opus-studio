@@ -484,6 +484,18 @@ def run(
         json.dumps(posts, ensure_ascii=False, indent=2), encoding="utf-8")
     on_progress(f"本次新鲜 {len(fresh)} 条,合并后累计 {len(posts)} 条,落 all_posts.json")
 
+    # 作者库:顺带刷新作者名片(昵称/头像/粉丝数),让 worker 刷新真正更新 /accounts/resolve 缓存。
+    # 仅抖音(tiktok 采集未接入);一次额外档案请求,失败不阻塞采集主链路。
+    if platform == "douyin":
+        try:
+            from ncds_opus_factory.common import authors_repo
+            prof = tikhub_client.fetch_douyin_profile(author)
+            if prof:
+                authors_repo.save_profile("douyin", author, prof)
+                on_progress("作者库: 已刷新作者名片")
+        except Exception as e:  # noqa: BLE001
+            on_progress(f"作者库名片刷新失败(不阻塞): {type(e).__name__}: {e}")
+
     # 指标层:写身份 + 追加变化的快照(时间序列)。只喂 fresh(真实当前 stats),
     # 不喂 merged——merged 含历史旧条目的旧 stats,会往时间序列里塞陈旧/重复快照。
     ts = int(time.time())

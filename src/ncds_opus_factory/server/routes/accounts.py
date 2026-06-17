@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -17,8 +18,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ncds_opus_factory.common import tikhub_client
-from ncds_opus_factory.server.state import STATE_DIR
+from ncds_opus_factory.common import authors_repo, tikhub_client
+from ncds_opus_factory.server.state import RUNNER, STATE_DIR, STORE
 from ncds_opus_factory.server.subscriptions import load_subscriptions, subscriptions_path
 
 logger = logging.getLogger(__name__)
@@ -30,74 +31,101 @@ class ResolveBody(BaseModel):
     text: str
 
 
-def _cached_profile(author: dict[str, Any]) -> dict[str, Any] | None:
-    """订阅里已存的展示快照 -> resolve 结果形状；缺关键字段(无昵称且无头像)则 None(回退实拉)。"""
-    if not author.get("nickname") and not author.get("avatar"):
-        return None
-    return {
-        "platform": author.get("platform", "douyin"),
-        "sec_uid": author.get("sec_uid", ""),
-        "nickname": author.get("nickname") or author.get("note") or "",
-        "unique_id": author.get("unique_id") or "",
-        "avatar": author.get("avatar") or "",
-        "follower_count": int(author.get("follower_count") or 0),
-        "like_count": int(author.get("like_count") or 0),
-        "works_count": int(author.get("works_count") or 0),
-        "cached": True,
-    }
+def _resolve_identity(text: str) -> tuple[str | None, str | None]:
+    """从分享链接/口令解析 (platform, author_id)。先判 TikTok(handle),否则抖音(sec_uid)。
 
-
-@router.post("/accounts/resolve")
-def resolve_account(body: ResolveBody) -> dict[str, Any]:
-    """把抖音/TikTok 主页分享链接 / 口令 / 完整 user URL 解析成账号档案。
-
-    先在服务端全局订阅里按身份(douyin=sec_uid / tiktok=handle)查：已被监控且有快照 -> 直接复用，
-    不再打 TikHub（省额度/更快）。否则实拉 TikHub 主页档案并归一化返回。
-    sync def（FastAPI 走线程池）—— 跟随短链重定向 + 拉档案是阻塞 IO。
+    阻塞 IO(可能跟随短链重定向),由调用方丢线程池。都解析不出返回 (None, None)。
     """
-    authors = load_subscriptions(subscriptions_path(STATE_DIR)).get("authors", [])
-
-    # TikTok：按 @handle(unique_id) 找
     try:
-        handle = tikhub_client.resolve_tiktok_handle(body.text)
+        handle = tikhub_client.resolve_tiktok_handle(text)
     except Exception:  # noqa: BLE001
         handle = None
     if handle:
-        for a in authors:
-            if a.get("platform") == "tiktok" and a.get("unique_id") == handle:
-                cached = _cached_profile(a)
-                if cached:
-                    return cached
-        try:
-            prof = tikhub_client.fetch_tiktok_profile(handle)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[accounts] tiktok resolve 失败: %s", exc)
-            raise HTTPException(422, "解析账号失败，请确认链接有效或稍后重试") from exc
-        if not prof:
-            raise HTTPException(422, "无法获取该 TikTok 账号资料")
-        return prof
-
-    # 抖音：按 sec_uid 找
+        return "tiktok", handle
     try:
-        sec_uid = tikhub_client.resolve_sec_uid(body.text)
+        sec_uid = tikhub_client.resolve_sec_uid(text)
     except Exception:  # noqa: BLE001
         sec_uid = None
     if sec_uid:
-        for a in authors:
-            if a.get("platform", "douyin") == "douyin" and a.get("sec_uid") == sec_uid:
-                cached = _cached_profile(a)
-                if cached:
-                    return cached
+        return "douyin", sec_uid
+    return None, None
+
+
+def _fetch_and_store(platform: str, author_id: str) -> dict[str, Any] | None:
+    """缓存未命中:per-key 锁串行化,锁内 double-check 后实拉 TikHub 落库。
+
+    等锁期间别人刚落库(save 必盖新 refreshed_at,故新鲜)就直接复用,避免并发重复打。
+    解析失败抛 HTTPException(422)经 to_thread 透传;无资料返回 None(调用方转 422)。
+    """
+    with authors_repo.key_lock(platform, author_id):
+        cached = authors_repo.load_profile(platform, author_id)
+        if cached is not None:
+            return cached
+        fetch = (tikhub_client.fetch_tiktok_profile if platform == "tiktok"
+                 else tikhub_client.fetch_douyin_profile)
         try:
-            prof = tikhub_client.fetch_douyin_profile(sec_uid)
+            prof = fetch(author_id)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[accounts] douyin resolve 失败: %s", exc)
+            logger.warning("[accounts] %s resolve 失败: %s", platform, exc)
             raise HTTPException(422, "解析账号失败，请确认链接有效或稍后重试") from exc
         if not prof:
-            raise HTTPException(422, "无法获取该抖音账号资料")
-        return prof
+            return None
+        return authors_repo.save_profile(platform, author_id, prof)
 
-    raise HTTPException(422, "无法从内容里解析出账号，请粘贴抖音/TikTok 主页分享链接或口令")
+
+def _should_dispatch_refresh(platform: str, author_id: str) -> bool:
+    """过期作者是否值得派 worker 刷新:仅已关注的抖音号,且当前无在途刷新(防堆积)。
+
+    未关注者不派——免得给随手解析的号建 benchmark 目录,留待被关注后由订阅环刷。
+    """
+    if platform != "douyin":
+        return False
+    authors = load_subscriptions(subscriptions_path(STATE_DIR)).get("authors", [])
+    if not any(a.get("sec_uid") == author_id and a.get("enabled", True) for a in authors):
+        return False
+    for meta in STORE.list_tasks():
+        if (meta.cmd == "shenkuo"
+                and str(meta.params.get("author") or "") == author_id
+                and meta.status in ("pending", "running")):
+            return False
+    return True
+
+
+async def _dispatch_refresh(platform: str, author_id: str) -> None:
+    """把过期作者的刷新交给 worker(沈括 refresh_only,顺带写作者库)。失败不阻塞 resolve。"""
+    if not await asyncio.to_thread(_should_dispatch_refresh, platform, author_id):
+        return
+    try:
+        # source=cron:与订阅环共享配额/去重/自动归档,不进待验收桶
+        await RUNNER.submit("shenkuo", {"author": author_id, "refresh_only": True}, source="cron")
+    except Exception:  # noqa: BLE001
+        logger.exception("[accounts] 过期刷新派发失败: %s", author_id[:16])
+
+
+@router.post("/accounts/resolve")
+async def resolve_account(body: ResolveBody) -> dict[str, Any]:
+    """抖音/TikTok 主页分享链接/口令/完整 user URL -> 账号档案(走作者库缓存)。
+
+    先查作者库:命中且新鲜(<NOF_AUTHOR_CACHE_TTL_H,默认2h) -> 秒回,不打 TikHub;
+    命中但过期 -> 先回旧档案 + 把刷新派给 worker(已关注的抖音号);
+    未命中 -> per-key 锁实拉 TikHub,落库再回。
+    async:阻塞 IO(短链重定向 + 拉档案)丢 to_thread,不卡事件循环。
+    """
+    platform, author_id = await asyncio.to_thread(_resolve_identity, body.text)
+    if not author_id or not platform:
+        raise HTTPException(422, "无法从内容里解析出账号，请粘贴抖音/TikTok 主页分享链接或口令")
+
+    cached = authors_repo.load_profile(platform, author_id)
+    if authors_repo.is_fresh(cached):
+        return {**cached, "cached": True}
+    if cached is not None:
+        await _dispatch_refresh(platform, author_id)
+        return {**cached, "cached": True, "stale": True}
+
+    saved = await asyncio.to_thread(_fetch_and_store, platform, author_id)
+    if saved is None:
+        raise HTTPException(422, "无法获取该账号资料")
+    return {**saved, "cached": False}
 
 # 沈括落盘根: state/benchmark/author_{sec_uid}/ (STATE_DIR=state/tasks, parent=state)
 _BENCH_DIR = STATE_DIR.parent / "benchmark"

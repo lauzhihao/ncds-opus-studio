@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from pathlib import Path
 
 import pytest
@@ -202,3 +203,79 @@ def test_http_tick_endpoint(client_env):
 
     rows = [r for r in client.get("/tasks").json() if r.get("source") == "cron"]
     assert len(rows) == 1 and rows[0]["cmd"] == "shenkuo"
+
+
+def test_load_migrates_inline_snapshot_to_library(tmp_path: Path):
+    """老订阅文件内联名片 -> load 时一次性搬进作者库；返回的引用已瘦身(无快照)。"""
+    from ncds_opus_factory.common import authors_repo
+
+    p = tmp_path / "subs.json"
+    p.write_text(json.dumps({"authors": [{
+        "sec_uid": "MS4wOLD", "enabled": True, "platform": "douyin",
+        "nickname": "老号", "avatar": "https://x/a.jpg",
+        "follower_count": 42, "like_count": 9, "works_count": 3, "refreshed_at": 1000.0,
+    }]}), encoding="utf-8")
+
+    a = load_subscriptions(p)["authors"][0]
+    # 引用瘦身:身份+订阅设置保留,展示快照不再内联
+    assert a["sec_uid"] == "MS4wOLD" and a["enabled"] is True
+    assert "nickname" not in a and "follower_count" not in a and "refreshed_at" not in a
+    # 名片已迁进作者库,且保留原 refreshed_at
+    prof = authors_repo.load_profile("douyin", "MS4wOLD")
+    assert prof["nickname"] == "老号" and prof["follower_count"] == 42 and prof["refreshed_at"] == 1000.0
+
+
+def test_load_migration_does_not_clobber_fresher_library(tmp_path: Path):
+    """库里已有(可能 worker 刚刷新过的)档案时,迁移跳过,不被内联旧值覆盖。"""
+    from ncds_opus_factory.common import authors_repo
+
+    authors_repo.save_profile("douyin", "MS4wKEEP", {"nickname": "新号", "follower_count": 999})
+    p = tmp_path / "subs.json"
+    p.write_text(json.dumps({"authors": [{
+        "sec_uid": "MS4wKEEP", "platform": "douyin", "nickname": "旧号", "follower_count": 1,
+    }]}), encoding="utf-8")
+
+    load_subscriptions(p)
+    assert authors_repo.load_profile("douyin", "MS4wKEEP")["nickname"] == "新号"
+
+
+def test_get_hydrates_snapshot_from_library(client_env, tmp_path: Path):
+    """GET 把作者库名片拼回订阅条目(前端零改动);名单本身只存引用。"""
+    from ncds_opus_factory.common import authors_repo
+    from ncds_opus_factory.server.subscriptions import save_subscriptions, subscriptions_path
+
+    authors_repo.save_profile("douyin", "MS4wHY", {
+        "nickname": "拼接号", "avatar": "https://x/h.jpg", "follower_count": 88,
+    })
+    save_subscriptions(subscriptions_path(tmp_path / "state" / "tasks"),
+                       {"authors": [{"sec_uid": "MS4wHY", "enabled": True, "platform": "douyin"}]})
+
+    client, _ = client_env
+    a = client.get("/subscriptions").json()["authors"][0]
+    assert a["sec_uid"] == "MS4wHY"
+    assert a["nickname"] == "拼接号" and a["follower_count"] == 88
+
+
+def test_put_splits_snapshot_into_library(client_env, tmp_path: Path):
+    """PUT 携带名片 -> 名片进作者库、文件只存瘦引用、返回仍是完整形状。"""
+    from ncds_opus_factory.common import authors_repo
+    from ncds_opus_factory.server.subscriptions import subscriptions_path
+
+    client, _ = client_env
+    resp = client.put("/subscriptions", json={"authors": [{
+        "sec_uid": "MS4wPUT", "enabled": True, "platform": "douyin", "unique_id": "put_dy",
+        "nickname": "投递号", "avatar": "https://x/p.jpg",
+        "follower_count": 12, "like_count": 3, "works_count": 1, "refreshed_at": 5000.0,
+    }]})
+    assert resp.status_code == 200
+    a = resp.json()["authors"][0]
+    assert a["nickname"] == "投递号" and a["follower_count"] == 12  # 返回仍完整形状
+
+    # 文件里只剩瘦引用(无展示快照)
+    raw = json.loads(subscriptions_path(tmp_path / "state" / "tasks").read_text(encoding="utf-8"))
+    fa = raw["authors"][0]
+    assert fa["sec_uid"] == "MS4wPUT" and fa["unique_id"] == "put_dy"
+    assert "nickname" not in fa and "follower_count" not in fa
+    # 名片进了作者库
+    prof = authors_repo.load_profile("douyin", "MS4wPUT")
+    assert prof["nickname"] == "投递号" and prof["follower_count"] == 12

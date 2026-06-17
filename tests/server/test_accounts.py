@@ -115,23 +115,72 @@ def test_resolve_endpoint_422_on_garbage(client_env):
     assert resp.status_code == 422
 
 
-def test_resolve_reuses_monitored_snapshot(client_env, tmp_path: Path):
-    """已监控的账号（按 handle 全局命中）-> 直接复用快照, 不打 TikHub。纯离线。"""
+def test_resolve_fresh_cache_hit_skips_tikhub(client_env, monkeypatch):
+    """作者库命中且新鲜 -> 直接回缓存, 不打 TikHub。纯离线。"""
+    from ncds_opus_factory.common import authors_repo, tikhub_client
+
+    authors_repo.save_profile("douyin", "MS4wFRESH", {
+        "nickname": "新鲜号", "avatar": "https://x/a.jpg", "unique_id": "fresh_dy",
+        "follower_count": 100, "like_count": 200, "works_count": 3,
+    })
+    monkeypatch.setattr(tikhub_client, "fetch_douyin_profile",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("命中新鲜缓存不该打 TikHub")))
+    client, _ = client_env
+    b = client.post("/accounts/resolve", json={"text": "MS4wFRESH"}).json()
+    assert b["cached"] is True and b.get("stale") is None
+    assert b["nickname"] == "新鲜号" and b["follower_count"] == 100 and b["unique_id"] == "fresh_dy"
+
+
+def test_resolve_miss_fetches_and_caches(client_env, monkeypatch):
+    """未命中 -> 打一次 TikHub 落库；再解析命中缓存(cached=True),不再打。"""
+    from ncds_opus_factory.common import authors_repo, tikhub_client
+
+    calls = {"n": 0}
+
+    def fake(sec_uid, token=None):
+        calls["n"] += 1
+        return {"platform": "douyin", "sec_uid": sec_uid, "nickname": "实拉号",
+                "unique_id": "miss_dy", "avatar": "", "follower_count": 7,
+                "like_count": 0, "works_count": 1}
+
+    monkeypatch.setattr(tikhub_client, "fetch_douyin_profile", fake)
+    client, _ = client_env
+
+    b1 = client.post("/accounts/resolve", json={"text": "MS4wMISS"}).json()
+    assert b1["cached"] is False and b1["nickname"] == "实拉号" and calls["n"] == 1
+    assert authors_repo.load_profile("douyin", "MS4wMISS")["follower_count"] == 7
+
+    b2 = client.post("/accounts/resolve", json={"text": "MS4wMISS"}).json()
+    assert b2["cached"] is True and calls["n"] == 1  # 命中缓存,未再打
+
+
+def test_resolve_stale_returns_old_and_dispatches_refresh(client_env, tmp_path: Path, monkeypatch):
+    """命中但过期 + 已关注 -> 先回旧档案(stale=True) + 派 worker 刷新(cron shenkuo)。"""
+    import time as _t
+
+    from ncds_opus_factory.common import authors_repo
+    from ncds_opus_factory.server import state as state_mod
     from ncds_opus_factory.server.subscriptions import save_subscriptions, subscriptions_path
 
-    sp = subscriptions_path(tmp_path / "state" / "tasks")
-    save_subscriptions(sp, {"authors": [{
-        "sec_uid": "TTSEC", "platform": "tiktok", "unique_id": "mfw_3qj",
-        "nickname": "缓存昵称", "avatar": "https://x/a.jpg",
-        "follower_count": 100, "like_count": 200, "works_count": 3,
-    }]})
+    # 库里旧档案(3h 前 -> 超默认 2h TTL)
+    authors_repo.save_profile("douyin", "MS4wSTALE", {"nickname": "旧号", "follower_count": 5},
+                              refreshed_at=_t.time() - 3 * 3600)
+    # 该号已关注(派发前置条件)
+    save_subscriptions(subscriptions_path(tmp_path / "state" / "tasks"),
+                       {"authors": [{"sec_uid": "MS4wSTALE", "enabled": True, "platform": "douyin"}]})
+
+    submitted: list[tuple] = []
+
+    async def spy(cmd, params, source=None, **kw):
+        submitted.append((cmd, params, source))
+        return "t_spy"
+
+    monkeypatch.setattr(state_mod.RUNNER, "submit", spy)
+
     client, _ = client_env
-    resp = client.post("/accounts/resolve", json={"text": "https://www.tiktok.com/@mfw_3qj"})
-    assert resp.status_code == 200
-    b = resp.json()
-    assert b.get("cached") is True
-    assert b["nickname"] == "缓存昵称" and b["unique_id"] == "mfw_3qj"
-    assert b["follower_count"] == 100 and b["works_count"] == 3
+    b = client.post("/accounts/resolve", json={"text": "MS4wSTALE"}).json()
+    assert b["cached"] is True and b["stale"] is True and b["nickname"] == "旧号"
+    assert submitted == [("shenkuo", {"author": "MS4wSTALE", "refresh_only": True}, "cron")]
 
 
 def test_bad_all_posts_json_returns_empty(client_env):

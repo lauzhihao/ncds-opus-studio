@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ncds_opus_factory.common import authors_repo
 from ncds_opus_factory.server.queue import get_default_queue
 from ncds_opus_factory.server.task_runner import TaskRunner
 from ncds_opus_factory.server.task_store import TaskStore
@@ -77,6 +78,8 @@ def load_subscriptions(path: Path) -> dict[str, Any]:
                 interval_hours = None
         except (TypeError, ValueError):
             interval_hours = None
+        unique_id = a.get("unique_id")
+        unique_id = unique_id.strip() if isinstance(unique_id, str) and unique_id.strip() else None
         author = {
             "sec_uid": sec_uid,
             "note": note if isinstance(note, str) else None,
@@ -89,20 +92,47 @@ def load_subscriptions(path: Path) -> dict[str, Any]:
         domain = a.get("domain")
         if isinstance(domain, str) and domain.strip():
             author["domain"] = domain.strip()
-        # 展示快照（present-only：保持手编文件干净、老 author 不被注入 null）
-        for k in ("nickname", "avatar", "unique_id"):
-            v = a.get(k)
-            if isinstance(v, str) and v:
-                author[k] = v
-        for k in ("follower_count", "like_count", "works_count"):
-            v = a.get(k)
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                author[k] = int(v)
-        ra = a.get("refreshed_at")
-        if isinstance(ra, (int, float)) and not isinstance(ra, bool):
-            author["refreshed_at"] = float(ra)
+        # unique_id 是 tiktok 的作者库寻址键(身份)，保留进瘦引用；
+        # 展示快照(昵称/头像/粉丝数/refreshed_at)不再内联，统一去作者库取(见 authors_repo)。
+        if unique_id:
+            author["unique_id"] = unique_id
+        _migrate_inline_snapshot(platform, sec_uid, unique_id, a)
         authors.append(author)
     return {"interval_hours": interval, "authors": authors}
+
+
+def _migrate_inline_snapshot(
+    platform: str, sec_uid: str, unique_id: str | None, raw: dict[str, Any]
+) -> None:
+    """老订阅文件把作者名片内联在条目里；一次性搬进作者库(关注名单从此只存引用)。
+
+    仅当作者库尚无该作者时迁移(库里可能已被 worker 刷新成更新的，别用内联旧值覆盖)，
+    并保留内联原 refreshed_at(无则置 0 -> 视为过期，尽快被刷新)。无内联快照则跳过。
+    幂等且自限：迁移后 load_profile 命中即提前返回，热路径(GET/tick)退化为纯读。
+    """
+    display: dict[str, Any] = {}
+    for k in ("nickname", "avatar"):
+        v = raw.get(k)
+        if isinstance(v, str) and v:
+            display[k] = v
+    for k in ("follower_count", "like_count", "works_count"):
+        v = raw.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            display[k] = int(v)
+    if not display:
+        return
+    key = authors_repo.author_key(platform, sec_uid, unique_id or "")
+    if not key or authors_repo.load_profile(platform, key) is not None:
+        return
+    ra = raw.get("refreshed_at")
+    ra = float(ra) if isinstance(ra, (int, float)) and not isinstance(ra, bool) else 0.0
+    display["sec_uid"] = sec_uid
+    if unique_id:
+        display["unique_id"] = unique_id
+    try:
+        authors_repo.save_profile(platform, key, display, refreshed_at=ra)
+    except OSError:
+        logger.warning("[subscriptions] 作者库迁移落盘失败: %s", key[:16])
 
 
 def save_subscriptions(path: Path, cfg: dict[str, Any]) -> None:
