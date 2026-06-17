@@ -1,0 +1,145 @@
+/* 移动端适配(<=640px)：只在窄视口覆盖，桌面端零影响。
+   首页改动：分区标题压成单行(禁中文逐字竖排)、赛道筛选移入右上角汉堡菜单、卡片单列全宽流式全量展示。
+   本分区在 global.scss 末尾(motion 之前)@use，确保等特异性下覆盖 shell/agent 的桌面规则。 */
+
+/* 汉堡入口默认隐藏：仅移动端 media query 内显示，桌面端筛选仍内联在分区标题行。 */
+.topbar-filter-menu { display: none; }
+
+@media (max-width: 768px) {
+  /* —— 顶栏：收紧内边距、品牌字号略降、露出右上角汉堡入口 —— */
+  .topbar {
+    padding: var(--s-3) var(--s-4);
+    gap: var(--s-2);
+  }
+  .topbar .brand .mark { font-size: var(--text-md); }
+
+  .topbar-filter-menu {
+    display: inline-flex;
+    position: relative;
+  }
+  .topbar-hamburger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    background: var(--bg-surface);
+    color: var(--ink-1);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .topbar-hamburger:hover { border-color: var(--border-strong); }
+
+  /* 透明背板：点击空白关闭面板(z 介于 topbar:30 与面板之间) */
+  .topbar-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+  .topbar-menu-panel {
+    position: absolute;
+    top: calc(100% + var(--s-2));
+    right: 0;
+    z-index: 41;
+    min-width: 180px;
+    padding: var(--s-3);
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-3);
+    box-shadow: var(--shadow-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    animation: modal-pop var(--dur-base) var(--ease-out);
+  }
+  .topbar-menu-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .topbar-menu-filters {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+  }
+
+  /* —— 分区标题：压成单行，新增按钮右对齐，禁止中文逐字竖排 —— */
+  .section-title {
+    flex-wrap: wrap;
+    padding: 0 var(--s-4);
+    gap: var(--s-2);
+    margin: var(--s-5) 0 var(--s-3);
+  }
+  .section-title .label {
+    flex-shrink: 0;
+    white-space: nowrap;        /* 关键：宽度受限时不再逐字竖排 */
+  }
+  .section-title .section-add {
+    margin-left: auto;          /* 把"优质作者/优质作品"新增按钮推到行尾 */
+  }
+  /* 行内赛道筛选移动端隐藏(已进汉堡)；展开/收起也隐藏(列表已全量流式展示) */
+  .section-title .section-filters,
+  .section-title .section-toggle {
+    display: none;
+  }
+  /* 分割线在移动端独占一行垫底，避免被挤压成短线 */
+  .section-title .line {
+    flex: 0 0 100%;
+    order: 9;
+  }
+
+  /* —— 卡片网格：单列全宽流式 —— */
+  .tpl-grid {
+    grid-template-columns: 1fr;
+    padding: 0 var(--s-4);
+    gap: var(--s-3);
+  }
+
+  /* 账号卡右上"最近更新"chip 留位收窄，给名称/ID 区更多空间 */
+  .account-card .account-ident { padding-right: 64px; }
+
+  /* —— 弹窗解析卡（关注作者 / 新建作品）移动端重排 —— */
+
+  /* 账号解析卡：5列单行 → 2列两行；删除按钮绝对定位右上角脱离网格流 */
+  .modal-form .resolved-account .resolved-row {
+    grid-template-columns: 52px minmax(0, 1fr);
+    row-gap: var(--s-2);
+  }
+  .modal-form .resolved-account .resolved-meta {
+    padding-right: 28px;    /* 避让右上角删除按钮 */
+  }
+  .modal-form .resolved-account .resolved-stats {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    span { min-width: 0; }  /* 取消固定 52px，按内容收缩 */
+  }
+  .modal-form .resolved-account .resolved-domains {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+  }
+  .modal-form .resolved-account .resolved-controls {
+    position: absolute;
+    top: var(--s-3);
+    right: var(--s-4);
+  }
+
+  /* 作品解析卡：bottom 改竖排，顺序 author-row(1)→stats(2)→domains(3) */
+  .modal-form .resolved-work .resolved-work-bottom {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--s-2);
+    margin-top: var(--s-2);
+  }
+  .modal-form .resolved-work .resolved-work-author-row {
+    order: 1;
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;   /* 作者名居左，关注ta 居右 */
+  }
+  .modal-form .resolved-work .resolved-work-stats { order: 2; }
+  .modal-form .resolved-work .resolved-domains { order: 3; flex-wrap: wrap; gap: var(--s-4); }
+}

@@ -14,5 +14,7 @@
 @use 'scss/agent';
 @use 'scss/features';
 @use 'scss/toast';
+/* responsive 放靠后：移动端 @media 覆盖需在等特异性下压过 shell/agent/features 的桌面规则 */
+@use 'scss/responsive';
 /* motion 放最末：prefers-reduced-motion 降级规则需层叠覆盖以上所有分区的动画 */
 @use 'scss/motion';

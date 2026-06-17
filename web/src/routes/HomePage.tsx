@@ -4,7 +4,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, Check, Image as ImageIcon, Link2, Loader2, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus } from 'lucide-react';
+import { AlertCircle, Check, Image as ImageIcon, Link2, Loader2, Menu, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { api } from '../api/client';
@@ -36,6 +36,41 @@ function useGridColumns(ref: React.RefObject<HTMLElement>): number {
   return cols;
 }
 
+// 是否窄视口(≤640px)：移动端取消"两行折叠 + 展开全部"，改为单列全量流式展示。
+// matchMedia 同步取初值(无首帧闪烁)，再监听 change 跟随窗口缩放。
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const on = () => setMobile(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return mobile;
+}
+
+// 赛道过滤标签组：桌面端内联在分区标题行，移动端复用进顶栏汉堡面板。
+function DomainFilter({ selected, onSelect }: { selected: string | null; onSelect: (key: string | null) => void }) {
+  return (
+    <>
+      <button className={`domain-tab${selected === null ? ' active' : ''}`} onClick={() => onSelect(null)}>
+        不限
+      </button>
+      {DOMAINS.map((d) => (
+        <button
+          key={d.key}
+          className={`domain-tab${selected === d.key ? ' active' : ''}`}
+          onClick={() => onSelect(d.key)}
+        >
+          {d.label}
+        </button>
+      ))}
+    </>
+  );
+}
+
 function CardSection({
   title,
   icon: Icon,
@@ -59,11 +94,13 @@ function CardSection({
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const cols = useGridColumns(gridRef);
+  const isMobile = useIsMobile();
   const [expanded, setExpanded] = useState(false);
 
   const capacity = cols * rows; // N 行总格数
-  const overflow = cards.length > capacity;
-  const visible = expanded ? cards : cards.slice(0, capacity);
+  // 移动端单列流式全量展示(不折叠)；桌面端保留两行折叠 + 展开全部
+  const overflow = !isMobile && cards.length > capacity;
+  const visible = expanded || isMobile ? cards : cards.slice(0, capacity);
 
   return (
     <section className="card-section">
@@ -108,6 +145,7 @@ export function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false); // 移动端顶栏赛道筛选汉堡面板
 
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showAddTemp, setShowAddTemp] = useState(false);
@@ -248,6 +286,31 @@ export function HomePage() {
         </div>
         <div className="spacer" />
         <ThemeSwitcher />
+        {/* 移动端：赛道筛选收进右上角汉堡菜单（桌面端 CSS 隐藏，筛选仍内联在分区标题行） */}
+        <div className="topbar-filter-menu">
+          <button
+            type="button"
+            className="topbar-hamburger"
+            aria-label="赛道筛选"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            {menuOpen ? <X size={20} strokeWidth={1.8} /> : <Menu size={20} strokeWidth={1.8} />}
+          </button>
+          {menuOpen && (
+            <>
+              <div className="topbar-menu-backdrop" onClick={() => setMenuOpen(false)} />
+              <div className="topbar-menu-panel" role="menu">
+                <div className="topbar-menu-filters">
+                  <DomainFilter
+                    selected={selectedDomain}
+                    onSelect={(key) => { setSelectedDomain(key); setMenuOpen(false); }}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -274,25 +337,7 @@ export function HomePage() {
           addLabel="优质作者"
           onAdd={() => setShowAddAccount(true)}
           loading={loadingAcc}
-          filters={
-            <>
-              <button
-                className={`domain-tab${selectedDomain === null ? ' active' : ''}`}
-                onClick={() => setSelectedDomain(null)}
-              >
-                不限
-              </button>
-              {DOMAINS.map((d) => (
-                <button
-                  key={d.key}
-                  className={`domain-tab${selectedDomain === d.key ? ' active' : ''}`}
-                  onClick={() => setSelectedDomain(d.key)}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </>
-          }
+          filters={<DomainFilter selected={selectedDomain} onSelect={setSelectedDomain} />}
         />
       </div>
 
@@ -777,14 +822,8 @@ function AddTempTaskModal({
                     ))}
                   </div>
                 )}
-                <div className="resolved-work-statrow">
-                  <div className="resolved-work-stats">
-                    <span><b>{formatCount(w.digg)}</b><i>点赞</i></span>
-                    <span><b>{formatCount(w.comment)}</b><i>评论</i></span>
-                    <span><b>{formatCount(w.share)}</b><i>分享</i></span>
-                    <span><b>{formatCount(w.collect)}</b><i>收藏</i></span>
-                  </div>
-                  <div className="resolved-work-side">
+                <div className="resolved-work-bottom">
+                  <div className="resolved-work-author-row">
                     <div className="resolved-work-author">
                       {w.author.avatar && (
                         <img
@@ -795,21 +834,6 @@ function AddTempTaskModal({
                         />
                       )}
                       <span className="rwa-name">{w.author.nickname || '未知作者'}</span>
-                    </div>
-                    {/* 赛道单选：复用账号弹窗的 domain-pill 样式，选定后写回 manifest（AC#1 AC#2） */}
-                    <div className="resolved-domains" role="radiogroup" aria-label="赛道">
-                      {DOMAINS.map((d) => (
-                        <button
-                          key={d.key}
-                          type="button"
-                          role="radio"
-                          aria-checked={s.domain === d.key}
-                          className={`domain-pill ${d.colorClass}${s.domain === d.key ? ' is-on' : ''}`}
-                          onClick={() => setWorkDomain(s, d.key)}
-                        >
-                          {d.label}
-                        </button>
-                      ))}
                     </div>
                     <button
                       className="btn sm ghost"
@@ -823,6 +847,27 @@ function AddTempTaskModal({
                         <><UserPlus size={13} strokeWidth={1.8} /> 关注ta</>
                       )}
                     </button>
+                  </div>
+                  <div className="resolved-work-stats">
+                    <span><b>{formatCount(w.digg)}</b><i>点赞</i></span>
+                    <span><b>{formatCount(w.comment)}</b><i>评论</i></span>
+                    <span><b>{formatCount(w.share)}</b><i>分享</i></span>
+                    <span><b>{formatCount(w.collect)}</b><i>收藏</i></span>
+                  </div>
+                  {/* 赛道单选：选定后写回 manifest（AC#1 AC#2） */}
+                  <div className="resolved-domains" role="radiogroup" aria-label="赛道">
+                    {DOMAINS.map((d) => (
+                      <button
+                        key={d.key}
+                        type="button"
+                        role="radio"
+                        aria-checked={s.domain === d.key}
+                        className={`domain-pill ${d.colorClass}${s.domain === d.key ? ' is-on' : ''}`}
+                        onClick={() => setWorkDomain(s, d.key)}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>

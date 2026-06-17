@@ -936,22 +936,23 @@
         background: var(--accent-tint); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
       }
     }
-    /* 数据行：四项互动数据(左) + 作者信息&关注ta(右,居右,同一行)；
-       margin-top:auto 沉到 meta 底部，使文字底线与封面下边框对齐。 */
-    .resolved-work-statrow {
-      display: flex; align-items: center; gap: var(--s-3); margin-top: auto;
+    /* 底部行：桌面端 flex 横排(stats 左 / author-row 右 / domains 跟随)；
+       移动端由 _responsive.scss 改为竖排，顺序为 author-row → stats → domains。
+       margin-top:auto 沉到 meta 底部，使内容与封面下边框对齐。 */
+    .resolved-work-bottom {
+      display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); margin-top: auto;
     }
     .resolved-work-stats {
-      flex-shrink: 0;
+      order: 1; flex-shrink: 0;
       display: flex; flex-wrap: wrap; gap: var(--s-3);
       span { display: inline-flex; align-items: baseline; gap: 3px; }
       b { font-size: var(--text-sm); font-weight: 600; color: var(--ink-1); }
       i { font-style: normal; font-size: var(--text-2xs); color: var(--ink-3); }
     }
-    .resolved-work-side {
-      margin-left: auto; min-width: 0;
-      display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2);
-      /* 关注ta 按钮：ghost 默认 border 透明、不够明显，这里补一道边框 */
+    /* 作者行：作者头像+名称(左) + 关注ta 按钮(右)；桌面端推到 stats 右侧 */
+    .resolved-work-author-row {
+      order: 2; margin-left: auto;
+      display: flex; align-items: center; gap: var(--s-2); flex-shrink: 0; min-width: 0;
       .btn { border-color: var(--border); }
       .btn:hover:not(:disabled) { border-color: var(--border-strong); }
     }
@@ -966,6 +967,8 @@
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
     }
+    /* domains 紧跟 author-row 右侧（order:3 桌面端默认位置） */
+    .resolved-domains { order: 3; }
 
     /* 删除按钮：右上角 */
     .resolved-work-del {
