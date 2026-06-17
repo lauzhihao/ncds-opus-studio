@@ -1,0 +1,53 @@
+# ncds-opus-studio 部署编排：redis(队列) + server(:8810 入队/SSE/静态 /studio) + worker(执行)。
+# server 与 worker 同镜像、共享 app-state 卷（tasks/works/labels/instances/video-jobs/输出）。
+# 端口只绑 127.0.0.1:8810，由宿主机 nginx 反代到 opus.vooice.tech（nginx/证书另行打通）。
+name: ncds-opus-studio
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+  server:
+    build: .
+    image: ncds-opus-studio:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 覆盖 .env 里的本机值（macOS 路径 / 本地 redis）
+      REDIS_URL: redis://redis:6379
+      OPENCLAW_PYTHON: /usr/local/bin/python3
+      NOF_STATE_DIR: /app/state/tasks
+      NOF_VIDEO_JOBS_DIR: /app/state/video-jobs
+    ports:
+      # 只对宿主机 loopback 暴露；nginx 在同机反代
+      - "127.0.0.1:8810:8810"
+    volumes:
+      - app-state:/app/state
+    depends_on:
+      - redis
+    command: ["nof-server"]
+
+  worker:
+    image: ncds-opus-studio:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      OPENCLAW_PYTHON: /usr/local/bin/python3
+      NOF_STATE_DIR: /app/state/tasks
+      NOF_VIDEO_JOBS_DIR: /app/state/video-jobs
+    volumes:
+      - app-state:/app/state
+    depends_on:
+      - redis
+      - server
+    command: ["nof-worker"]
+
+volumes:
+  redis-data:
+  app-state:

@@ -1,0 +1,35 @@
+# 构建上下文裁剪：把本地体积大 / 与镜像无关 / 含密钥的东西排除掉
+.git
+.gitignore
+
+# Python venv 与缓存
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Node 依赖与前端构建产物（web/dist 在镜像内由 web stage 重新构建）
+node_modules
+web/node_modules
+web/dist
+packages/core/node_modules
+
+# 运行期状态 / 输出（容器里用 named volume，不要从上下文带进去）
+state
+video-jobs
+output
+outputs
+
+# 密钥与本机配置：绝不进镜像层，运行期经 compose env_file 注入
+.env
+.env.*
+!.env.example
+
+# 杂项
+*.log
+.DS_Store
+.project_map
+backlog
+docs/archive
