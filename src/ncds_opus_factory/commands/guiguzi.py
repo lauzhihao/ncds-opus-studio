@@ -142,7 +142,16 @@ def _works_noun(items: list[dict[str, str]]) -> str:
     return "这部作品" if len({it["text"] for it in items}) <= 1 else "这批作品"
 
 
-def _build_analyze_prompt(items: list[dict[str, str]]) -> str:
+def _build_analyze_prompt(
+    items: list[dict[str, str]],
+    domain_guidance: str | None = None,
+) -> str:
+    """构造 analyze prompt。
+
+    domain_guidance: 领域软背景（来自 domain_profiles 的 guiguzi 槽位）。
+      非空时在 prompt 末尾追加一段"领域软背景"——仅供参考，不限定赛道或公式，
+      核心分析逻辑（反推爆款原因）不受影响。空/None 时行为与原来完全一致。
+    """
     blocks, comment_lines = _source_blocks(items)
     has_comments = bool(comment_lines.strip())  # 无评论「直接拆解」时只凭原文
     single = len({it["text"] for it in items}) <= 1
@@ -165,7 +174,7 @@ def _build_analyze_prompt(items: list[dict[str, str]]) -> str:
         signal = ""
         task = f"任务:**反推{works}为什么成为爆款**——不要套任何固定赛道或公式,完全从原文里看它为什么火。\n\n"
         source_tail = blocks
-    return (
+    prompt = (
         f"你是抖音爆款拆解专家。{intro}\n"
         f"(这里「爆款」指{BAOKUAN_DEF}。)\n"
         + signal
@@ -178,12 +187,21 @@ def _build_analyze_prompt(items: list[dict[str, str]]) -> str:
         "只输出 JSON 对象,不要解释、不要 markdown 代码块。\n\n"
         + source_tail
     )
+    # 领域软背景：仅作受众/调性/禁区参考，鬼谷子核心设计"不预设赛道"不变。
+    # 明确标注"仅供参考"防止模型将它当成固定公式或选题方向限定。
+    if domain_guidance:
+        prompt += (
+            "\n\n【领域软背景（仅供参考，不要把它当成固定赛道或选题公式，分析逻辑仍完全从原文出发）】\n"
+            + domain_guidance
+        )
+    return prompt
 
 
 def _analyze_for_model(
     model: str, caller: CallerFn, items: list[dict[str, str]], on_progress: ProgressFn,
+    domain_guidance: str | None = None,
 ) -> dict[str, Any]:
-    prompt = _build_analyze_prompt(items)
+    prompt = _build_analyze_prompt(items, domain_guidance=domain_guidance)
     on_progress(f"鬼谷子: {model} 分析爆款原因中...")
     raw = caller(prompt)
     analysis = _normalize_analysis(_parse_obj(raw))
@@ -197,19 +215,29 @@ def analyze(
     on_progress: ProgressFn = _noop,
     *,
     require_comment: bool = True,
+    domain: str | None = None,
 ) -> dict[str, dict[str, Any]]:
     """第一步:双模型并行反推爆款原因。返回 {opus:{analysis,error}, deepseek:{analysis,error}}。
 
     require_comment=False:无评论「直接拆解」,仅凭原文(items 为 [{text, comment:''}, ...])。
+    domain: 领域 key（如 finance/emotion）。非空时从 domain_profiles 取 guiguzi 槽位作软背景，
+      以"仅供参考"形式追加到 prompt 末尾；不改变核心分析逻辑，空/未知 domain 回退原通用 prompt。
     """
+    from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile  # 避免循环 import
     norm = _normalize_items(items, require_comment=require_comment)
     if not norm:
         raise ValueError("guiguzi.analyze: items 为空,需要原文或带评论的 [{text, comment}, ...]")
+    # 取领域软背景（guiguzi 槽位），None 表示无领域要求，prompt 与原来完全一致
+    domain_guidance: str | None = None
+    if domain:
+        dp = _get_domain_profile(domain)
+        if dp is not None:
+            domain_guidance = dp.get("guiguzi")
     on_progress(f"鬼谷子: {len(norm)} 条素材 -> opus/deepseek 双模型并行分析爆款原因...")
     callers = _callers(timeout_seconds)
     out: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=len(callers)) as ex:
-        futs = {m: ex.submit(_analyze_for_model, m, fn, norm, on_progress)
+        futs = {m: ex.submit(_analyze_for_model, m, fn, norm, on_progress, domain_guidance)
                 for m, fn in callers.items()}
         for m, fut in futs.items():
             try:
@@ -238,20 +266,26 @@ SOURCE_PLACEHOLDER = "$source"  # 选题模板里「原文」的占位符:展示
 NO_COMMENT_TOPIC_COUNT = 5
 
 
-def _build_topic_prompt_template(items: list[dict[str, str]], analysis: dict[str, Any] | None) -> str:
+def _build_topic_prompt_template(
+    items: list[dict[str, str]],
+    analysis: dict[str, Any] | None,
+    domain_guidance: str | None = None,
+) -> str:
     """拼凑选题提示词模板:分析 + 任务 + JSON schema + $source(原文占位) + 编号评论。
 
     后端不再硬编码完整 prompt——模板拼好后展示给用户编辑;原文用 $source 占位(不输出原文,
     它可能作为参考输入),执行时 _render_topic_prompt 把 $source 换成真实原文块。
 
     两套任务:有评论 → 逐条锚定评论出题;无评论(直接拆解) → 仅凭原文 + 分析自由出 N 个选题。
+    domain_guidance: 领域软背景（来自 domain_profiles 的 guiguzi 槽位）。
+      非空时追加在模板末尾，明确标注"仅供参考，不要套成固定赛道"，保护核心设计哲学。
     """
     _, comment_lines = _source_blocks(items)
     has_comments = bool(comment_lines.strip())
     works = _works_noun(items)
     if has_comments:
         n = len(items)
-        return (
+        template = (
             f"你是抖音选题官。下面给出对标作品的提取文案、高赞评论,以及对{works}为什么成为爆款({BAOKUAN_DEF})的分析。\n"
             "请严格以【爆款原因分析】为指导(受众/钩子/方向都来自它),不要自己另设赛道、不要套固定公式。\n"
             "任务:针对【每一条评论】,结合原文与分析,产出一个可直接做的全新选题。\n"
@@ -264,21 +298,30 @@ def _build_topic_prompt_template(items: list[dict[str, str]], analysis: dict[str
             "potential 是 1-10 的爆款潜力分。只输出 JSON 数组,不要解释、不要 markdown 代码块。\n\n"
             "【对标原文】\n" + SOURCE_PLACEHOLDER + "\n\n【高赞评论】\n" + comment_lines
         )
-    # 无评论:不锚定评论(评论可能误导选题),仅凭原文 + 分析自由出固定条数,角度各异。
-    n = NO_COMMENT_TOPIC_COUNT
-    return (
-        f"你是抖音选题官。下面给出对标作品的提取文案,以及对{works}为什么成为爆款({BAOKUAN_DEF})的分析。\n"
-        "请严格以【爆款原因分析】为指导(受众/钩子/方向都来自它),不要自己另设赛道、不要套固定公式。\n"
-        f"任务:结合原文与分析,产出 {n} 个角度各异的全新选题,覆盖分析里不同的钩子/方向,不要互相重复。\n"
-        f"必须产出恰好 {n} 个选题。\n\n"
-        "【爆款原因分析】\n" + _format_analysis(analysis) + "\n\n"
-        "输出严格的 JSON 数组,长度 " + str(n) + ",每项字段固定:\n"
-        '{"index":<1..' + str(n) + '>,"title":"新选题(一句话,带钩子感,像爆款标题)",'
-        '"angle":"切入角度(一句话,这题从哪个口子讲)",'
-        '"why":"为什么可能爆(1句,贴合上面分析的钩子/受众)","potential":7}\n'
-        "potential 是 1-10 的爆款潜力分。只输出 JSON 数组,不要解释、不要 markdown 代码块。\n\n"
-        "【对标原文】\n" + SOURCE_PLACEHOLDER
-    )
+    else:
+        # 无评论:不锚定评论(评论可能误导选题),仅凭原文 + 分析自由出固定条数,角度各异。
+        n = NO_COMMENT_TOPIC_COUNT
+        template = (
+            f"你是抖音选题官。下面给出对标作品的提取文案,以及对{works}为什么成为爆款({BAOKUAN_DEF})的分析。\n"
+            "请严格以【爆款原因分析】为指导(受众/钩子/方向都来自它),不要自己另设赛道、不要套固定公式。\n"
+            f"任务:结合原文与分析,产出 {n} 个角度各异的全新选题,覆盖分析里不同的钩子/方向,不要互相重复。\n"
+            f"必须产出恰好 {n} 个选题。\n\n"
+            "【爆款原因分析】\n" + _format_analysis(analysis) + "\n\n"
+            "输出严格的 JSON 数组,长度 " + str(n) + ",每项字段固定:\n"
+            '{"index":<1..' + str(n) + '>,"title":"新选题(一句话,带钩子感,像爆款标题)",'
+            '"angle":"切入角度(一句话,这题从哪个口子讲)",'
+            '"why":"为什么可能爆(1句,贴合上面分析的钩子/受众)","potential":7}\n'
+            "potential 是 1-10 的爆款潜力分。只输出 JSON 数组,不要解释、不要 markdown 代码块。\n\n"
+            "【对标原文】\n" + SOURCE_PLACEHOLDER
+        )
+    # 领域软背景：仅供参考，核心设计"不预设赛道、不套死公式"不变。
+    # 明确措辞防止模型将 domain_guidance 当成固定赛道限定（违背鬼谷子设计哲学）。
+    if domain_guidance:
+        template += (
+            "\n\n【领域软背景（受众/调性/禁区参考，仅供参考，不要把它当成固定赛道或选题公式）】\n"
+            + domain_guidance
+        )
+    return template
 
 
 def _render_topic_prompt(template: str, items: list[dict[str, str]]) -> str:
@@ -354,6 +397,7 @@ def generate_topics(
     on_progress: ProgressFn = _noop,
     *,
     require_comment: bool = True,
+    domain: str | None = None,
 ) -> dict[str, Any]:
     """第二步:双模型并行出选题。merge topic_store。
 
@@ -362,13 +406,26 @@ def generate_topics(
     返回 {candidates, topics(扁平), out, added, prompt}(向后兼容卧龙/artifacts)。
 
     require_comment=False:无评论「直接拆解」,仅凭原文+分析自由出固定条数(不逐条锚定评论)。
+    domain: 领域 key（如 finance/emotion）。非空时从 domain_profiles 取 guiguzi 槽位作软背景；
+      用户自定义 prompt 传入时 domain_guidance 不追加（用户已掌控 prompt 内容）。
     """
+    from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile  # 避免循环 import
     norm = _normalize_items(items, require_comment=require_comment)
     if not norm:
         raise ValueError("guiguzi.generate_topics: items 为空,需要原文或带评论的 [{text, comment}, ...]")
     has_comments = any(it["comment"] for it in norm)
     n = len(norm) if has_comments else NO_COMMENT_TOPIC_COUNT
-    template = prompt if (prompt and prompt.strip()) else _build_topic_prompt_template(norm, analysis)
+    # 用户自定义 prompt 优先；否则按 analysis + 领域软背景拼默认模板。
+    # domain_guidance 只在用默认模板时注入，避免干扰用户已编辑的 prompt。
+    if prompt and prompt.strip():
+        template = prompt
+    else:
+        domain_guidance: str | None = None
+        if domain:
+            dp = _get_domain_profile(domain)
+            if dp is not None:
+                domain_guidance = dp.get("guiguzi")
+        template = _build_topic_prompt_template(norm, analysis, domain_guidance=domain_guidance)
     exec_prompt = _render_topic_prompt(template, norm)
     label = f"{len(norm)} 条评论" if has_comments else f"{len(norm)} 篇原文(无评论)"
     on_progress(f"鬼谷子: {label} -> opus/deepseek 双模型并行,各出 {n} 个选题...")
@@ -410,15 +467,18 @@ def run(
     items: list[dict[str, str]] | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     on_progress: ProgressFn = _noop,
+    *,
+    domain: str | None = None,
 ) -> dict[str, Any]:
     """端到端:analyze(找原因) → 自动取 opus 分析(缺则 deepseek) → generate_topics(出选题)。
 
     供卧龙/CLI/自动场景用(无人工介入)。前端走 analyze / generate_topics 两步交互版。
     返回在 generate_topics 结果上附 analysis(双模型分析) + chosen_analysis(自动选定那份)。
+    domain: 领域 key（如 finance/emotion），透传给 analyze / generate_topics 作软背景。
     """
-    analyses = analyze(items, timeout_seconds=timeout_seconds, on_progress=on_progress)
+    analyses = analyze(items, timeout_seconds=timeout_seconds, on_progress=on_progress, domain=domain)
     chosen = _pick_analysis(analyses)
-    result = generate_topics(items, chosen, timeout_seconds=timeout_seconds, on_progress=on_progress)
+    result = generate_topics(items, chosen, timeout_seconds=timeout_seconds, on_progress=on_progress, domain=domain)
     result["analysis"] = analyses
     result["chosen_analysis"] = chosen
     return result

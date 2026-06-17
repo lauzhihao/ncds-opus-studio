@@ -1785,16 +1785,21 @@ class PipelineRunner:
         from ncds_opus_factory.server.mock_agents import mock_guiguzi_analyze
 
         try:
-            mock = self._load(job_id).mock
+            state = self._load(job_id)
         except FileNotFoundError:
             return
+        mock = state.mock
+        # 选题领域软背景：作品 domain 由前端 doCreate 放进 job inputs（task-2.3），
+        # 这里透传给鬼谷子作软背景（仅受众/调性/禁区参考，不预设赛道）。空则回退通用。
+        domain = state.inputs.get("domain")
         on_progress = self._guiguzi_progress(job_id)
         try:
             if mock:
                 analyses = await asyncio.to_thread(lambda: mock_guiguzi_analyze(on_progress))
             else:
                 analyses = await asyncio.to_thread(
-                    guiguzi.analyze, items, on_progress=on_progress, require_comment=not no_comments)
+                    guiguzi.analyze, items, on_progress=on_progress,
+                    require_comment=not no_comments, domain=domain)
             doc = {"stage": "analyzed", "status": "analyzed", "items": items,
                    "analysis": analyses, "chosen_analysis": None, "candidates": None,
                    "topics": None, "out": None, "error": None,
@@ -1871,9 +1876,12 @@ class PipelineRunner:
         from ncds_opus_factory.server.mock_agents import mock_guiguzi_topics
 
         try:
-            mock = self._load(job_id).mock
+            state = self._load(job_id)
         except FileNotFoundError:
             return
+        mock = state.mock
+        # 选题领域软背景，同 analyze：从 job inputs 取 domain 透传（空则回退通用）。
+        domain = state.inputs.get("domain")
         on_progress = self._guiguzi_progress(job_id)
         kept_analysis = (self.get_guiguzi(job_id) or {}).get("analysis")
         used_prompt = (self.get_guiguzi(job_id) or {}).get("prompt")
@@ -1885,7 +1893,7 @@ class PipelineRunner:
                 else:
                     result = await asyncio.to_thread(
                         guiguzi.generate_topics, gen_items, analysis, prompt,
-                        on_progress=on_progress, require_comment=not no_comments)
+                        on_progress=on_progress, require_comment=not no_comments, domain=domain)
                 new_cands = result.get("candidates") or {}
                 out = result.get("out")
                 used_prompt = result.get("prompt") or used_prompt  # 回填本次模板(含 $source)供前端回显
@@ -3152,11 +3160,15 @@ def _build_rw_prompt(
     profile: str,
     source_text: str,
     user_requirements: str = "",
+    domain_guidance: str | None = None,
 ) -> tuple[str, str]:
     """按体裁 profile 构造 RW 的 (system_prompt, user_prompt)。
 
     本阶段产物 = 候选稿 markdown 文章（**不是** beats[] JSON）。RW 关心体裁与叙事质量，
     LINES 阶段才把定稿切成 beats[]。未知 profile 回退到 freestyle。
+
+    domain_guidance: 来自 domain_profiles 的 liuyong 槽位的领域写作指导，叠加在体裁 profile
+    之上（体裁提供结构底座，domain 提供领域专属调性/合规红线）。None 时行为与原来完全一致。
     """
     profile = profile if profile in _RW_PROFILE_BODY else DEFAULT_RW_PROFILE
     label = RW_PROFILE_META.get(profile, profile)
@@ -3165,6 +3177,13 @@ def _build_rw_prompt(
         "请输出 markdown 正文，保留原意、不编造事实，不要输出 JSON 或代码块包裹。"
     )
     parts: list[str] = list(_RW_PROFILE_BODY[profile])
+    # 注入领域写作指导（叠加在体裁底座之上，domain 专属调性/合规红线不散入体裁 profile）。
+    if domain_guidance and domain_guidance.strip():
+        parts += [
+            "",
+            "【领域写作要求（叠加在体裁要求之上，同等优先级）】",
+            domain_guidance.strip(),
+        ]
     parts += [
         "",
         "【通用约束】",

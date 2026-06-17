@@ -121,3 +121,68 @@ def test_rw_source_text_falls_back_to_article_file(tmp_path):
     src = _rw_source_text(items, tmp_path)
     assert "legacy 文章正文" in src
     assert "旧标题" in src
+
+
+# --------------------------------------------------------------------------- #
+# domain 继承测试
+# --------------------------------------------------------------------------- #
+def _make_collect_mocks(monkeypatch):
+    """为 collect_one 桩掉所有 IO 依赖（下载/转写/评论），让测试聚焦 domain 逻辑。"""
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_video_url", lambda a, token=None: "http://v/x.mp4")
+    monkeypatch.setattr(shenkuo.tikhub_client, "download_video",
+                        lambda url, out, **k: Path(out).write_bytes(b"MP4") or str(out))
+    monkeypatch.setattr(shenkuo.capabilities, "transcribe", lambda v, op: ({"task": "x"}, "文案"))
+    monkeypatch.setattr(shenkuo.capabilities, "clean_transcript", lambda raw, op=shenkuo._noop: None)
+    # 快采跳过音轨/截帧，不需要打桩 separate_audio/extract_frames/cutout
+
+
+def test_collect_one_with_author_domain_writes_manifest(tmp_path, monkeypatch):
+    """有 domain 的作者采集后，manifest 应写入 domain。"""
+    _works_env(tmp_path, monkeypatch)
+    author_dir = tmp_path / "author_x"
+    author_dir.mkdir()
+    _make_collect_mocks(monkeypatch)
+
+    shenkuo.collect_one(
+        "aid_domain_1", author_dir, meta={"desc": "d"}, top_comments=0,
+        do_audio=False, do_frames=False,
+        author_domain="finance",
+    )
+    from ncds_opus_factory.common import works_repo
+    assert works_repo.load_domain("douyin", "aid_domain_1") == "finance"
+
+
+def test_collect_one_without_author_domain_does_not_write(tmp_path, monkeypatch):
+    """无 domain 作者（author_domain=None）采集后，manifest 不落 domain 字段。"""
+    _works_env(tmp_path, monkeypatch)
+    author_dir = tmp_path / "author_x"
+    author_dir.mkdir()
+    _make_collect_mocks(monkeypatch)
+
+    shenkuo.collect_one(
+        "aid_domain_2", author_dir, meta={"desc": "d"}, top_comments=0,
+        do_audio=False, do_frames=False,
+        author_domain=None,
+    )
+    from ncds_opus_factory.common import works_repo
+    assert works_repo.load_domain("douyin", "aid_domain_2") is None
+
+
+def test_collect_one_does_not_overwrite_existing_domain(tmp_path, monkeypatch):
+    """作品已有 domain 时，author_domain 不覆盖（继承是补全，不是抢占）。"""
+    _works_env(tmp_path, monkeypatch)
+    author_dir = tmp_path / "author_x"
+    author_dir.mkdir()
+    _make_collect_mocks(monkeypatch)
+
+    from ncds_opus_factory.common import works_repo
+    # 预写一个现有 domain（模拟前端或之前手动设置过）
+    works_repo.save_domain("douyin", "aid_domain_3", "emotion")
+
+    shenkuo.collect_one(
+        "aid_domain_3", author_dir, meta={"desc": "d"}, top_comments=0,
+        do_audio=False, do_frames=False,
+        author_domain="finance",  # 传入不同 domain，应被忽略
+    )
+    # emotion 应保留，不被 finance 覆盖
+    assert works_repo.load_domain("douyin", "aid_domain_3") == "emotion"

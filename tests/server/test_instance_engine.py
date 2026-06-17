@@ -651,3 +651,77 @@ def test_rerun_done_passthrough_step_no_spurious_running(tmp_path: Path):
     runner.store.update_meta_status(iid, "completed")
     asyncio.run(runner.run_step(iid, "in"))               # done → done no-op
     assert runner.store.get_meta(iid).status == "completed"  # 未被翻 running
+
+
+# --------------------------------------------------------------------------- #
+# domain 透传：instance inputs.domain → performer params.domain
+# --------------------------------------------------------------------------- #
+def _capture_params(captured: dict):
+    """桩 performer：把收到的 params 存进 captured，供断言。"""
+    def _fn(on_progress, **params):
+        captured.update(params)
+        return {"ok": True}
+    return _fn
+
+
+def test_instance_domain_propagates_to_performer_params(tmp_path: Path):
+    """instance inputs 里的 domain 透传到 performer 的 params。"""
+    captured: dict = {}
+    reg = {**_FAKE_REG, "stub_capture": _capture_params(captured)}
+    recipe = Recipe(
+        recipe_id="td",
+        name="domain test",
+        steps=[RecipeStep(step_id="step1", label="S1", cmd="stub_capture")],
+    )
+    store = InstanceStore(tmp_path / "instances")
+    runner = InstanceRunner(store, registry=reg, recipes={"td": recipe})
+
+    # 创建实例时带 domain
+    state = runner.create_instance("td", inputs={"domain": "finance", "seed": 42})
+    iid = state.meta.instance_id
+    asyncio.run(runner.run_step(iid, "step1"))
+
+    # performer 应收到 domain
+    assert captured.get("domain") == "finance"
+    # 其它 instance inputs 不自动透传（只有 domain 被显式注入）
+    assert "seed" not in captured
+
+
+def test_instance_domain_step_inputs_takes_priority(tmp_path: Path):
+    """step_inputs 显式传了 domain 时，以 step 级为准，不被 instance 级覆盖。"""
+    captured: dict = {}
+    reg = {**_FAKE_REG, "stub_capture": _capture_params(captured)}
+    recipe = Recipe(
+        recipe_id="td2",
+        name="domain priority test",
+        steps=[RecipeStep(step_id="step1", label="S1", cmd="stub_capture")],
+    )
+    store = InstanceStore(tmp_path / "instances")
+    runner = InstanceRunner(store, registry=reg, recipes={"td2": recipe})
+
+    state = runner.create_instance("td2", inputs={"domain": "finance"})
+    iid = state.meta.instance_id
+    # step_inputs 里显式传了不同的 domain
+    asyncio.run(runner.run_step(iid, "step1", step_inputs={"domain": "emotion"}))
+
+    # step 级 domain 优先
+    assert captured.get("domain") == "emotion"
+
+
+def test_instance_no_domain_does_not_inject(tmp_path: Path):
+    """instance inputs 无 domain 时，performer params 不含 domain（回退）。"""
+    captured: dict = {}
+    reg = {**_FAKE_REG, "stub_capture": _capture_params(captured)}
+    recipe = Recipe(
+        recipe_id="td3",
+        name="no domain test",
+        steps=[RecipeStep(step_id="step1", label="S1", cmd="stub_capture")],
+    )
+    store = InstanceStore(tmp_path / "instances")
+    runner = InstanceRunner(store, registry=reg, recipes={"td3": recipe})
+
+    state = runner.create_instance("td3", inputs={"seed": 7})
+    iid = state.meta.instance_id
+    asyncio.run(runner.run_step(iid, "step1"))
+
+    assert "domain" not in captured

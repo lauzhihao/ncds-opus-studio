@@ -87,7 +87,7 @@ def load_subscriptions(path: Path) -> dict[str, Any]:
             "platform": platform,
             "interval_hours": interval_hours,
         }
-        # 领域 profile（finance/football/emotion，见 web config/domains.ts + domain_profiles.py）。
+        # 领域 profile（finance/emotion，见 web config/domains.ts + domain_profiles.py）。
         # present-only：仅有非空字符串时写入，保手编文件干净 + 老 author 不被注入 null。
         domain = a.get("domain")
         if isinstance(domain, str) and domain.strip():

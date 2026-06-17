@@ -248,7 +248,7 @@ export interface SubscriptionAuthor {
   note?: string | null;
   enabled: boolean;
   platform?: string; // 'douyin' | 'tiktok'，默认 douyin
-  domain?: string | null; // 领域 profile key（finance/football/emotion，见 config/domains.ts）
+  domain?: string | null; // 领域 profile key（finance/emotion，见 config/domains.ts）
   // 展示快照（新增时由 /accounts/resolve 带入；卡片直接显示）
   nickname?: string | null;
   avatar?: string | null;
@@ -298,6 +298,8 @@ export interface WorkResolveResult {
     avatar: string;
   };
   cached: boolean; // true=命中本地缓存（未打 TikHub）
+  // 赛道标签：manifest 里已存的（继承来的/之前手选的）；新作品首次解析为 null
+  domain: string | null;
 }
 
 // 某对标账号的一条作品（GET /accounts/{sec_uid}/posts）。

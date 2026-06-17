@@ -132,6 +132,52 @@ def test_resolve_work_caches_and_skips_tikhub(client_env, monkeypatch):
     assert calls["n"] == 1  # 命中缓存，未再打 TikHub
 
 
+def test_resolve_work_returns_domain_field(client_env, monkeypatch):
+    """resolve 响应带 domain 字段：新作品为 None；PATCH 写入后缓存命中时带回已存 domain。"""
+    client, works_mod = client_env
+
+    def fake(aweme_id, token=None):
+        return FAKE_DETAIL
+
+    monkeypatch.setattr(works_mod.tikhub_client, "fetch_one_video_detail", fake)
+
+    # 首次解析：domain=None（作品刚落盘，manifest 里还无 domain）
+    r = client.post("/works/resolve", json={"text": AID})
+    assert r.status_code == 200
+    assert r.json()["domain"] is None
+
+    # 写入 domain
+    pr = client.patch(f"/works/douyin/{AID}/domain", json={"domain": "emotion"})
+    assert pr.status_code == 200
+    assert pr.json() == {"ok": True, "platform": "douyin", "aweme_id": AID, "domain": "emotion"}
+
+    # 再次 resolve（命中缓存）：domain 随 manifest 带回
+    r2 = client.post("/works/resolve", json={"text": AID})
+    assert r2.status_code == 200
+    assert r2.json()["cached"] is True
+    assert r2.json()["domain"] == "emotion"
+
+
+def test_set_work_domain_unknown_key_422(client_env):
+    """PATCH domain：传未知 key 返回 422，不落盘。"""
+    client, _ = client_env
+    r = client.patch(f"/works/douyin/{AID}/domain", json={"domain": "sports"})
+    assert r.status_code == 422
+    from ncds_opus_factory.common import works_repo
+    # manifest 可能不存在（新作品）或不含 domain（已有作品但本 key 未写入）
+    assert works_repo.load_domain("douyin", AID) is None
+
+
+def test_set_work_domain_known_keys(client_env):
+    """PATCH domain：finance/emotion 两个合法 key 均可写入。"""
+    client, _ = client_env
+    for key in ("finance", "emotion"):
+        r = client.patch(f"/works/douyin/{AID}/domain", json={"domain": key})
+        assert r.status_code == 200, f"key={key} 应 200, 实际 {r.status_code}: {r.text}"
+        from ncds_opus_factory.common import works_repo
+        assert works_repo.load_domain("douyin", AID) == key
+
+
 def test_resolve_work_single_flight(client_env, monkeypatch):
     """并发解析同一作品（同 key）只打一次 TikHub（per-key 锁 + 锁内 double-check 缓存）。"""
     client, works_mod = client_env

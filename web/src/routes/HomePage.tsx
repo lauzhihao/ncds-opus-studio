@@ -14,7 +14,7 @@ import { Modal } from '../components/Modal';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { AccountCard, JobCard } from '../components/WorkCards';
 import { useToast } from '../components/Toast';
-import { DEFAULT_DOMAIN, DOMAINS, type DomainKey } from '../config/domains';
+import { DEFAULT_DOMAIN, DOMAINS, domainByKey, type DomainKey } from '../config/domains';
 import { formatCount } from '../utils/format';
 
 // 测量 .tpl-grid 当前列数（auto-fill 响应式），随容器尺寸变化重算。
@@ -568,6 +568,8 @@ interface StagedWork {
   status: 'loading' | 'done';
   work?: WorkResolveResult;
   followed?: boolean; // 已「关注ta」加入对标
+  // 赛道：resolve 响应带已存 domain（继承/之前选的）；无则用 DEFAULT_DOMAIN 展示，但不主动写回
+  domain: DomainKey;
 }
 
 const MAX_STAGED_WORK = 5; // 一次最多解析 5 个作品
@@ -594,16 +596,18 @@ function AddTempTaskModal({
     const id = String(++idRef.current);
     setText(''); // 清空输入框
     setErr(null);
-    // 立即在列表顶部插入 loading 占位；updater 内再兜一道硬上限防并发越界。
-    setStaged((prev) => (prev.length >= MAX_STAGED_WORK ? prev : [{ id, status: 'loading' }, ...prev]));
+    // 立即在列表顶部插入 loading 占位；domain 先给 DEFAULT_DOMAIN，resolve 完后按响应覆盖
+    setStaged((prev) => (prev.length >= MAX_STAGED_WORK ? prev : [{ id, status: 'loading', domain: DEFAULT_DOMAIN }, ...prev]));
     try {
       const r = await api.resolveWork(raw);
+      // 继承已存 domain（作者采集时写入的），无则前端展示默认值（不主动写回 manifest）
+      const resolvedDomain = (r.domain && domainByKey(r.domain) ? r.domain as DomainKey : DEFAULT_DOMAIN);
       setStaged((prev) => {
         // 列表里已有同作品的 done 行 -> 静默丢弃本 loading 行（去重）
         if (prev.some((s) => s.id !== id && s.work?.aweme_id === r.aweme_id)) {
           return prev.filter((s) => s.id !== id);
         }
-        return prev.map((s) => (s.id === id ? { ...s, status: 'done', work: r } : s));
+        return prev.map((s) => (s.id === id ? { ...s, status: 'done', work: r, domain: resolvedDomain } : s));
       });
     } catch (e: unknown) {
       console.error('[AddTempTaskModal] resolveWork 失败', e);
@@ -623,6 +627,17 @@ function AddTempTaskModal({
 
   function removeStaged(id: string) {
     setStaged((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  // 赛道选定：乐观更新 UI，同时写回 manifest（fire-and-forget；失败不阻塞用户）。
+  // 写回是为了「刷新后保留」（AC#2）；生产创建时还会再从 staged 取 domain 带进 inputs。
+  function setWorkDomain(s: StagedWork, domain: DomainKey) {
+    setStaged((prev) => prev.map((x) => (x.id === s.id ? { ...x, domain } : x)));
+    if (s.work) {
+      api.saveWorkDomain(s.work.platform, s.work.aweme_id, domain).catch((e: unknown) => {
+        console.error('[AddTempTaskModal] saveWorkDomain 失败', e);
+      });
+    }
   }
 
   // 关注ta：仅在 UI 上标记意图（变"已关注"）；真正写入对标延迟到「新建作品」提交时异步触发。
@@ -671,6 +686,8 @@ function AddTempTaskModal({
   }
 
   // 新建作品：用解析出的作品构造 shares[] 喂给生产任务（结构化，优于原 raw_text）。
+  // domain 取第一条作品的赛道（多作品理论上同赛道，取首条保持简单）并放进 instance inputs，
+  // 使其经 instance_runner._run_step 透传到每个 performer 的 params（task-2.2 已打通）。
   async function doCreate() {
     if (ready.length === 0) return;
     setBusy(true);
@@ -680,6 +697,8 @@ function AddTempTaskModal({
         const w = s.work!;
         return { url: w.share_url, title: w.title, author: w.author.nickname, tags: w.hashtags };
       });
+      // 取首条作品的赛道 key 送进引擎 inputs
+      const domain = ready[0].domain;
       const firstTitle = ready[0].work!.title?.trim().slice(0, 60);
       const state = await api.createJob({
         pipeline_id: 'paper_card_talk_015',
@@ -687,7 +706,7 @@ function AddTempTaskModal({
           ready.length === 1 && firstTitle
             ? firstTitle
             : `临时任务 ${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`,
-        inputs: {},
+        inputs: { domain }, // 赛道送进 instance inputs，引擎透传到各 performer
       });
       await api.updateInputs(state.job_id, { shares });
       void followMarkedAuthors(); // 关注跟随提交异步触发（不阻塞导航）
@@ -776,6 +795,21 @@ function AddTempTaskModal({
                         />
                       )}
                       <span className="rwa-name">{w.author.nickname || '未知作者'}</span>
+                    </div>
+                    {/* 赛道单选：复用账号弹窗的 domain-pill 样式，选定后写回 manifest（AC#1 AC#2） */}
+                    <div className="resolved-domains" role="radiogroup" aria-label="赛道">
+                      {DOMAINS.map((d) => (
+                        <button
+                          key={d.key}
+                          type="button"
+                          role="radio"
+                          aria-checked={s.domain === d.key}
+                          className={`domain-pill ${d.colorClass}${s.domain === d.key ? ' is-on' : ''}`}
+                          onClick={() => setWorkDomain(s, d.key)}
+                        >
+                          {d.label}
+                        </button>
+                      ))}
                     </div>
                     <button
                       className="btn sm ghost"

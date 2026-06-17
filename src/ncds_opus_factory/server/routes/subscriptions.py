@@ -33,7 +33,7 @@ class SubscriptionAuthor(BaseModel):
     enabled: bool = True
     # 平台：douyin（默认，沈括可采集）/ tiktok（可监控展示，采集暂未接入）
     platform: str = "douyin"
-    # 领域 profile（finance/football/emotion，见 domain_profiles.py）；决定后续选题/撰稿提示词
+    # 领域 profile（finance/emotion，见 domain_profiles.py）；决定后续选题/撰稿提示词
     domain: str | None = None
     # 每账号更新频率(小时)；None=用全局 interval_hours
     interval_hours: float | None = None

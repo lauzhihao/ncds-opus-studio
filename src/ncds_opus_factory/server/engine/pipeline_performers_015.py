@@ -46,6 +46,7 @@ from ncds_opus_factory.server.pipeline_runner import (
     _rw_source_text,
     _apply_rw_qc,
 )
+from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile
 
 # 外部副作用调用的 seam（subprocess / node / gpt-image）：默认走真实 helper，测试 monkeypatch。
 _run_tts_gen = _run_tts_gen_015
@@ -325,12 +326,15 @@ def run_rw_step(
     job_dir: str,
     asr_items: list[dict[str, Any]],
     profile: str | None = None,
-    **_: Any,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """RW：4 模型并行改写，产出 02_rw/{model_id}/draft.md。
 
     产物布局（与 PipelineRunner._execute_rw 完全对齐）：
       02_rw/{model_id}/draft.md     — 各模型 markdown 改写稿（仅 success）
+
+    kwargs 中的 domain（由 instance_runner 从 instance inputs 透传）用于取领域写作指导；
+    其余未知 kwargs 忽略（向前兼容）。
     """
     jd = Path(job_dir)
     if not asr_items:
@@ -345,7 +349,16 @@ def run_rw_step(
         raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
     effective_profile = profile if profile is not None else DEFAULT_RW_PROFILE
-    system_prompt, user_prompt = _build_rw_prompt(effective_profile, source_text)
+    # domain 由 instance_runner 从 instance inputs 透传（task-2.2 已落地）；
+    # 取 domain_profiles 的 liuyong 槽位作为领域写作指导，叠加在体裁 profile 之上。
+    # domain 为空或 profile 无 liuyong 时 domain_guidance=None，行为与原来完全一致。
+    domain: str | None = kwargs.get("domain")
+    domain_guidance: str | None = None
+    if domain:
+        dp = _get_domain_profile(domain)
+        if dp is not None:
+            domain_guidance = dp.get("liuyong")
+    system_prompt, user_prompt = _build_rw_prompt(effective_profile, source_text, domain_guidance=domain_guidance)
 
     on_progress(f"4 模型并行启动；source={len(source_text)} 字")
 
@@ -499,10 +512,13 @@ def run_storyboard_step(
     on_progress: Callable[[str], None],
     *,
     job_dir: str,
-    **_: Any,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """STORYBOARD：读 ``episode.beats`` → director agent 切子场景 → 回填 ``beats[].scene``
     + 写 ``scenes{}`` 到 ``02_rw/episode.json``。复用 ``_execute_storyboard`` 算法。
+
+    kwargs 中的 domain（由 instance_runner 从 instance inputs 透传）用于取领域视觉调性；
+    其余未知 kwargs 忽略（向前兼容）。
     """
     jd = Path(job_dir)
     ep_path = _episode_path(jd)
@@ -525,12 +541,23 @@ def run_storyboard_step(
     container_guide = str(image_cfg.get("sketchContainerGuide") or "").strip()
     palette = str((ep.get("visual") or {}).get("palette") or "").strip()
 
+    # domain 由 instance_runner 从 instance inputs 透传（task-2.2 已落地）；
+    # 取 domain_profiles 的 wudaozi 槽位作为领域视觉调性，叠加在风格圣经之外（不替换）。
+    # domain 为空或 profile 无 wudaozi 时 domain_image_style=None，行为与原来完全一致。
+    domain: str | None = kwargs.get("domain")
+    domain_image_style: str | None = None
+    if domain:
+        dp = _get_domain_profile(domain)
+        if dp is not None:
+            domain_image_style = dp.get("wudaozi")
+
     system_prompt, user_prompt = storyboard_director.build_director_prompt(
         ep.get("meta") or {},
         beats_in,
         style_bible=style_bible,
         container_guide=container_guide,
         palette=palette,
+        domain_image_style=domain_image_style,
     )
     on_progress(f"调 director agent 分镜（{len(beats_in)} beats）…")
     scene_by_beat, scenes = _opus_json_with_retry(

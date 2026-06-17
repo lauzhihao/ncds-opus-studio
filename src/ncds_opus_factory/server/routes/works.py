@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ncds_opus_factory.common import tikhub_client, works_repo
+from ncds_opus_factory.server.domain_profiles import DOMAIN_PROFILES
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,26 @@ class ResolveWorkBody(BaseModel):
     text: str
 
 
+class SaveDomainBody(BaseModel):
+    domain: str  # 赛道 key，必须是已知领域（finance/emotion）
+
+
+@router.patch("/works/{platform}/{aweme_id}/domain")
+def set_work_domain(platform: str, aweme_id: str, body: SaveDomainBody) -> dict:
+    """把用户手选的赛道 key 写回作品 manifest（task-2.3 前端临时作品选赛道）。
+
+    只接受 DOMAIN_PROFILES 里已知的 key（finance/emotion），未知 key 返回 422。
+    未知 platform 不做防御性拒绝（沿用 works_repo 自动建目录的容错策略）。
+    空串的情况由 Pydantic str 类型本身不接受空触发 422；save_domain 内部也做了双重保护。
+    """
+    domain = body.domain.strip()
+    if domain not in DOMAIN_PROFILES:
+        known = ", ".join(sorted(DOMAIN_PROFILES.keys()))
+        raise HTTPException(422, f"未知赛道 '{domain}'，已知赛道：{known}")
+    works_repo.save_domain(platform, aweme_id, domain)
+    return {"ok": True, "platform": platform, "aweme_id": aweme_id, "domain": domain}
+
+
 @router.post("/works/resolve")
 def resolve_work(body: ResolveWorkBody) -> dict[str, Any]:
     """抖音作品分享链接/口令 → 作品卡（封面/标题/话题/四项数据/作者档案）。
@@ -59,13 +80,16 @@ def resolve_work(body: ResolveWorkBody) -> dict[str, Any]:
     # 命中缓存：查过就不打 TikHub（读 manifest 的 card 分区）
     cached = works_repo.load_card(platform, aweme_id)
     if cached is not None:
-        return {**cached, "cached": True}
+        # 顺带带上已存的 domain（继承来的或之前手选的），前端展示/预选用
+        domain = works_repo.load_domain(platform, aweme_id)
+        return {**cached, "cached": True, "domain": domain}
 
     # 未命中：用 key 锁串行化，锁内 double-check（等锁期间别人可能刚写好缓存）
     with _key_lock(key):
         cached = works_repo.load_card(platform, aweme_id)
         if cached is not None:
-            return {**cached, "cached": True}
+            domain = works_repo.load_domain(platform, aweme_id)
+            return {**cached, "cached": True, "domain": domain}
         try:
             detail = tikhub_client.fetch_one_video_detail(aweme_id)
         except Exception as exc:  # noqa: BLE001
@@ -80,4 +104,5 @@ def resolve_work(body: ResolveWorkBody) -> dict[str, Any]:
             **tikhub_client.extract_work_card(detail),
         }
         works_repo.save_card(platform, aweme_id, result)
-        return {**result, "cached": False}
+        # 新作品首次解析：manifest 里还没 domain，返回 None（前端用 DEFAULT_DOMAIN 兜底显示）
+        return {**result, "cached": False, "domain": None}

@@ -100,6 +100,7 @@ def collect_one(
     max_frames: int = 8, engine: str = "threshold", top_comments: int = 20,
     platform: str = "douyin", on_progress: ProgressFn = _noop,
     do_audio: bool = True, do_frames: bool = True,
+    author_domain: str | None = None,
 ) -> dict[str, Any]:
     meta = meta or {}
     entry: dict[str, Any] = {
@@ -303,20 +304,31 @@ def collect_one(
 
     # 写作品级 manifest:沈括只占 products/status 分区,不碰 works.py 的 card 分区。
     # 这是 works.py / 引擎读"已采作品全产物"的统一入口(下次同作品据此短路)。
-    works_repo.merge(platform, aweme_id, products={
-        "video": entry.get("video"),
-        "asr": {
-            "paraformer": _rel(para) if para.exists() else None,
-            "txt": _rel(txt) if txt.exists() else None,
-            "clean": _rel(clean) if clean.exists() else None,
-            "text": entry.get("text"),
+    # domain 继承逻辑：已有非空 domain 保留（补全，不抢占）；作者传了才写，空值不注入。
+    manifest_patch: dict[str, Any] = {
+        "products": {
+            "video": entry.get("video"),
+            "asr": {
+                "paraformer": _rel(para) if para.exists() else None,
+                "txt": _rel(txt) if txt.exists() else None,
+                "clean": _rel(clean) if clean.exists() else None,
+                "text": entry.get("text"),
+            },
+            "cover": entry.get("cover"),
+            "comments": entry.get("comments"),
+            "audio": entry.get("audio"),
+            "frames": entry.get("frames"),
+            "cutouts": entry.get("cutouts"),
         },
-        "cover": entry.get("cover"),
-        "comments": entry.get("comments"),
-        "audio": entry.get("audio"),
-        "frames": entry.get("frames"),
-        "cutouts": entry.get("cutouts"),
-    }, status=entry["status"], collected_at=int(time.time()))
+        "status": entry["status"],
+        "collected_at": int(time.time()),
+    }
+    if author_domain and author_domain.strip():
+        # 仅当作品尚无 domain 时才从作者继承（已有非空则保留）
+        existing_domain = works_repo.load_domain(platform, aweme_id)
+        if not existing_domain:
+            manifest_patch["domain"] = author_domain.strip()
+    works_repo.merge(platform, aweme_id, **manifest_patch)
     return entry
 
 
@@ -524,6 +536,28 @@ def run(
         return {"author_dir": str(author_dir), "all_posts": len(posts), "collected": [],
                 "snapshots": stat["snapshots"], "signals": sig}
 
+    # 从订阅配置查此作者的 domain，用于"作者→作品 domain 继承"。
+    # 订阅文件在 state/shenkuo/subscriptions.json，与任务目录为兄弟目录关系。
+    # 失败不阻塞深采主链路（domain 是补全信息，缺失时行为回退到现有逻辑）。
+    author_domain: str | None = None
+    try:
+        from ncds_opus_factory.server.subscriptions import load_subscriptions, subscriptions_path
+        # state 根解析必须与 works_repo 一致：NOF_STATE_DIR 设了用其(任务目录)，没设回退
+        # 仓库根 state/。只认 env 会让默认部署(本机不设 env)下 domain 继承静默失效。
+        _sub_path = subscriptions_path(works_repo._state_root() / "tasks")
+        _subs = load_subscriptions(_sub_path)
+        for _a in _subs.get("authors") or []:
+            if _a.get("sec_uid") == author and isinstance(_a.get("domain"), str):
+                _d = _a["domain"].strip()
+                if _d:
+                    author_domain = _d
+                    break
+    except Exception as e:  # noqa: BLE001 — domain 查询失败不影响采集
+        on_progress(f"domain 查询失败(不阻塞): {type(e).__name__}: {e}")
+
+    if author_domain:
+        on_progress(f"作者 domain: {author_domain}")
+
     posts.sort(key=lambda p: p.get("digg", 0), reverse=True)
     chosen = posts[:top]
     collected: list[dict] = []
@@ -531,7 +565,8 @@ def run(
         on_progress(f"=== 采集 {i}/{len(chosen)}: {p['aweme_id']} ({p.get('digg')}赞) ===")
         try:
             entry = collect_one(p["aweme_id"], author_dir, meta=p, max_frames=max_frames, engine=engine,
-                                top_comments=top_comments, platform=platform, on_progress=on_progress)
+                                top_comments=top_comments, platform=platform, on_progress=on_progress,
+                                author_domain=author_domain)
         except Exception as e:  # noqa: BLE001 — 单条失败不拖垮整批
             on_progress(f"  采集异常: {type(e).__name__}: {e}")
             entry = {"aweme_id": p["aweme_id"], "status": {"error": str(e)}}

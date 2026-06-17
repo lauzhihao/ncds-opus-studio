@@ -358,7 +358,8 @@ def test_run_author_picks_top_by_digg(tmp_path, monkeypatch):
     seen: list[str] = []
 
     def fake_collect(aid, ad, meta=None, max_frames=8, engine="threshold",
-                     top_comments=20, platform="douyin", on_progress=shenkuo._noop):
+                     top_comments=20, platform="douyin", on_progress=shenkuo._noop,
+                     author_domain=None):
         seen.append(aid)
         return {"aweme_id": aid, "digg": (meta or {}).get("digg"), "status": {"download": "ok"}}
 

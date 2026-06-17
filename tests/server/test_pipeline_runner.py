@@ -83,3 +83,52 @@ def test_polish_transcript_repolishes_when_article_missing(tmp_path: Path, monke
     assert pr._polish_transcript_with_opus(
         transcript_path=transcript, output_path=article, title_hint="") is True
     assert calls["n"] == 2
+
+
+# --- 鬼谷子选题：job inputs 的 domain 透传到 guiguzi（task-2.5 调用方线程化）------ #
+def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """job inputs 带 domain（前端 doCreate 写入）时，analyze/generate 两个 bg 都把它透传给鬼谷子。"""
+    import asyncio
+    from ncds_opus_factory.commands import guiguzi as gz
+
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {"domain": "finance"})
+    seen: dict[str, object] = {}
+
+    def fake_analyze(items, on_progress=gz._noop, require_comment=True, domain=None, **kw):
+        seen["analyze_domain"] = domain
+        return {"opus": {"analysis": {"hook_reason": "x"}, "error": None}}
+
+    def fake_generate(items, analysis=None, prompt=None, on_progress=gz._noop,
+                      require_comment=True, domain=None, **kw):
+        seen["generate_domain"] = domain
+        return {"candidates": {}, "topics": [], "out": None, "added": 0, "prompt": ""}
+
+    monkeypatch.setattr(gz, "analyze", fake_analyze)
+    monkeypatch.setattr(gz, "generate_topics", fake_generate)
+
+    items = [{"text": "原文", "comment": "评论"}]
+    asyncio.run(runner._run_guiguzi_analyze_bg(job.job_id, items))
+    asyncio.run(runner._run_guiguzi_generate_bg(
+        job.job_id, items, items, {"opus": [], "deepseek": []}, None, None))
+
+    assert seen["analyze_domain"] == "finance"
+    assert seen["generate_domain"] == "finance"
+
+
+def test_guiguzi_no_domain_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """job inputs 无 domain 时透传 None，鬼谷子回退通用 prompt（不预设赛道）。"""
+    import asyncio
+    from ncds_opus_factory.commands import guiguzi as gz
+
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    seen: dict[str, object] = {}
+
+    def fake_analyze(items, on_progress=gz._noop, require_comment=True, domain=None, **kw):
+        seen["domain"] = domain
+        return {"opus": {"analysis": {}, "error": None}}
+
+    monkeypatch.setattr(gz, "analyze", fake_analyze)
+    asyncio.run(runner._run_guiguzi_analyze_bg(job.job_id, [{"text": "t", "comment": "c"}]))
+    assert seen["domain"] is None

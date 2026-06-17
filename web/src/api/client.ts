@@ -63,6 +63,16 @@ export const api = {
   resolveAccount: (text: string) => post<AccountResolveResult>('/accounts/resolve', { text }),
   // 从抖音作品分享链接/口令解析出作品卡（封面/标题/话题/数据/作者）；后端带缓存+锁
   resolveWork: (text: string) => post<WorkResolveResult>('/works/resolve', { text }),
+  // 把用户手选的赛道 key 写回作品 manifest（task-2.3 临时作品选赛道）
+  saveWorkDomain: (platform: string, awemeId: string, domain: string) =>
+    fetch(`/works/${encodeURIComponent(platform)}/${encodeURIComponent(awemeId)}/domain`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain }),
+    }).then(async (r) => {
+      if (!r.ok) throw new Error(`PATCH domain -> ${r.status}: ${await r.text()}`);
+      return r.json() as Promise<{ ok: boolean; platform: string; aweme_id: string; domain: string }>;
+    }),
   // mock 开关：URL 带 ?mock=1 时种一个 015 素材的 mock 作品（开发预览用）
   ensureMock: () => post<{ job_id: string; pipeline_id: string }>('/mock/ensure'),
   getJob: (id: string) => get<JobState>(`/jobs/${id}`),

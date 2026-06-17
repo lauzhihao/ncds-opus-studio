@@ -85,3 +85,20 @@ def load_card(platform: str, aweme_id: str) -> dict[str, Any] | None:
 
 def save_card(platform: str, aweme_id: str, card: dict[str, Any]) -> None:
     merge(platform, aweme_id, card=card)
+
+
+# --- 赛道标签分区（domain，作者→作品继承 / 前端 task-2.3 写入）--------------- #
+def load_domain(platform: str, aweme_id: str) -> str | None:
+    """读作品 manifest 顶层 domain 字段；缺文件/无字段/空串均返回 None。"""
+    m = load_manifest(platform, aweme_id)
+    if not m:
+        return None
+    v = m.get("domain")
+    return v if isinstance(v, str) and v.strip() else None
+
+
+def save_domain(platform: str, aweme_id: str, domain: str | None) -> None:
+    """把 domain 写进 manifest。空串/None 时不写入，保持 manifest 干净（present-only 原则）。"""
+    if not domain or not domain.strip():
+        return
+    merge(platform, aweme_id, domain=domain.strip())

@@ -4,21 +4,20 @@
 // 提示词目前还没填，占位在后端 domain_profiles.py（key 与这里一一对应）。
 // 这里只管「展示」：弹窗的领域单选器与作者卡片的领域徽标共用此单一数据源。
 //
-// 存储用稳定英文 key（finance/football/emotion），与展示文案/配色解耦——
+// 存储用稳定英文 key（finance/emotion），与展示文案/配色解耦——
 // 后续改 label 或加领域不影响已存数据。
 
-export type DomainKey = 'finance' | 'football' | 'emotion';
+export type DomainKey = 'finance' | 'emotion';
 
 export interface DomainDef {
   key: DomainKey;
   label: string; // 中文展示名
   // 颜色类名后缀：对应 SCSS .domain-badge.<colorClass> / .domain-pill.<colorClass>
-  colorClass: 'finance' | 'football' | 'emotion';
+  colorClass: 'finance' | 'emotion';
 }
 
 export const DOMAINS: DomainDef[] = [
   { key: 'finance', label: '财经', colorClass: 'finance' },
-  { key: 'football', label: '足球', colorClass: 'football' },
   { key: 'emotion', label: '情感', colorClass: 'emotion' },
 ];
 

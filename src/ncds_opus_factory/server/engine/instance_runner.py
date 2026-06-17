@@ -225,8 +225,16 @@ class InstanceRunner:
             if on_progress is not None:
                 on_progress(text)
 
-        # config 是溯源记录、不进 performer 参数（闭合签名会 TypeError）；driver 已把选择折进 step_inputs
+        # config 是溯源记录、不进 performer 参数（闭合签名会 TypeError）；driver 已把选择折进 step_inputs。
+        # domain 是实例级元数据，由前端在创建实例时写进 instance inputs（task-2.3 负责）；
+        # 引擎在这里把 domain 从 instance inputs 透传进每步 params，让任何 performer 都能 params.get("domain")。
+        # step_inputs 显式传了 domain 时以 step_inputs 为准（step 级覆盖 instance 级）。
+        instance_inputs = self.store.get_inputs(instance_id)
+        instance_domain = instance_inputs.get("domain") if isinstance(instance_inputs, dict) else None
         params = dict(step_inputs or {})
+        # 仅当 step_inputs 未显式传 domain 且 instance inputs 里有非空 domain 时才注入
+        if instance_domain and not params.get("domain"):
+            params["domain"] = instance_domain
         try:
             result = await asyncio.to_thread(_invoke, run_fn, params, _step_progress, cancel_check)
         except cancel.TaskCancelled:

@@ -101,12 +101,16 @@ def build_director_prompt(
     style_bible: str,
     container_guide: str = "",
     palette: str = "",
+    domain_image_style: str | None = None,
     sub_scenes_per_scene: tuple[int, int] = (2, 3),
     sketches_per_sub_scene: tuple[int, int] = (1, 6),
 ) -> tuple[str, str]:
     """构造 director agent 的 (system_prompt, user_prompt)。
 
     beats: [{ "index": 1, "zh": "...", "en": "..." }]，index 为 1-based。
+    domain_image_style: 领域片内视觉调性（来自 domain_profiles 的 wudaozi 槽位）。
+      非空时叠加在圣经之外，作为本片领域调性提示，不替换 style_bible。
+      空/None 时行为与原来完全一致（回退 DEFAULT_SKETCH_STYLE_PREFIX）。
     """
     lines: list[str] = []
     lines.append("把下面这条短视频的脚本（逐句字幕）导成分镜，输出视觉层 JSON。")
@@ -127,6 +131,10 @@ def build_director_prompt(
         lines.append(f"- 额外约束：{container_guide}")
     if palette:
         lines.append(f"- 配色：{palette}")
+    # 领域视觉调性：叠加在通用风格圣经之外，不替换圣经本体。
+    # 只在 domain_image_style 非空时注入，否则行为与无领域时完全一致。
+    if domain_image_style:
+        lines.append(f"- 【本片领域视觉调性】（仅供参考，叠加在上述风格之外）：{domain_image_style}")
     lines.append("- prompt 里不要出现任何文字 / 数字。")
     lines.append("")
     lines.append(
