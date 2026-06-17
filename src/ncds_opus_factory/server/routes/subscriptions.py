@@ -98,8 +98,11 @@ def _upsert_author_snapshot(a: SubscriptionAuthor) -> None:
 
 
 @router.get("/subscriptions", response_model=SubscriptionsConfig)
-async def get_subscriptions() -> dict[str, Any]:
-    return _hydrate(load_subscriptions(subscriptions_path(STATE_DIR)))
+async def get_subscriptions(domain: str | None = None) -> dict[str, Any]:
+    cfg = _hydrate(load_subscriptions(subscriptions_path(STATE_DIR)))
+    if domain:
+        cfg["authors"] = [a for a in cfg["authors"] if a.get("domain") == domain]
+    return cfg
 
 
 @router.put("/subscriptions", response_model=SubscriptionsConfig)

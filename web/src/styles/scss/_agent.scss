@@ -104,6 +104,22 @@
   span { display: inline-flex; align-items: center; gap: 3px; }
 }
 
+/* 作品列表分页哨兵：滚到底部自动追加下一批；亦可点击手动加载（兜底） */
+.works-load-sentinel {
+  display: flex; align-items: center; justify-content: center; gap: var(--s-2);
+  width: calc(100% - var(--s-6) * 2);
+  margin: var(--s-5) var(--s-6);
+  padding: var(--s-3);
+  border: 1px dashed var(--border, var(--bg-overlay));
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  &:hover { color: var(--ink-1); border-color: var(--accent); }
+}
+
 /* 作品列表底部：与页面留白 + 分割线 */
 .works-foot-divider {
   height: 1px;
@@ -1023,4 +1039,36 @@
 @keyframes skeleton-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
+}
+
+/* —— 首页：对标账号 domain 过滤标签 —— */
+.domain-filter-tabs {
+  display: flex;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  align-items: center;
+  border-bottom: 1px solid var(--border, var(--bg-overlay));
+}
+
+.domain-tab {
+  padding: 5px 12px;
+  border: 1px solid var(--border, var(--bg-overlay));
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+
+  &:hover {
+    color: var(--ink-1);
+    border-color: var(--accent);
+  }
+
+  &.active {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-color: var(--accent);
+  }
 }

@@ -104,6 +104,7 @@ export function HomePage() {
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
 
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showAddTemp, setShowAddTemp] = useState(false);
@@ -133,11 +134,11 @@ export function HomePage() {
   useEffect(() => {
     setLoadingAcc(true);
     api
-      .getSubscriptions()
+      .getSubscriptions(selectedDomain || undefined)
       .then((cfg) => setAuthors(cfg.authors ?? []))
       .catch((e: unknown) => { console.error('load subscriptions failed', e); setError('加载监控账号失败。'); })
       .finally(() => setLoadingAcc(false));
-  }, [reloadKey]);
+  }, [reloadKey, selectedDomain]);
 
   useEffect(() => {
     setLoadingJobs(true);
@@ -262,6 +263,25 @@ export function HomePage() {
       )}
 
       <div style={{ marginTop: 'var(--s-6)' }}>
+        {/* domain 过滤 tab 贴着分割线上方 */}
+        <div className="domain-filter-tabs">
+          <button
+            className={`domain-tab${selectedDomain === null ? ' active' : ''}`}
+            onClick={() => setSelectedDomain(null)}
+          >
+            不限标签
+          </button>
+          {DOMAINS.map((d) => (
+            <button
+              key={d.key}
+              className={`domain-tab${selectedDomain === d.key ? ' active' : ''}`}
+              onClick={() => setSelectedDomain(d.key)}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+
         <CardSection
           title="时刻关注作者动态"
           icon={Radar}

@@ -1,7 +1,7 @@
 // 长期任务 · 某对标账号的作品列表。点某作品 → 创建"平台衍生作品"画布（seed 源链接）。
 // 数据接 GET /accounts/{sec_uid}/posts（沈括已采集的 all_posts.json）。
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Clock, Heart, Loader2, MessageCircle, Play, RotateCw, Share2, Sparkles, Star, UserMinus } from 'lucide-react';
 
@@ -12,6 +12,25 @@ import { useToast } from '../components/Toast';
 import { CoverImage } from '../components/WorkCards';
 import { formatCount, formatDuration, timeAgo } from '../utils/format';
 import { parseTitleTags } from '../utils/title';
+
+// 作品很多时一次性挂载所有卡片会卡(几百张封面图同时进懒加载视窗)。
+// 改成客户端分页:首屏只渲染一批,滚到底部哨兵再追加下一批。
+//
+// 每批数量按屏幕估算,不写死:列数随屏宽(对齐 .tpl-grid 的 minmax(300px,1fr)
+// + gap 16 + 左右各 24 padding),行数按屏高填满首屏再多一行。这样首批刚好铺满
+// 可视区,追加时整批高度 > 一屏 → 把哨兵顶出视窗,自然"滚一屏加一批",不会级联把剩余全拉下来。
+const CARD_MIN = 300; // .tpl-grid minmax 下限
+const GRID_GAP = 16; // --s-4
+const GRID_PAD = 48; // 容器左右 --s-6 各 24
+const CARD_H = 300; // 卡片估高(封面+信息),只用于估行数
+
+function computePageSize(): number {
+  const w = typeof window !== 'undefined' ? window.innerWidth : 1280;
+  const h = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const cols = Math.max(1, Math.floor((w - GRID_PAD + GRID_GAP) / (CARD_MIN + GRID_GAP)));
+  const rows = Math.max(3, Math.ceil(h / CARD_H) + 1); // 填满首屏再多一行
+  return cols * rows;
+}
 
 export function AccountWorksPage() {
   const { secUid } = useParams<{ secUid: string }>();
@@ -26,11 +45,17 @@ export function AccountWorksPage() {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [creating, setCreating] = useState<string | null>(null);
+  // 每批渲染量按屏幕估算一次(挂载时定),后续每次追加都加这个固定值
+  const pageRef = useRef(computePageSize());
+  // 当前已渲染的作品数量(分页窗口);滚到底部哨兵时按 pageRef 固定递增
+  const [visible, setVisible] = useState(pageRef.current);
+  const sentinelRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (!secUid) return;
     setLoading(true);
     setError(null);
+    setVisible(pageRef.current); // 切账号/重载:分页窗口归位首屏
     api
       .getAccountPosts(secUid)
       .then((r) => setPosts(r.posts ?? []))
@@ -40,6 +65,25 @@ export function AccountWorksPage() {
       })
       .finally(() => setLoading(false));
   }, [secUid, reloadKey]);
+
+  // 底部哨兵进入视窗(提前 200px)→ 追加固定一批。observer 只随数据(posts.length)
+  // 重建,不放 visible:否则每追加一次就重建 observer、新建即回调,哨兵还在视窗内时会
+  // 连环触发把剩余作品一次性全加载。单实例下 IO 只在 intersection 翻转时回调,配合
+  // 每批填满一屏(把哨兵顶出视窗),自然"滚一屏加一批"。
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisible((v) => Math.min(v + pageRef.current, posts.length));
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [posts.length]);
 
   // 基于源作品创建衍生画布：建 job 后把源链接 seed 进 input 节点（沈括的采集源）。
   async function deriveFrom(post: AccountPost) {
@@ -160,11 +204,25 @@ export function AccountWorksPage() {
             该账号还没有已采集的作品。等沈括采集（state/benchmark/author_{secUid}/）后这里会列出。
           </div>
         ) : (
-          posts.map((p) => (
+          posts.slice(0, visible).map((p) => (
             <PostCard key={p.aweme_id} post={p} creating={creating === p.aweme_id} onDerive={() => deriveFrom(p)} />
           ))
         )}
       </div>
+
+      {/* 分页哨兵:还有未渲染的作品时挂出,进入视窗即自动追加下一批;
+          同时可点击作为兜底(IO 被省电策略掐掉/异常时仍能手动加载)。 */}
+      {!loading && posts.length > visible && (
+        <button
+          ref={sentinelRef}
+          type="button"
+          className="works-load-sentinel"
+          onClick={() => setVisible((v) => Math.min(v + pageRef.current, posts.length))}
+        >
+          <Loader2 size={15} strokeWidth={2} className="spin" />
+          加载更多… 已显示 {visible}/{posts.length}
+        </button>
+      )}
 
       {/* 底部与页面留白 + 分割线 */}
       <div className="works-foot-divider" />

@@ -53,7 +53,6 @@ export function AccountCard({ author, onOpen }: { author: SubscriptionAuthor; on
           </div>
         )}
         <div className="footer">
-          <span className={`badge${author.enabled ? '' : ' dim'}`}>{author.enabled ? '监控中' : '已暂停'}</span>
           <span className={`platform-badge ${author.platform === 'tiktok' ? 'tiktok' : 'douyin'}`}>{platformLabel}</span>
           {domain && <span className={`domain-badge ${domain.colorClass}`}>{domain.label}</span>}
           <div style={{ flex: 1 }} />

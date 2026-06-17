@@ -51,7 +51,8 @@ export const api = {
   getPipeline: (id: string) => get<PipelineDef>(`/pipelines/${id}`),
   listJobs: () => get<{ jobs: JobSummary[] }>('/jobs'),
   // 长期任务：监控的对标账号 + 某账号的作品列表
-  getSubscriptions: () => get<SubscriptionsConfig>('/subscriptions'),
+  getSubscriptions: (domain?: string) =>
+    get<SubscriptionsConfig>(`/subscriptions${domain ? `?domain=${encodeURIComponent(domain)}` : ''}`),
   putSubscriptions: (cfg: SubscriptionsConfig) => put<SubscriptionsConfig>('/subscriptions', cfg),
   // 手动触发一轮订阅采集（新增对标账号后立即初始化，不等下个周期）。
   // 已在库且刚采过的账号被后端节流跳过、作品产物走 works_repo 命中缓存，不会重复采集。
