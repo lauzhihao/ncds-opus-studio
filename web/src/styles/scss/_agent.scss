@@ -333,6 +333,9 @@
 }
 
 /* 双栏对比：opus | deepseek */
+/* 移动端选项卡入口：桌面端隐藏，双栏仍并列 */
+.gg-tabs { display: none; }
+
 .guiguzi-cols {
   display: grid;
   grid-template-columns: 1fr 1fr;

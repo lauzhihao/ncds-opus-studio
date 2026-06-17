@@ -74,6 +74,7 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
   const [chosenTitle, setChosenTitle] = useState<string | null>(null);
   // 第一步分析的可编辑副本（用户改完再 2 选 1 出选题）。
   const [edits, setEdits] = useState<{ opus?: GuiguziAnalysis; deepseek?: GuiguziAnalysis }>({});
+  const [activeAnalysisTab, setActiveAnalysisTab] = useState<'opus' | 'deepseek'>('opus');
   // 第二步选题提示词的可编辑副本（含 $source 占位；用户改完点重新选题就用它）。
   const [promptEdit, setPromptEdit] = useState<string>('');
   const [promptSyncedAt, setPromptSyncedAt] = useState<number | undefined>(undefined);
@@ -289,7 +290,22 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
           <div className="panel-section-title">
             <Lightbulb size={14} strokeWidth={1.8} /> 爆款原因 · 双模型 · 改一改、选一个出选题
           </div>
-          <div className="guiguzi-cols">
+          {/* 移动端选项卡：桌面端由 CSS 隐藏，双栏仍并列 */}
+          <div className="gg-tabs">
+            <button
+              className={`gg-tab${activeAnalysisTab === 'opus' ? ' active' : ''}`}
+              onClick={() => setActiveAnalysisTab('opus')}
+            >
+              Opus 4.8
+            </button>
+            <button
+              className={`gg-tab${activeAnalysisTab === 'deepseek' ? ' active' : ''}`}
+              onClick={() => setActiveAnalysisTab('deepseek')}
+            >
+              DeepSeek
+            </button>
+          </div>
+          <div className={`guiguzi-cols tab-active-${activeAnalysisTab}`}>
             <AnalysisColumn
               name="opus"
               label="Opus 4.8"

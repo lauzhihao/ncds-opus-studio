@@ -102,6 +102,46 @@
   /* 账号卡右上"最近更新"chip 留位收窄，给名称/ID 区更多空间 */
   .account-card .account-ident { padding-right: 64px; }
 
+  /* —— 鬼谷子抽屉移动端 —— */
+  .drawer.wide { width: 100%; }
+  /* drawer body 禁横向滚动：overflow:auto 默认两轴可滚，移动端强制隐藏横轴 */
+  .drawer .body { overflow-x: hidden; }
+  /* panel-section 标题行从 inline-flex 改为块级 flex，允许长标题换行而非撑宽容器 */
+  .panel-section-title { display: flex; flex-wrap: wrap; }
+
+  /* 爆款原因选项卡 */
+  .gg-tabs {
+    display: flex;
+    gap: var(--s-2);
+    margin-bottom: var(--s-2);
+  }
+  .gg-tab {
+    flex: 1;
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    font-size: var(--text-sm);
+    color: var(--ink-2);
+    background: transparent;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .gg-tab.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-tint);
+    font-weight: 600;
+  }
+  /* 非活跃列隐藏，切换为单列 */
+  .guiguzi-cols.tab-active-opus .model-deepseek,
+  .guiguzi-cols.tab-active-deepseek .model-opus {
+    display: none;
+  }
+  .guiguzi-cols.tab-active-opus,
+  .guiguzi-cols.tab-active-deepseek {
+    grid-template-columns: 1fr;
+  }
+
   /* —— 弹窗解析卡（关注作者 / 新建作品）移动端重排 —— */
 
   /* 账号解析卡：5列单行 → 2列两行；删除按钮绝对定位右上角脱离网格流 */
