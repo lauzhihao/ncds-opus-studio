@@ -7,6 +7,9 @@ node_modules
 state/
 video-jobs/
 web/dist/
+web/dist.tmp/
+web/dist.old/
+web/node_modules/.deploy_lock_hash
 web/*.tsbuildinfo
 # tsc -b 增量编译会 emit vite.config 的 .d.ts/.js 副产物（即便 tsconfig.noEmit）；忽略
 web/vite.config.d.ts
