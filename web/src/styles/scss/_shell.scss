@@ -154,6 +154,13 @@
   height: 1px;
   background: var(--border);
 }
+/* 当 section-title 内有筛选标签时：标签居左独占一行，分割线换到下方独占一行 */
+.section-title:has(.section-filters) {
+  flex-wrap: wrap;
+}
+.section-title:has(.section-filters) .section-filters {
+  flex: 0 0 100%;
+}
 /* 当 section-title 内有搜索框时：搜索框留在标题行右端，分割线换到下方独占一行 */
 .section-title:has(.section-search) {
   flex-wrap: wrap;
