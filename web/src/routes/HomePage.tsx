@@ -269,7 +269,7 @@ export function HomePage() {
             className={`domain-tab${selectedDomain === null ? ' active' : ''}`}
             onClick={() => setSelectedDomain(null)}
           >
-            不限标签
+            不限
           </button>
           {DOMAINS.map((d) => (
             <button
