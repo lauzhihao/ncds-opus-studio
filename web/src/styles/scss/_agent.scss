@@ -83,6 +83,19 @@
   &.tiktok { color: #4285f4; background: rgba(66, 133, 244, 0.09); }
 }
 
+/* 领域徽标（账号卡片）：与 .platform-badge 同规格，三领域三色（财经琥珀/足球绿/情感玫红） */
+.domain-badge {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center;
+  font-size: var(--text-2xs); font-weight: 500;
+  padding: 1px 8px; border-radius: 999px;
+  border: 1px solid currentColor;
+
+  &.finance { color: #c0871e; background: rgba(192, 135, 30, 0.10); }
+  &.football { color: #2f9e44; background: rgba(47, 158, 68, 0.10); }
+  &.emotion { color: #d6336c; background: rgba(214, 51, 108, 0.10); }
+}
+
 /* 作品卡：四项数据（赞/评论/转发/收藏）带图标一行 */
 .post-stats {
   display: flex; flex-wrap: wrap; gap: var(--s-3);
@@ -774,12 +787,12 @@
     border-radius: var(--r-2);
     background: var(--bg-surface);
 
-    /* 网格固定各区宽度：头像 | 身份(1fr) | 数据 | 频率+删除 —— 跨卡片垂直对齐 */
+    /* 网格固定各区宽度：头像 | 身份(1fr) | 数据 | 领域 | 删除 —— 跨卡片垂直对齐，整行不换行 */
     .resolved-row {
       display: grid;
-      grid-template-columns: 52px minmax(0, 1fr) 196px 92px;
+      grid-template-columns: 52px minmax(0, 1fr) auto auto auto;
       align-items: center;
-      gap: var(--s-4);
+      gap: var(--s-3);
     }
 
     /* loading：遮罩层 + 居中 spinner（解析完成后整行替换为正常卡片） */
@@ -831,10 +844,43 @@
       i { font-style: normal; font-size: var(--text-2xs); color: var(--ink-3); margin-top: 2px; }
     }
 
-    /* 频率下拉 + 删除按钮（频率在删除左侧，靠右对齐）；删除 hover 变红 */
+    /* 删除按钮（靠右对齐）；hover 变红 */
     .resolved-controls {
       display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2);
       .btn.icon-only:hover { color: var(--status-failed); border-color: var(--status-failed); }
+    }
+
+    /* 领域单选：与数据/删除同列同行，pill 横排不换行 */
+    .resolved-domains {
+      display: flex; align-items: center; gap: var(--s-2);
+      flex-wrap: nowrap;
+    }
+  }
+
+  /* 领域 pill：默认灰(--ink-3 + 中性边框)，hover/选中才显领域色；--domain-c 存各领域色复用 */
+  .domain-pill {
+    cursor: pointer;
+    white-space: nowrap;
+    display: inline-flex; align-items: center;
+    font-size: var(--text-2xs); font-weight: 500;
+    padding: 2px 12px; border-radius: 999px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--ink-3);
+    transition: color var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out),
+                background var(--dur-fast) var(--ease-out);
+
+    &.finance { --domain-c: #c0871e; }
+    &.football { --domain-c: #2f9e44; }
+    &.emotion { --domain-c: #d6336c; }
+
+    &:hover { color: var(--domain-c); border-color: var(--domain-c); }
+    &.is-on {
+      font-weight: 600;
+      color: var(--domain-c);
+      border-color: var(--domain-c);
+      background: color-mix(in srgb, var(--domain-c) 14%, transparent);
     }
   }
 

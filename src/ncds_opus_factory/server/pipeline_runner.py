@@ -1719,6 +1719,28 @@ class PipelineRunner:
             if isinstance(it, dict) and str(it.get("comment") or "").strip()
         ]
 
+    def _guiguzi_source_items(self, job_id: str) -> list[dict[str, str]]:
+        """无评论「直接拆解」:从沈括采集(asr.collected)取各作品原文(提取文案),
+        构造无评论 items [{text, comment:''}],截断到 MAX_ITEMS。无原文则返回空。"""
+        from ncds_opus_factory.commands.guiguzi import MAX_ITEMS
+        try:
+            state = self._load(job_id)
+        except FileNotFoundError:
+            return []
+        asr_node = state.nodes.get("asr")
+        asr_out = (asr_node.outputs if asr_node else None) or {}
+        collected = list(asr_out.get("collected") or asr_out.get("items") or [])
+        out: list[dict[str, str]] = []
+        for e in collected:
+            if not isinstance(e, dict):
+                continue
+            text = str(e.get("text") or "").strip()
+            if text:
+                out.append({"text": text, "comment": ""})
+            if len(out) >= MAX_ITEMS:
+                break
+        return out
+
     def _guiguzi_progress(self, job_id: str):
         def on_progress(text: str) -> None:
             # 工作线程内调：只碰文件(线程安全),不碰 asyncio 总线。更新 running doc 的 progress。
@@ -1737,8 +1759,13 @@ class PipelineRunner:
         except FileNotFoundError as e:
             raise KeyError(job_id) from e
         norm = self._norm_guiguzi_items(items)
+        no_comments = False
         if not norm:
-            raise ValueError("items 为空：需要 [{text, comment}, ...]（至少一条带 comment）")
+            # 无评论「直接拆解」:回退到沈括采集的全部作品原文,仅凭原文分析爆款原因。
+            norm = self._guiguzi_source_items(job_id)
+            no_comments = True
+            if not norm:
+                raise ValueError("没有可分析的素材:请先在沈括采集,或选 1-5 条高赞评论")
         old = self._guiguzi_tasks.get(job_id)
         if old is not None and not old.done():
             return self.get_guiguzi(job_id) or {"status": "running", "stage": "analyzing", "items": norm}
@@ -1747,10 +1774,13 @@ class PipelineRunner:
                "chosen_analysis": None, "candidates": None, "topics": None, "out": None,
                "error": None, "progress": "分析爆款原因中…", "updated_at": time.time()}
         self._write_guiguzi(job_id, doc)
-        self._guiguzi_tasks[job_id] = asyncio.create_task(self._run_guiguzi_analyze_bg(job_id, norm))
+        self._guiguzi_tasks[job_id] = asyncio.create_task(
+            self._run_guiguzi_analyze_bg(job_id, norm, no_comments))
         return doc
 
-    async def _run_guiguzi_analyze_bg(self, job_id: str, items: list[dict[str, Any]]) -> None:
+    async def _run_guiguzi_analyze_bg(
+        self, job_id: str, items: list[dict[str, Any]], no_comments: bool = False,
+    ) -> None:
         from ncds_opus_factory.commands import guiguzi
         from ncds_opus_factory.server.mock_agents import mock_guiguzi_analyze
 
@@ -1763,7 +1793,8 @@ class PipelineRunner:
             if mock:
                 analyses = await asyncio.to_thread(lambda: mock_guiguzi_analyze(on_progress))
             else:
-                analyses = await asyncio.to_thread(guiguzi.analyze, items, on_progress=on_progress)
+                analyses = await asyncio.to_thread(
+                    guiguzi.analyze, items, on_progress=on_progress, require_comment=not no_comments)
             doc = {"stage": "analyzed", "status": "analyzed", "items": items,
                    "analysis": analyses, "chosen_analysis": None, "candidates": None,
                    "topics": None, "out": None, "error": None,
@@ -1790,8 +1821,13 @@ class PipelineRunner:
         except FileNotFoundError as e:
             raise KeyError(job_id) from e
         norm = self._norm_guiguzi_items(items)
+        no_comments = False
         if not norm:
-            raise ValueError("items 为空：需要 [{text, comment}, ...]（至少一条带 comment）")
+            # 无评论「直接拆解」:回退到沈括采集的全部作品原文,仅凭原文+分析自由出题。
+            norm = self._guiguzi_source_items(job_id)
+            no_comments = True
+            if not norm:
+                raise ValueError("没有可出题的素材:请先在沈括采集,或选 1-5 条高赞评论")
         old = self._guiguzi_tasks.get(job_id)
         if old is not None and not old.done():
             return self.get_guiguzi(job_id) or {"status": "running", "stage": "generating", "items": norm}
@@ -1801,7 +1837,8 @@ class PipelineRunner:
         base: dict[str, list[dict[str, Any]]] = {"opus": [], "deepseek": []}
         gen = norm
         # 自定义 prompt 总是全量(prompt 已把 N 条评论拼死);否则按 force 决定增量。
-        if not force and not has_prompt and not mock and existing.get("candidates"):
+        # 无评论「直接拆解」一律全量(增量靠评论 anchor 比对,不适用)。
+        if not no_comments and not force and not has_prompt and not mock and existing.get("candidates"):
             cur_comments = {it["comment"] for it in norm}
             covered: set[str] = set()
             cands = existing.get("candidates") or {}
@@ -1821,13 +1858,13 @@ class PipelineRunner:
         self._write_guiguzi(job_id, doc)
         self._guiguzi_tasks[job_id] = asyncio.create_task(
             self._run_guiguzi_generate_bg(job_id, norm, gen, base, analysis,
-                                          prompt if has_prompt else None))
+                                          prompt if has_prompt else None, no_comments))
         return doc
 
     async def _run_guiguzi_generate_bg(
         self, job_id: str, full_items: list[dict[str, Any]], gen_items: list[dict[str, Any]],
         base: dict[str, list[dict[str, Any]]], analysis: dict[str, Any] | None,
-        prompt: str | None,
+        prompt: str | None, no_comments: bool = False,
     ) -> None:
         """后台：对 gen_items 跑 guiguzi.generate_topics（analysis/prompt 指导），与 base 合并，写 guiguzi.json。"""
         from ncds_opus_factory.commands import guiguzi
@@ -1847,7 +1884,8 @@ class PipelineRunner:
                     result = await asyncio.to_thread(lambda: mock_guiguzi_topics(on_progress))
                 else:
                     result = await asyncio.to_thread(
-                        guiguzi.generate_topics, gen_items, analysis, prompt, on_progress=on_progress)
+                        guiguzi.generate_topics, gen_items, analysis, prompt,
+                        on_progress=on_progress, require_comment=not no_comments)
                 new_cands = result.get("candidates") or {}
                 out = result.get("out")
                 used_prompt = result.get("prompt") or used_prompt  # 回填本次模板(含 $source)供前端回显

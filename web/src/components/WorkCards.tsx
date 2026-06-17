@@ -6,7 +6,9 @@ import { ChevronRight, Clock, Image as ImageIcon, Loader2, PenBox, Plus, Trash2 
 
 import type { JobSummary, SubscriptionAuthor } from '../api/types';
 import { jobProgress } from '../config/agents';
+import { domainByKey } from '../config/domains';
 import { formatCount, formatDuration, timeAgo } from '../utils/format';
+import { parseTitleTags } from '../utils/title';
 
 // 虚线"+"新增框：与作品卡同尺寸（grid stretch 对齐行高），点击触发弹窗。
 export function AddCard({ label, onClick }: { label: string; onClick: () => void }) {
@@ -24,6 +26,7 @@ export function AccountCard({ author, onOpen }: { author: SubscriptionAuthor; on
   const marker = author.sec_uid.replace(/[^a-zA-Z0-9]/g, '').slice(-2).toUpperCase() || 'AC';
   const hasStats = author.follower_count != null;
   const platformLabel = author.platform === 'tiktok' ? 'TikTok' : '抖音';
+  const domain = domainByKey(author.domain); // 领域 profile：徽标显示在平台徽标右侧
   return (
     <article className="tpl-card account-card" onClick={onOpen}>
       <div className="body">
@@ -52,6 +55,7 @@ export function AccountCard({ author, onOpen }: { author: SubscriptionAuthor; on
         <div className="footer">
           <span className={`badge${author.enabled ? '' : ' dim'}`}>{author.enabled ? '监控中' : '已暂停'}</span>
           <span className={`platform-badge ${author.platform === 'tiktok' ? 'tiktok' : 'douyin'}`}>{platformLabel}</span>
+          {domain && <span className={`domain-badge ${domain.colorClass}`}>{domain.label}</span>}
           <div style={{ flex: 1 }} />
           <button className="btn sm icon-only accent" aria-label="查看作品" onClick={(e) => { e.stopPropagation(); onOpen(); }}>
             <ChevronRight size={14} strokeWidth={1.9} />
@@ -116,6 +120,8 @@ export function JobCard({
     return m ? m[1] : job.job_id.slice(0, 2).toUpperCase();
   })();
   const progress = jobProgress(job.node_status);
+  // 「作品 + 话题标签」：JobSummary 只有 title 字符串，话题从中正则提取（60 字后被截断的标签提取不到）
+  const { title, tags } = parseTitleTags(job.title);
   return (
     <article className={`tpl-card${job.running ? ' is-running' : ''}`} onClick={onOpen}>
       <div className="cover">
@@ -130,7 +136,14 @@ export function JobCard({
         )}
       </div>
       <div className="body">
-        <div className="name">{job.title || '未命名作品'}</div>
+        <div className="name">{title || '未命名作品'}</div>
+        {tags.length > 0 && (
+          <div className="name-tags">
+            {tags.map((t) => (
+              <span key={t} className="title-tag">#{t}</span>
+            ))}
+          </div>
+        )}
         <div className="desc">
           <Clock size={11} strokeWidth={1.6} style={{ verticalAlign: '-2px', marginRight: 4 }} />
           上次更新 {updated}

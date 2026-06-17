@@ -248,6 +248,7 @@ export interface SubscriptionAuthor {
   note?: string | null;
   enabled: boolean;
   platform?: string; // 'douyin' | 'tiktok'，默认 douyin
+  domain?: string | null; // 领域 profile key（finance/football/emotion，见 config/domains.ts）
   // 展示快照（新增时由 /accounts/resolve 带入；卡片直接显示）
   nickname?: string | null;
   avatar?: string | null;

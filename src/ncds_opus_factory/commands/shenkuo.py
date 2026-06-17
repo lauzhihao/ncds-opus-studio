@@ -364,6 +364,56 @@ def _write_collected(author_dir: Path, collected: list[dict]) -> Path:
     return path
 
 
+def _fetch_posts_multipass(
+    author: str, pull_n: int, on_progress: ProgressFn, passes: int = 3
+) -> list[dict]:
+    """多趟拉取取并集,逼近作者真实可达作品集。
+
+    抖音 user_posts 翻页非确定:has_more / cursor 会在还有作品时就谎报"到底",单趟可能
+    严重欠收(实测同账号 42 vs 164)。重复拉几趟、按 aweme_id 取并集补齐;连续一趟零新增
+    即提前停。单趟抛异常(如 ReadTimeout)只丢这一趟、用已得的,不让整次采集失败。
+    """
+    acc: dict[str, dict] = {}
+    for i in range(passes):
+        try:
+            batch = tikhub_client.fetch_user_posts(author, max_items=pull_n, on_progress=on_progress)
+        except Exception as e:  # noqa: BLE001 — 单趟失败不拖垮整次(已得的照样用)
+            on_progress(f"第 {i + 1} 趟异常,跳过用已得: {type(e).__name__}: {e}")
+            continue
+        before = len(acc)
+        for p in batch:
+            aid = p.get("aweme_id")
+            if aid:
+                acc[aid] = p  # 后一趟的 stats 覆盖前一趟(取最新)
+        gained = len(acc) - before
+        on_progress(f"第 {i + 1} 趟: 本趟 {len(batch)} 条,累计去重 {len(acc)}(+{gained})")
+        if i > 0 and gained == 0:
+            break
+    return list(acc.values())
+
+
+def _merge_all_posts(path: Path, fresh: list[dict]) -> list[dict]:
+    """all_posts.json 并集合并写:旧的保留、新的覆盖 stats,**只增不减**。
+
+    防"短趟覆盖丢数据"(曾把好好的 123 条覆盖成 42)。配合周期 refresh,覆盖率单调收敛。
+    按 create 倒序(新作品在前)。
+    """
+    merged: dict[str, dict] = {}
+    if path.exists():
+        try:
+            for p in json.loads(path.read_text(encoding="utf-8")):
+                aid = p.get("aweme_id")
+                if aid:
+                    merged[aid] = p
+        except (json.JSONDecodeError, OSError):
+            pass  # 旧文件坏了就当空,fresh 兜底
+    for p in fresh:
+        aid = p.get("aweme_id")
+        if aid:
+            merged[aid] = p
+    return sorted(merged.values(), key=lambda p: p.get("create", 0), reverse=True)
+
+
 # --------------------------------------------------------------------------- #
 # 编排
 # --------------------------------------------------------------------------- #
@@ -427,17 +477,20 @@ def run(
     on_progress(f"沈括启动: 拉作者作品(sec_uid={author[:16]}...)")
     # refresh-only 要广覆盖(更新历史作品指标),默认拉更多;深采模式只需够挑 top
     pull_n = max_posts or (200 if refresh_only else max(top * 2, 30))
-    posts = tikhub_client.fetch_user_posts(author, max_items=pull_n, on_progress=on_progress)
+    # 多趟并集拉本次"新鲜"作品(抖音翻页非确定,单趟会欠收),再 merge 进 all_posts.json(只增不减)
+    fresh = _fetch_posts_multipass(author, pull_n, on_progress)
+    posts = _merge_all_posts(author_dir / "all_posts.json", fresh)
     (author_dir / "all_posts.json").write_text(
         json.dumps(posts, ensure_ascii=False, indent=2), encoding="utf-8")
-    on_progress(f"拉到 {len(posts)} 条作品,落 all_posts.json")
+    on_progress(f"本次新鲜 {len(fresh)} 条,合并后累计 {len(posts)} 条,落 all_posts.json")
 
-    # 指标层:写身份 + 追加变化的快照(时间序列)
+    # 指标层:写身份 + 追加变化的快照(时间序列)。只喂 fresh(真实当前 stats),
+    # 不喂 merged——merged 含历史旧条目的旧 stats,会往时间序列里塞陈旧/重复快照。
     ts = int(time.time())
     sig: dict[str, int] = {}
     conn = benchmark_store.connect(BENCH_DB)
     try:
-        stat = benchmark_store.record_refresh(conn, author, posts, ts)
+        stat = benchmark_store.record_refresh(conn, author, fresh, ts)
         on_progress(f"指标层: 作品 {stat['posts']} 条,新增快照 {stat['snapshots']} 条 -> {_rel(BENCH_DB)}")
         # 信号检测(订阅传感器的产出):新作品/指标飙升 -> events.jsonl 供排产消费。
         # 失败不阻塞采集主链路。

@@ -26,6 +26,7 @@ interface Props {
   jobId: string;
   job: JobState;
   onConfirmed?: () => void; // 确认选题后推进到柳永
+  onGotoShenkuo?: () => void; // 空状态里「沈括」链接：切换到沈括面板去采集/选评论
 }
 
 // 抖音口径点赞数：<1w 原样，<1亿 用 w，≥1亿 用 亿（与沈括面板一致）。
@@ -65,7 +66,7 @@ function readItems(jobId: string): GuiguziItem[] {
   }
 }
 
-export function GuiguziPanel({ jobId, job, onConfirmed }: Props) {
+export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
   const { showToast } = useToast();
   const [items, setItems] = useState<GuiguziItem[]>(() => readItems(jobId));
   const [result, setResult] = useState<GuiguziResult | null>(null);
@@ -127,10 +128,11 @@ export function GuiguziPanel({ jobId, job, onConfirmed }: Props) {
   }
 
   async function analyze() {
-    if (items.length === 0) {
-      showToast('请先在沈括面板点选 1-5 条高赞评论作选题参考');
+    if (!asrDone) {
+      showToast('请先让沈括完成采集');
       return;
     }
+    // items 为空也放行：后端「直接拆解」会改用沈括采集的全部原文分析（不强制选评论）。
     setBusyAction(true);
     try {
       setResult(await api.analyzeGuiguzi(jobId, items));
@@ -143,7 +145,7 @@ export function GuiguziPanel({ jobId, job, onConfirmed }: Props) {
   }
 
   async function generate(analysis: GuiguziAnalysis, opts: { force?: boolean; prompt?: string } = {}) {
-    if (items.length === 0) return;
+    // items 为空也放行：无评论时后端用沈括原文 + 分析自由出题（不逐条锚定评论）。
     setBusyAction(true);
     // 乐观清空：点击即进入 generating 态、清掉下面的选题结果，不等网络往返。
     setResult((prev) =>
@@ -201,7 +203,27 @@ export function GuiguziPanel({ jobId, job, onConfirmed }: Props) {
   const currentComments = items.map((it) => it.comment);
   const newCount = currentComments.filter((c) => !coveredComments.has(c)).length;
   const removedCount = [...coveredComments].filter((c) => !currentComments.includes(c)).length;
-  const changed = hasTopics && (newCount > 0 || removedCount > 0);
+  // 仅评论驱动时检测变化；无评论「直接拆解」(items 为空)不参与增量比对。
+  const changed = items.length > 0 && hasTopics && (newCount > 0 || removedCount > 0);
+
+  // 「分析爆款原因」按钮：有评论时在右上角；无评论时挪到空状态里（文案「直接拆解爆款原因」）。
+  const analyzeButton = (
+    <button
+      className="btn primary sm"
+      disabled={!asrDone || busy}
+      onClick={analyze}
+      title="从原文(+评论)反推爆款原因（不固定赛道）"
+    >
+      <Search size={13} strokeWidth={1.8} />
+      {stage === 'analyzing'
+        ? '分析中…'
+        : hasAnalysis
+          ? '重新分析'
+          : items.length > 0
+            ? '分析爆款原因'
+            : '拆解爆款原因'}
+    </button>
+  );
 
   return (
     <div className="panel guiguzi-panel">
@@ -210,23 +232,26 @@ export function GuiguziPanel({ jobId, job, onConfirmed }: Props) {
         <div className="panel-section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <MessageCircle size={14} strokeWidth={1.8} />
           <span style={{ flex: 1 }}>选题参考 · 已选 {items.length}/5 条评论</span>
-          <button
-            className="btn primary sm"
-            disabled={items.length === 0 || busy}
-            onClick={analyze}
-            title="从原文 + 评论反推爆款原因（不固定赛道）"
-          >
-            <Search size={13} strokeWidth={1.8} />
-            {stage === 'analyzing' ? '分析中…' : hasAnalysis ? '重新分析' : '分析爆款原因'}
-          </button>
+          {/* 选了评论才在右上角显示；没选评论时按钮在下方空状态里（「直接拆解」） */}
+          {items.length > 0 && analyzeButton}
         </div>
         {!asrDone ? (
           <div className="empty-state" style={{ padding: 'var(--s-4)' }}>
-            等待沈括完成采集后，去沈括面板点选高赞评论作选题参考。
+            还没有可选的评论。先让{' '}
+            <button type="button" className="link-btn" onClick={onGotoShenkuo}>沈括</button>
+            {' '}去采集些基础数据（文案 / 高赞评论），再回来找我选题。
           </div>
         ) : items.length === 0 ? (
           <div className="empty-state" style={{ padding: 'var(--s-4)' }}>
-            还没选评论。回沈括面板，hover 高赞评论点「选题参考」（最多 5 条）。
+            <div>
+              建议从{' '}
+              <button type="button" className="link-btn" onClick={onGotoShenkuo}>沈括</button>
+              {' '}处选择高赞评论，再进行选题。
+            </div>
+            <div style={{ marginTop: 'var(--s-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>或者您也可以</span>
+              {analyzeButton}
+            </div>
           </div>
         ) : (
           <ul className="guiguzi-seed-list">

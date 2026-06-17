@@ -2,7 +2,7 @@
 // 每区最多 2 行卡片，超出折起（展开/收起）。每区一个虚线"+"新增框点击弹窗：
 // 长期任务的新增框在末位，临时任务的新增框始终在首位。
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Check, Image as ImageIcon, Link2, Loader2, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -11,10 +11,10 @@ import { api } from '../api/client';
 import type { AccountResolveResult, JobSummary, SubscriptionAuthor, WorkResolveResult } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
-import { Select } from '../components/Select';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { AccountCard, JobCard } from '../components/WorkCards';
 import { useToast } from '../components/Toast';
+import { DEFAULT_DOMAIN, DOMAINS, type DomainKey } from '../config/domains';
 import { formatCount } from '../utils/format';
 
 // 测量 .tpl-grid 当前列数（auto-fill 响应式），随容器尺寸变化重算。
@@ -108,6 +108,27 @@ export function HomePage() {
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showAddTemp, setShowAddTemp] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<JobSummary | null>(null);
+
+  // 加载失败横幅不占满整行：右边缘对齐到第一个 section 新增按钮("关注作者")的右缘。
+  // 按钮右缘由标题行左侧内容(图标/label/count/按钮)决定、与视口宽无关，故实测一次即可；
+  // 用 ResizeObserver 盯标题行，覆盖 web font 异步加载后 label 宽度变化导致的 reflow。
+  const bannerRef = useRef<HTMLDivElement>(null);
+  const [bannerWidth, setBannerWidth] = useState<number>();
+  useLayoutEffect(() => {
+    if (!error) { setBannerWidth(undefined); return; }
+    const banner = bannerRef.current;
+    const addBtn = document.querySelector<HTMLElement>('.section-add');
+    const titleRow = addBtn?.closest('.section-title');
+    if (!banner || !addBtn || !titleRow) return;
+    const measure = () => {
+      const w = addBtn.getBoundingClientRect().right - banner.getBoundingClientRect().left;
+      if (w > 0) setBannerWidth(w);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(titleRow);
+    return () => ro.disconnect();
+  }, [error, loadingAcc]);
 
   useEffect(() => {
     setLoadingAcc(true);
@@ -226,7 +247,12 @@ export function HomePage() {
       </div>
 
       {error && (
-        <div className="load-error-banner" role="alert">
+        <div
+          className="load-error-banner"
+          role="alert"
+          ref={bannerRef}
+          style={bannerWidth ? { width: `${bannerWidth}px` } : undefined}
+        >
           <AlertCircle size={15} strokeWidth={1.8} />
           <span className="load-error-text">{error}</span>
           <button type="button" className="btn ghost sm" onClick={() => { setError(null); setReloadKey((k) => k + 1); }}>
@@ -237,22 +263,22 @@ export function HomePage() {
 
       <div style={{ marginTop: 'var(--s-6)' }}>
         <CardSection
-          title="长期任务 · 监控对标账号"
+          title="时刻关注作者动态"
           icon={Radar}
           dataCount={authors.length}
           cards={accountCards}
-          addLabel="对标账号"
+          addLabel="优质作者"
           onAdd={() => setShowAddAccount(true)}
           loading={loadingAcc}
         />
       </div>
 
       <CardSection
-        title="临时任务 · 分享链接作品"
+        title="基于优质作品二创"
         icon={Link2}
         dataCount={jobs.length}
         cards={jobCards}
-        addLabel="临时作品"
+        addLabel="优质作品"
         onAdd={() => setShowAddTemp(true)}
         loading={loadingJobs}
       />
@@ -286,16 +312,16 @@ export function HomePage() {
   );
 }
 
-// —— 新增对标账号弹窗：粘贴主页分享链接/口令 → 后台解析 sec_uid → 确认添加 ——
-// 待加入列表的一条：loading 占位 或 解析完成的账号档案 + 选择的更新频率（小时）
+// —— 关注优质作者弹窗：粘贴主页分享链接/口令 → 后台解析 sec_uid → 确认添加 ——
+// 待加入列表的一条：loading 占位 或 解析完成的账号档案 + 选择的领域 profile。
+// 更新频率不再逐账号选，统一吃后端全局默认（3h）。
 interface StagedAccount {
   id: string;
   status: 'loading' | 'done';
   profile?: AccountResolveResult;
-  interval: number;
+  domain: DomainKey;
 }
 
-const FREQ_OPTIONS = [1, 3, 12, 24];
 const MAX_STAGED = 5; // 一次最多添加 5 个账号
 
 // 必须包含有效 URL 才触发解析：http(s) 链接，或 (www.)?douyin|tiktok.com/ 路径。
@@ -322,7 +348,7 @@ function AddAccountModal({
 
   async function startResolve(raw: string) {
     if (staged.length >= MAX_STAGED) {
-      setErr(`一次最多添加 ${MAX_STAGED} 个账号，请先「添加监控」或移除部分`);
+      setErr(`一次最多添加 ${MAX_STAGED} 个账号，请先「添加关注」或移除部分`);
       return;
     }
     const id = String(++idRef.current);
@@ -330,12 +356,12 @@ function AddAccountModal({
     setErr(null);
     // 立即在列表顶部插入一行 loading（最新在最上面）；updater 内再兜一道硬上限防并发越界。
     // 若被上限挡掉，该 id 不入列，后续完成时按 id 的 map/filter 自然 no-op。
-    setStaged((prev) => (prev.length >= MAX_STAGED ? prev : [{ id, status: 'loading', interval: 3 }, ...prev]));
+    setStaged((prev) => (prev.length >= MAX_STAGED ? prev : [{ id, status: 'loading', domain: DEFAULT_DOMAIN }, ...prev]));
     try {
       const r = await api.resolveAccount(raw);
       if (existing.some((a) => a.sec_uid === r.sec_uid)) {
         setStaged((prev) => prev.filter((s) => s.id !== id));
-        setErr(`「${r.nickname || r.sec_uid.slice(-6)}」已在监控列表`);
+        setErr(`「${r.nickname || r.sec_uid.slice(-6)}」已在关注列表`);
         return;
       }
       setStaged((prev) => {
@@ -361,8 +387,8 @@ function AddAccountModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
 
-  function setFreq(id: string, v: number) {
-    setStaged((prev) => prev.map((s) => (s.id === id ? { ...s, interval: v } : s)));
+  function setDomain(id: string, v: DomainKey) {
+    setStaged((prev) => prev.map((s) => (s.id === id ? { ...s, domain: v } : s)));
   }
   function removeStaged(id: string) {
     setStaged((prev) => prev.filter((s) => s.id !== id));
@@ -387,7 +413,7 @@ function AddAccountModal({
             note: p.nickname || null,
             enabled: true,
             platform: p.platform,
-            interval_hours: s.interval,
+            domain: s.domain, // 领域 profile；更新频率不下发，吃后端全局默认 3h
             // 展示快照：卡片直接用 + 下次 resolve 命中复用
             nickname: p.nickname || null,
             avatar: p.avatar || null,
@@ -399,26 +425,28 @@ function AddAccountModal({
           };
         });
       await api.putSubscriptions({ ...cfg, authors: [...cfg.authors, ...toAdd] });
+      // 新增对标账号后立即触发一轮采集做首次初始化（不等下个周期）；
+      // fire-and-forget 不阻塞关窗。已在库的被后端节流/works_repo 缓存挡掉，不会重采。
+      if (toAdd.length > 0) void api.triggerTick();
       onAdded();
     } catch (e: unknown) {
       console.error('[AddAccountModal] putSubscriptions 失败', e);
       setErr('添加失败，请稍后再试');
-      showToast('添加监控账号失败');
+      showToast('关注作者失败');
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Modal title="新增监控对标账号" onClose={onClose}>
+    <Modal title="关注优质作者" onClose={onClose}>
       <div className="modal-form">
         <label className="modal-field">
-          <span className="modal-label">对标账号主页地址</span>
           <textarea
             className="modal-input"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="请输入对标账号主页地址"
+            placeholder="可粘贴抖音或TK的优质创作者首页链接来完成自动解析"
             rows={2}
             spellCheck={false}
             autoFocus
@@ -468,13 +496,22 @@ function AddAccountModal({
                   <span><b>{formatCount(p.like_count)}</b><i>获赞</i></span>
                   <span><b>{formatCount(p.works_count)}</b><i>作品</i></span>
                 </div>
+                {/* 领域单选：与数据/删除同行；选中的 profile 决定后续选题/撰稿提示词（占位待填） */}
+                <div className="resolved-domains" role="radiogroup" aria-label="领域">
+                  {DOMAINS.map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      role="radio"
+                      aria-checked={s.domain === d.key}
+                      className={`domain-pill ${d.colorClass}${s.domain === d.key ? ' is-on' : ''}`}
+                      onClick={() => setDomain(s.id, d.key)}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="resolved-controls">
-                  <Select
-                    ariaLabel="更新频率"
-                    value={s.interval}
-                    options={FREQ_OPTIONS.map((h) => ({ value: h, label: `${h}h` }))}
-                    onChange={(v) => setFreq(s.id, v)}
-                  />
                   <button
                     className="btn sm icon-only ghost"
                     title="从列表移除"
@@ -493,7 +530,7 @@ function AddAccountModal({
           <button className="btn ghost sm" onClick={onClose} disabled={busy}>关闭</button>
           <button className="btn primary sm" onClick={doAddAll} disabled={busy || ready.length === 0}>
             {busy ? <Loader2 size={13} strokeWidth={2} className="spin" /> : <Radar size={13} strokeWidth={1.8} />}
-            {busy ? '添加中…' : `添加监控${ready.length ? ` (${ready.length})` : ''}`}
+            {busy ? '添加中…' : `添加关注${ready.length ? ` (${ready.length})` : ''}`}
           </button>
         </div>
       </div>
@@ -596,6 +633,7 @@ function AddTempTaskModal({
           note: a.nickname || null,
           enabled: true,
           platform: a.platform || 'douyin',
+          domain: DEFAULT_DOMAIN, // 「关注ta」无领域选择 UI，先给默认 profile，保证每个订阅作者都有领域
           nickname: a.nickname || null,
           avatar: a.avatar || null,
           unique_id: a.unique_id || null,
@@ -603,6 +641,7 @@ function AddTempTaskModal({
       }
       if (toAdd.length === 0) return; // 全部已在对标列表，忽略
       await api.putSubscriptions({ ...cfg, authors: [...cfg.authors, ...toAdd] });
+      void api.triggerTick(); // 「关注ta」新加的账号也立即初始化采集（同 doAddAll，已在库的被节流跳过）
     } catch (e: unknown) {
       console.error('[AddTempTaskModal] 关注作者失败', e); // 静默，不打扰用户
     }
@@ -618,7 +657,7 @@ function AddTempTaskModal({
         const w = s.work!;
         return { url: w.share_url, title: w.title, author: w.author.nickname, tags: w.hashtags };
       });
-      const firstTitle = ready[0].work!.title?.trim().slice(0, 24);
+      const firstTitle = ready[0].work!.title?.trim().slice(0, 60);
       const state = await api.createJob({
         pipeline_id: 'paper_card_talk_015',
         title:

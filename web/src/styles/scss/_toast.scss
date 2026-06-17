@@ -78,11 +78,12 @@
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  margin: var(--s-5) 0 0;
+  /* 左缩进 --s-6：与下方 .section-title 的左 padding 对齐，红色左边框落在 section 图标的左缘上 */
+  margin: var(--s-5) 0 0 var(--s-6);
   padding: var(--s-3) var(--s-4);
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: var(--r-3);
+  border-radius: 0; /* 直角标签 */
   box-shadow: inset 3px 0 0 var(--status-failed);
   font-family: var(--font-sans);
   font-size: var(--text-sm);

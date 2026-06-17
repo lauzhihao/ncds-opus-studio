@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "studio",
+      "runtimeExecutable": "./scripts/dev_up.sh",
+      "runtimeArgs": ["status"],
+      "port": 8810
+    },
+    {
+      "name": "web-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "web", "run", "dev", "--", "--port", "5199", "--host", "0.0.0.0"],
+      "port": 5199
+    }
+  ]
+}

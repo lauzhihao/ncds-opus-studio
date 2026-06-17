@@ -45,6 +45,77 @@ def test_fetch_user_posts_paging(monkeypatch):
     assert out[2]["digg"] == 30
 
 
+def test_fetch_user_posts_ignores_flaky_has_more(monkeypatch):
+    # 抖音回归:page1 谎报 has_more=False(cursor 仍在前进),不该就此停,要翻到空页/cursor 归 0 为止。
+    pages = [
+        ([{"aweme_id": "1", "statistics": {}}, {"aweme_id": "2", "statistics": {}}], 100, False),  # 假 has_more=False
+        ([{"aweme_id": "3", "statistics": {}}, {"aweme_id": "4", "statistics": {}}], 200, True),
+        ([], 0, False),  # 真到底:空页
+    ]
+    calls = {"n": 0}
+
+    def fake_page(sec, cursor, count, token):
+        p = pages[calls["n"]]
+        calls["n"] += 1
+        return p
+
+    monkeypatch.setattr(tikhub_client, "get_token", lambda t=None: "tok")
+    monkeypatch.setattr(tikhub_client, "fetch_user_posts_page", fake_page)
+    monkeypatch.setattr(tikhub_client.time, "sleep", lambda *_: None)
+
+    out = tikhub_client.fetch_user_posts("sec", max_items=10)
+    assert [p["aweme_id"] for p in out] == ["1", "2", "3", "4"]  # 没被假 has_more 截断
+
+
+def test_merge_all_posts_never_shrinks(tmp_path):
+    # 回归:短趟(只 2 条)不该把已存的 5 条覆盖丢 —— 只增不减,fresh 覆盖重叠项 stats,create 倒序。
+    p = tmp_path / "all_posts.json"
+    existing = [{"aweme_id": str(i), "create": i, "digg": i} for i in range(1, 6)]  # 5 条
+    p.write_text(json.dumps(existing), encoding="utf-8")
+    fresh = [{"aweme_id": "3", "create": 3, "digg": 999}, {"aweme_id": "6", "create": 6, "digg": 6}]
+    merged = shenkuo._merge_all_posts(p, fresh)
+    assert {m["aweme_id"] for m in merged} == {"1", "2", "3", "4", "5", "6"}  # 5 旧 + 1 新,没丢
+    assert next(m["digg"] for m in merged if m["aweme_id"] == "3") == 999  # 重叠项取 fresh 新 stats
+    assert merged[0]["aweme_id"] == "6"  # create 倒序,最新在前
+
+
+def test_fetch_posts_multipass_unions_flaky_passes(monkeypatch):
+    # 抖音单趟欠收:pass1 回 2 条,pass2 回 4 条,pass3 无新增 -> 并集 4 条、第 3 趟后停。
+    seq = [
+        [{"aweme_id": "1"}, {"aweme_id": "2"}],
+        [{"aweme_id": "1"}, {"aweme_id": "2"}, {"aweme_id": "3"}, {"aweme_id": "4"}],
+        [{"aweme_id": "1"}, {"aweme_id": "2"}, {"aweme_id": "3"}, {"aweme_id": "4"}],
+    ]
+    calls = {"n": 0}
+
+    def fake(author, max_items, on_progress=None):
+        r = seq[min(calls["n"], len(seq) - 1)]
+        calls["n"] += 1
+        return r
+
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_user_posts", fake)
+    out = shenkuo._fetch_posts_multipass("sec", 200, shenkuo._noop)
+    assert {p["aweme_id"] for p in out} == {"1", "2", "3", "4"}
+    assert calls["n"] == 3  # 第 3 趟跑了、发现 0 新增才停
+
+
+def test_fetch_posts_multipass_tolerates_exception(monkeypatch):
+    # 某趟抛异常(如 ReadTimeout)只丢该趟、用已得的,不让整次采集失败。
+    seq = [[{"aweme_id": "1"}, {"aweme_id": "2"}], "boom", [{"aweme_id": "2"}, {"aweme_id": "3"}]]
+    calls = {"n": 0}
+
+    def fake(author, max_items, on_progress=None):
+        item = seq[calls["n"]]
+        calls["n"] += 1
+        if item == "boom":
+            raise RuntimeError("ReadTimeout simulated")
+        return item
+
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_user_posts", fake)
+    out = shenkuo._fetch_posts_multipass("sec", 200, shenkuo._noop)
+    assert {p["aweme_id"] for p in out} == {"1", "2", "3"}  # 异常趟跳过,前后并集
+
+
 # --------------------------------------------------------------------------- #
 # shenkuo helpers
 # --------------------------------------------------------------------------- #

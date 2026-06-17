@@ -30,6 +30,7 @@ import {
 
 import type { GuiguziItem, NodeState, PipelineNodeDef, ShenkuoComment, ShenkuoEntry } from '../../api/types';
 import { GUIGUZI_MAX_ITEMS, guiguziItemsStorageKey } from '../../config/agents';
+import { parseTitleTags } from '../../utils/title';
 import { DurationBadge } from '../WorkCards';
 
 // 沈括「备选题评论」选择态：选中的高赞评论（连同所属作品提取文案）存 localStorage（按 jobId），
@@ -104,12 +105,9 @@ function shenkuoCount(n: number): string {
   return String(n);
 }
 
-// 标题：剥掉 desc 内嵌的 #话题（下面有专门 chips，不重复）。
+// 标题：剥掉 desc 内嵌的 #话题（下面有专门 chips，不重复）。复用统一的标题解析工具。
 function cleanTitle(e: ShenkuoEntry): string {
-  let t = e.desc || '';
-  for (const tag of e.hashtags ?? []) t = t.replaceAll(`#${tag}`, '');
-  const cleaned = t.split(/\s+/).filter(Boolean).join(' ').trim();
-  return cleaned || e.desc || e.aweme_id || '?';
+  return parseTitleTags(e.desc, e.hashtags).title || e.aweme_id || '?';
 }
 
 export function ShenkuoCollectPanel({ jobId, nodeState, onAdvanced }: Props) {
@@ -231,7 +229,7 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
             {hashtags.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
                 {hashtags.map((t) => (
-                  <span key={t} style={tagStyle}>#{t}</span>
+                  <span key={t} className="title-tag">#{t}</span>
                 ))}
               </div>
             )}
@@ -657,18 +655,6 @@ const cardStyle: CSSProperties = {
   border: '1px solid var(--line, rgba(0,0,0,0.08))',
   borderRadius: 10,
   marginBottom: 'var(--s-3)',
-};
-
-const tagStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 2,
-  fontSize: 'var(--text-2xs)',
-  fontFamily: 'var(--font-mono)',
-  color: 'var(--accent)',
-  background: 'var(--accent-tint)',
-  padding: '1px 6px',
-  borderRadius: 'var(--r-pill)',
 };
 
 const linkBtnStyle: CSSProperties = {

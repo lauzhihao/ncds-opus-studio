@@ -18,7 +18,7 @@ import ReactFlow, {
   type NodeMouseHandler,
   type ReactFlowInstance,
 } from 'reactflow';
-import { ArrowLeft, Crown, Hash, Loader2 } from 'lucide-react';
+import { ArrowLeft, Crown, Loader2 } from 'lucide-react';
 
 import { api } from '../api/client';
 import { useToast } from '../components/Toast';
@@ -29,6 +29,7 @@ import { AgentDrawer } from '../components/AgentDrawer';
 import { PulseEdge } from '../components/PulseEdge';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { AGENTS, agentIndex, agentProgressText, agentStatus, type AgentId } from '../config/agents';
+import { parseTitleTags } from '../utils/title';
 
 const NODE_TYPES = { card: AgentCard };
 const EDGE_TYPES = { pulse: PulseEdge };
@@ -213,12 +214,6 @@ export function JobCanvasPage() {
         </button>
         <div className="brand">
           <EditableMark jobId={jobId} value={job?.title ?? `作品 ${jobId.slice(0, 6)}`} />
-          <span className="sub mono">
-            {pipeline?.id}
-            <span style={{ margin: '0 6px', opacity: 0.5 }}>·</span>
-            <Hash size={10} strokeWidth={1.6} style={{ verticalAlign: '-1px', marginRight: 2 }} />
-            {jobId.slice(0, 8)}
-          </span>
         </div>
         <div className="spacer" />
         <span className={`status-pill ${connected ? 'live' : ''}`}>
@@ -353,17 +348,29 @@ function EditableMark({ jobId, value }: { jobId: string; value: string }) {
   }
 
   if (!editing) {
+    // 显示态拆「正文 + 话题 chips」；编辑态仍编辑完整原文（含 #），数据层不变。
+    // 顶栏右侧空白充足，话题标签全部显示、不折叠。
+    const { title, tags } = parseTitleTags(value);
     return (
-      <span
-        className="mark editable"
-        title="点击修改作品名"
-        onClick={() => {
-          setDraft(value);
-          setEditing(true);
-        }}
-      >
-        {value}
-      </span>
+      <>
+        <span
+          className="mark editable"
+          title="点击修改作品名"
+          onClick={() => {
+            setDraft(value);
+            setEditing(true);
+          }}
+        >
+          {title || value}
+        </span>
+        {tags.length > 0 && (
+          <span className="title-tags">
+            {tags.map((t) => (
+              <span key={t} className="title-tag">#{t}</span>
+            ))}
+          </span>
+        )}
+      </>
     );
   }
   return (

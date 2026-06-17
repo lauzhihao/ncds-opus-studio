@@ -9,8 +9,9 @@ import { api } from '../api/client';
 import type { AccountPost, SubscriptionAuthor } from '../api/types';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useToast } from '../components/Toast';
-import { CoverImage, DurationBadge } from '../components/WorkCards';
-import { formatCount, timeAgo } from '../utils/format';
+import { CoverImage } from '../components/WorkCards';
+import { formatCount, formatDuration, timeAgo } from '../utils/format';
+import { parseTitleTags } from '../utils/title';
 
 export function AccountWorksPage() {
   const { secUid } = useParams<{ secUid: string }>();
@@ -46,7 +47,7 @@ export function AccountWorksPage() {
     try {
       const state = await api.createJob({
         pipeline_id: 'paper_card_talk_015',
-        title: post.desc ? post.desc.slice(0, 24) : `衍生作品 ${post.aweme_id.slice(-6)}`,
+        title: post.desc ? post.desc.slice(0, 60) : `衍生作品 ${post.aweme_id.slice(-6)}`,
         inputs: {},
       });
       // seed 源链接到 input 节点 outputs（沈括 InputPanel 从 outputs.shares 还原）
@@ -173,6 +174,8 @@ export function AccountWorksPage() {
 
 function PostCard({ post, creating, onDerive }: { post: AccountPost; creating: boolean; onDerive: () => void }) {
   const marker = post.aweme_id.slice(-2).toUpperCase();
+  // 「标题 + 话题标签」：AccountPost 无结构化 hashtags，话题从 desc 正则提取
+  const { title, tags } = parseTitleTags(post.desc);
   return (
     <article className="tpl-card" onClick={onDerive}>
       <div className="cover">
@@ -185,17 +188,26 @@ function PostCard({ post, creating, onDerive }: { post: AccountPost; creating: b
           </div>
         )}
         {post.collected && <span className="run-pill" style={{ background: 'var(--accent)' }}>已采集</span>}
-        <DurationBadge seconds={post.duration} />
       </div>
       <div className="body">
-        <div className="name" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-          {post.desc || `作品 ${post.aweme_id.slice(-6)}`}
-        </div>
+        <div className="name">{title || `作品 ${post.aweme_id.slice(-6)}`}</div>
+        {tags.length > 0 && (
+          <div className="name-tags">
+            {tags.map((t) => (
+              <span key={t} className="title-tag">#{t}</span>
+            ))}
+          </div>
+        )}
         <div className="post-stats">
           <span><Heart size={12} strokeWidth={1.7} />{formatCount(post.digg)}</span>
           <span><MessageCircle size={12} strokeWidth={1.7} />{formatCount(post.comment)}</span>
           <span><Share2 size={12} strokeWidth={1.7} />{formatCount(post.share)}</span>
           <span><Star size={12} strokeWidth={1.7} />{formatCount(post.collect)}</span>
+          {post.duration > 0 && (
+            <span style={{ marginLeft: 'auto' }}>
+              <Clock size={12} strokeWidth={1.7} />{formatDuration(post.duration)}
+            </span>
+          )}
         </div>
         <div className="footer">
           <button

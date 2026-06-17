@@ -32,6 +32,8 @@ class SubscriptionAuthor(BaseModel):
     enabled: bool = True
     # 平台：douyin（默认，沈括可采集）/ tiktok（可监控展示，采集暂未接入）
     platform: str = "douyin"
+    # 领域 profile（finance/football/emotion，见 domain_profiles.py）；决定后续选题/撰稿提示词
+    domain: str | None = None
     # 每账号更新频率(小时)；None=用全局 interval_hours
     interval_hours: float | None = None
     # 展示快照：新增时由 /accounts/resolve 结果带入，卡片直接显示 + 复用（避免重复打 TikHub）
@@ -46,7 +48,7 @@ class SubscriptionAuthor(BaseModel):
 
 
 class SubscriptionsConfig(BaseModel):
-    interval_hours: float = Field(default=2.0, gt=0)
+    interval_hours: float = Field(default=3.0, gt=0)
     authors: list[SubscriptionAuthor] = Field(default_factory=list)
 
 

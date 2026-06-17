@@ -9,11 +9,30 @@ command 里重复 ~30 行同构代码。默认 ``claude-opus-4-8`` + ``--effort 
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 DEFAULT_OPUS_MODEL = "claude-opus-4-8"
 DEFAULT_EFFORT = "max"
+
+# launchd 托管的 nof-worker 不继承交互 shell 的 PATH(opus 实际装在 ~/.sclaude/bin/),
+# 裸调 "opus" 会 FileNotFoundError 把 agent 任务打挂。把可执行文件解析成绝对路径:
+# PATH 优先(手动起的 nof-server 能命中),回退用户家目录的 sclaude 安装位,都没有才抛清晰错误。
+_SCLAUDE_FALLBACK = Path.home() / ".sclaude" / "bin" / "opus"
+
+
+def _resolve_opus() -> str:
+    """解析 opus 可执行文件的绝对路径(PATH 优先,回退 ~/.sclaude/bin/opus)。"""
+    found = shutil.which("opus")
+    if found:
+        return found
+    if _SCLAUDE_FALLBACK.exists():
+        return str(_SCLAUDE_FALLBACK)
+    raise RuntimeError(
+        f"opus launcher not found: not on PATH and fallback {_SCLAUDE_FALLBACK} missing"
+    )
 
 
 def call_opus(
@@ -32,7 +51,7 @@ def call_opus(
     不可用 / 空输出 / claude 自报错时抛 RuntimeError（与 scodex shim 路径同样是"失败即抛"语义）。
     """
     args = [
-        "opus", "launch", "--no-resume", "--",
+        _resolve_opus(), "launch", "--no-resume", "--",
         "-p", prompt,
         "--output-format", "json",
         "--model", model,

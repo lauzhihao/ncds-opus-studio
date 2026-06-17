@@ -110,16 +110,21 @@ def simplify_aweme(aweme: dict) -> dict[str, Any]:
     }
 
 
+# 每页 count:抖音 user_posts 接口用小 count(如 20)翻页会提前 has_more=False 放弃,
+# 只放出最近 ~40 条;实测 count=50 才肯翻到底(某 181 作品号:count=20 只回 42,count=50 回 164)。
+_USER_POSTS_PAGE_SIZE = 50
+
+
 def fetch_user_posts(
     sec_user_id: str, max_items: int = 60, token: str | None = None, on_progress: ProgressFn | None = None
 ) -> list[dict[str, Any]]:
     """分页拉作者作品,返回精简条目列表(鬼谷子 all_posts.json 格式)。"""
     token = get_token(token)
     out: list[dict[str, Any]] = []
-    cursor, page = 0, 0
+    cursor, prev_cursor, page = 0, -1, 0
     seen: set[str] = set()
     while len(out) < max_items:
-        aweme_list, cursor, has_more = fetch_user_posts_page(sec_user_id, cursor, 20, token)
+        aweme_list, cursor, _has_more = fetch_user_posts_page(sec_user_id, cursor, _USER_POSTS_PAGE_SIZE, token)
         if not aweme_list:
             break
         for a in aweme_list:
@@ -130,8 +135,11 @@ def fetch_user_posts(
         page += 1
         if on_progress:
             on_progress(f"拉第 {page} 页,累计 {len(out)} 条作品")
-        if not has_more:
+        # 不信 has_more:抖音常在还有作品时就回 has_more=False(实测同账号能从 42 跳到 164),
+        # 一看就停会严重欠收。改用 cursor 推进判终止——归 0(到底/重置)或不再前进(防死循环)才停。
+        if cursor == 0 or cursor == prev_cursor:
             break
+        prev_cursor = cursor
         time.sleep(0.3)
     return out[:max_items]
 

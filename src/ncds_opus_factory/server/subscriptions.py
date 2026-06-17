@@ -33,7 +33,7 @@ from ncds_opus_factory.server.task_store import TaskStore
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_INTERVAL_HOURS = 2.0
+_DEFAULT_INTERVAL_HOURS = 3.0
 # 配置异常时的重试间隔，别让坏文件把循环打成忙等
 _ERROR_RETRY_S = 600
 
@@ -84,6 +84,11 @@ def load_subscriptions(path: Path) -> dict[str, Any]:
             "platform": platform,
             "interval_hours": interval_hours,
         }
+        # 领域 profile（finance/football/emotion，见 web config/domains.ts + domain_profiles.py）。
+        # present-only：仅有非空字符串时写入，保手编文件干净 + 老 author 不被注入 null。
+        domain = a.get("domain")
+        if isinstance(domain, str) and domain.strip():
+            author["domain"] = domain.strip()
         # 展示快照（present-only：保持手编文件干净、老 author 不被注入 null）
         for k in ("nickname", "avatar", "unique_id"):
             v = a.get(k)

@@ -48,19 +48,24 @@ def _callers(timeout_seconds: int) -> dict[str, CallerFn]:
     }
 
 
-def _normalize_items(items: Any) -> list[dict[str, str]]:
+def _normalize_items(items: Any, *, require_comment: bool = True) -> list[dict[str, str]]:
     """把入参规整成 [{"text": 提取文案, "comment": 评论}, ...],截断到 MAX_ITEMS。
 
-    容错:缺 comment 的条目丢弃;缺 text 允许(原文可空,模型只凭评论判断)。
+    默认(评论驱动):缺 comment 的条目丢弃;缺 text 允许(原文可空,模型只凭评论判断)。
+    require_comment=False(无评论「直接拆解原文」):保留有 text 无 comment 的条目,comment 置空。
     """
     out: list[dict[str, str]] = []
     for it in items or []:
         if not isinstance(it, dict):
             continue
         comment = str(it.get("comment") or "").strip()
-        if not comment:
+        text = str(it.get("text") or "").strip()
+        if comment:
+            out.append({"text": text, "comment": comment})
+        elif not require_comment and text:
+            out.append({"text": text, "comment": ""})
+        else:
             continue
-        out.append({"text": str(it.get("text") or "").strip(), "comment": comment})
         if len(out) >= MAX_ITEMS:
             break
     return out
@@ -105,6 +110,7 @@ def _source_blocks(items: list[dict[str, str]]) -> tuple[str, str]:
     comment_lines = "\n".join(
         f"{j}. (对应原文{text_idx[it['text']] + 1}) {it['comment']}"
         for j, it in enumerate(items, 1)
+        if it["comment"]  # 无评论「直接拆解」时跳过,comment_lines 收成空串
     )
     return blocks, comment_lines
 
@@ -138,25 +144,39 @@ def _works_noun(items: list[dict[str, str]]) -> str:
 
 def _build_analyze_prompt(items: list[dict[str, str]]) -> str:
     blocks, comment_lines = _source_blocks(items)
+    has_comments = bool(comment_lines.strip())  # 无评论「直接拆解」时只凭原文
     single = len({it["text"] for it in items}) <= 1
     works = _works_noun(items)
-    intro = (
-        "下面是一部对标作品的提取文案,以及它的高赞评论。"
-        if single else
-        "下面是若干对标作品的提取文案,以及它们的高赞评论。"
-    )
+    if has_comments:
+        intro = (
+            "下面是一部对标作品的提取文案,以及它的高赞评论。"
+            if single else
+            "下面是若干对标作品的提取文案,以及它们的高赞评论。"
+        )
+        signal = "高赞评论是观众的真实反应,暴露了作品到底戳中了什么。\n"
+        task = f"任务:**反推{works}为什么成为爆款**——不要套任何固定赛道或公式,完全从原文和评论里看它为什么火。\n\n"
+        source_tail = blocks + "\n\n【高赞评论】\n" + comment_lines
+    else:
+        intro = (
+            "下面是一部对标作品的提取文案。"
+            if single else
+            "下面是若干对标作品的提取文案。"
+        )
+        signal = ""
+        task = f"任务:**反推{works}为什么成为爆款**——不要套任何固定赛道或公式,完全从原文里看它为什么火。\n\n"
+        source_tail = blocks
     return (
         f"你是抖音爆款拆解专家。{intro}\n"
         f"(这里「爆款」指{BAOKUAN_DEF}。)\n"
-        "高赞评论是观众的真实反应,暴露了作品到底戳中了什么。\n"
-        f"任务:**反推{works}为什么成为爆款**——不要套任何固定赛道或公式,完全从原文和评论里看它为什么火。\n\n"
-        "输出严格的 JSON 对象,字段固定:\n"
+        + signal
+        + task
+        + "输出严格的 JSON 对象,字段固定:\n"
         '{"hook_reason":"爆款原因:核心吸引力/为什么火(2-3句,具体到内容,不要空话)",'
         '"audience":"目标受众:谁在看、被戳中的是谁(1句)",'
         '"hooks":["可复制钩子:能照搬到新作品的具体套路/结构/表达,3-5条,每条一句"],'
         '"direction":"衍生选题建议方向:基于以上,新作品该往哪个方向做(1-2句)"}\n'
         "只输出 JSON 对象,不要解释、不要 markdown 代码块。\n\n"
-        + blocks + "\n\n【高赞评论】\n" + comment_lines
+        + source_tail
     )
 
 
@@ -175,12 +195,17 @@ def analyze(
     items: list[dict[str, str]] | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     on_progress: ProgressFn = _noop,
+    *,
+    require_comment: bool = True,
 ) -> dict[str, dict[str, Any]]:
-    """第一步:双模型并行反推爆款原因。返回 {opus:{analysis,error}, deepseek:{analysis,error}}。"""
-    norm = _normalize_items(items)
+    """第一步:双模型并行反推爆款原因。返回 {opus:{analysis,error}, deepseek:{analysis,error}}。
+
+    require_comment=False:无评论「直接拆解」,仅凭原文(items 为 [{text, comment:''}, ...])。
+    """
+    norm = _normalize_items(items, require_comment=require_comment)
     if not norm:
-        raise ValueError("guiguzi.analyze: items 为空,需要 [{text, comment}, ...]")
-    on_progress(f"鬼谷子: {len(norm)} 条评论 -> opus/deepseek 双模型并行分析爆款原因...")
+        raise ValueError("guiguzi.analyze: items 为空,需要原文或带评论的 [{text, comment}, ...]")
+    on_progress(f"鬼谷子: {len(norm)} 条素材 -> opus/deepseek 双模型并行分析爆款原因...")
     callers = _callers(timeout_seconds)
     out: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=len(callers)) as ex:
@@ -209,28 +234,50 @@ def _format_analysis(analysis: dict[str, Any] | None) -> str:
 
 SOURCE_PLACEHOLDER = "$source"  # 选题模板里「原文」的占位符:展示给用户时不输出原文,执行时再替换
 
+# 无评论「直接拆解」出选题时,没有评论数当锚点,改为自由产出固定条数。
+NO_COMMENT_TOPIC_COUNT = 5
+
 
 def _build_topic_prompt_template(items: list[dict[str, str]], analysis: dict[str, Any] | None) -> str:
     """拼凑选题提示词模板:分析 + 任务 + JSON schema + $source(原文占位) + 编号评论。
 
     后端不再硬编码完整 prompt——模板拼好后展示给用户编辑;原文用 $source 占位(不输出原文,
     它可能作为参考输入),执行时 _render_topic_prompt 把 $source 换成真实原文块。
+
+    两套任务:有评论 → 逐条锚定评论出题;无评论(直接拆解) → 仅凭原文 + 分析自由出 N 个选题。
     """
     _, comment_lines = _source_blocks(items)
-    n = len(items)
+    has_comments = bool(comment_lines.strip())
     works = _works_noun(items)
+    if has_comments:
+        n = len(items)
+        return (
+            f"你是抖音选题官。下面给出对标作品的提取文案、高赞评论,以及对{works}为什么成为爆款({BAOKUAN_DEF})的分析。\n"
+            "请严格以【爆款原因分析】为指导(受众/钩子/方向都来自它),不要自己另设赛道、不要套固定公式。\n"
+            "任务:针对【每一条评论】,结合原文与分析,产出一个可直接做的全新选题。\n"
+            f"必须产出恰好 {n} 个选题,第 i 个选题锚定第 i 条评论(原文+分析作背景),不要合并、不要漏。\n\n"
+            "【爆款原因分析】\n" + _format_analysis(analysis) + "\n\n"
+            "输出严格的 JSON 数组,长度 " + str(n) + ",每项字段固定:\n"
+            '{"index":<对应评论编号 1..' + str(n) + '>,"title":"新选题(一句话,带钩子感,像爆款标题)",'
+            '"angle":"切入角度(一句话,这题从哪个口子讲)",'
+            '"why":"为什么可能爆(1句,贴合上面分析的钩子/受众)","potential":7}\n'
+            "potential 是 1-10 的爆款潜力分。只输出 JSON 数组,不要解释、不要 markdown 代码块。\n\n"
+            "【对标原文】\n" + SOURCE_PLACEHOLDER + "\n\n【高赞评论】\n" + comment_lines
+        )
+    # 无评论:不锚定评论(评论可能误导选题),仅凭原文 + 分析自由出固定条数,角度各异。
+    n = NO_COMMENT_TOPIC_COUNT
     return (
-        f"你是抖音选题官。下面给出对标作品的提取文案、高赞评论,以及对{works}为什么成为爆款({BAOKUAN_DEF})的分析。\n"
+        f"你是抖音选题官。下面给出对标作品的提取文案,以及对{works}为什么成为爆款({BAOKUAN_DEF})的分析。\n"
         "请严格以【爆款原因分析】为指导(受众/钩子/方向都来自它),不要自己另设赛道、不要套固定公式。\n"
-        "任务:针对【每一条评论】,结合原文与分析,产出一个可直接做的全新选题。\n"
-        f"必须产出恰好 {n} 个选题,第 i 个选题锚定第 i 条评论(原文+分析作背景),不要合并、不要漏。\n\n"
+        f"任务:结合原文与分析,产出 {n} 个角度各异的全新选题,覆盖分析里不同的钩子/方向,不要互相重复。\n"
+        f"必须产出恰好 {n} 个选题。\n\n"
         "【爆款原因分析】\n" + _format_analysis(analysis) + "\n\n"
         "输出严格的 JSON 数组,长度 " + str(n) + ",每项字段固定:\n"
-        '{"index":<对应评论编号 1..' + str(n) + '>,"title":"新选题(一句话,带钩子感,像爆款标题)",'
+        '{"index":<1..' + str(n) + '>,"title":"新选题(一句话,带钩子感,像爆款标题)",'
         '"angle":"切入角度(一句话,这题从哪个口子讲)",'
         '"why":"为什么可能爆(1句,贴合上面分析的钩子/受众)","potential":7}\n'
         "potential 是 1-10 的爆款潜力分。只输出 JSON 数组,不要解释、不要 markdown 代码块。\n\n"
-        "【对标原文】\n" + SOURCE_PLACEHOLDER + "\n\n【高赞评论】\n" + comment_lines
+        "【对标原文】\n" + SOURCE_PLACEHOLDER
     )
 
 
@@ -242,12 +289,35 @@ def _render_topic_prompt(template: str, items: list[dict[str, str]]) -> str:
 
 def _gen_for_model(
     model: str, caller: CallerFn, items: list[dict[str, str]],
-    prompt: str, on_progress: ProgressFn,
+    prompt: str, on_progress: ProgressFn, *, n_topics: int | None = None,
 ) -> list[dict[str, Any]]:
-    """单模型出题:用给定 prompt 产 N 个选题,按 index/位置对齐回评论,补 anchor_comment + source_model。"""
+    """单模型出题:用给定 prompt 产 N 个选题,补 source_model。
+
+    有评论:按 index/位置对齐回评论,补 anchor_comment。
+    无评论(n_topics 指定):不锚定评论,顺序收至多 n_topics 个,anchor_comment 留空。
+    """
     on_progress(f"鬼谷子: {model} 出题中...")
     raw = caller(prompt)
     parsed = _parse_arr(raw)
+    has_comments = any(it["comment"] for it in items)
+    if not has_comments:
+        limit = n_topics or NO_COMMENT_TOPIC_COUNT
+        out_free: list[dict[str, Any]] = []
+        for t in parsed:
+            if not isinstance(t, dict) or not str(t.get("title") or "").strip():
+                continue
+            out_free.append({
+                "title": str(t.get("title")).strip(),
+                "angle": str(t.get("angle") or "").strip(),
+                "why": str(t.get("why") or "").strip(),
+                "potential": t.get("potential", 5),
+                "anchor_comment": "",  # 无评论:不锚定
+                "source_model": model,
+            })
+            if len(out_free) >= limit:
+                break
+        on_progress(f"鬼谷子: {model} 产出 {len(out_free)} 个选题")
+        return out_free
     # 按 index 对齐(模型可能乱序/缺漏);拿不到 index 的退化为按出现顺序填空位
     by_index: dict[int, dict[str, Any]] = {}
     leftover: list[dict[str, Any]] = []
@@ -282,24 +352,31 @@ def generate_topics(
     prompt: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     on_progress: ProgressFn = _noop,
+    *,
+    require_comment: bool = True,
 ) -> dict[str, Any]:
-    """第二步:双模型并行逐条锚定出选题。merge topic_store。
+    """第二步:双模型并行出选题。merge topic_store。
 
     prompt 传入(用户编辑后的提示词模板,含 $source 占位)则用它;否则按 analysis 拼默认模板。
     两个模型用同一份(替换 $source 后的)prompt。返回里带 prompt(模板,含 $source)供前端回显/再编辑。
     返回 {candidates, topics(扁平), out, added, prompt}(向后兼容卧龙/artifacts)。
+
+    require_comment=False:无评论「直接拆解」,仅凭原文+分析自由出固定条数(不逐条锚定评论)。
     """
-    norm = _normalize_items(items)
+    norm = _normalize_items(items, require_comment=require_comment)
     if not norm:
-        raise ValueError("guiguzi.generate_topics: items 为空,需要 [{text, comment}, ...]")
-    n = len(norm)
+        raise ValueError("guiguzi.generate_topics: items 为空,需要原文或带评论的 [{text, comment}, ...]")
+    has_comments = any(it["comment"] for it in norm)
+    n = len(norm) if has_comments else NO_COMMENT_TOPIC_COUNT
     template = prompt if (prompt and prompt.strip()) else _build_topic_prompt_template(norm, analysis)
     exec_prompt = _render_topic_prompt(template, norm)
-    on_progress(f"鬼谷子: {n} 条评论 -> opus/deepseek 双模型并行,各出 {n} 个选题...")
+    label = f"{len(norm)} 条评论" if has_comments else f"{len(norm)} 篇原文(无评论)"
+    on_progress(f"鬼谷子: {label} -> opus/deepseek 双模型并行,各出 {n} 个选题...")
     callers = _callers(timeout_seconds)
     candidates: dict[str, dict[str, Any]] = {}
+    n_topics = None if has_comments else n
     with ThreadPoolExecutor(max_workers=len(callers)) as ex:
-        futs = {m: ex.submit(_gen_for_model, m, fn, norm, exec_prompt, on_progress)
+        futs = {m: ex.submit(_gen_for_model, m, fn, norm, exec_prompt, on_progress, n_topics=n_topics)
                 for m, fn in callers.items()}
         for m, fut in futs.items():
             try:

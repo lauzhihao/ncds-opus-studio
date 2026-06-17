@@ -29,9 +29,10 @@
   font-family: var(--font-display);
   font-style: italic;
   font-weight: 600;
-  font-size: var(--text-xl);
+  font-size: var(--text-lg);
   color: var(--ink-1);
   letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 .topbar .brand .mark.editable {
   cursor: text;
@@ -51,7 +52,7 @@
   font-family: var(--font-display);
   font-style: italic;
   font-weight: 600;
-  font-size: var(--text-xl);
+  font-size: var(--text-lg);
   color: var(--ink-1);
   letter-spacing: -0.02em;
   min-width: 220px;
@@ -68,6 +69,37 @@
   color: var(--ink-2);
 }
 .topbar .spacer { flex: 1; }
+
+/* 共享：话题标签 chip —— 沈括详情 / 作品卡 / 画布顶栏统一「作品 + 话题标签」呈现 */
+.title-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: var(--accent-tint);
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+}
+.title-tag.more { color: var(--ink-3); background: var(--bg-overlay); }
+
+/* 画布顶栏：标题正文之后跟话题 chips，全部显示不折叠（顶栏右侧空白充足） */
+.topbar .brand .title-tags {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* 作品卡：标题下方话题 chips，自动换行不限数量 */
+.tpl-card .body .name-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
 
 /* ============================================================
    Templates page
@@ -185,6 +217,8 @@
 
 .tpl-card {
   position: relative;
+  display: flex;
+  flex-direction: column;               /* 纵向撑满:封面 + body(flex:1) → footer 贴卡片底 */
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--r-4);
@@ -204,6 +238,7 @@
 .tpl-card .cover {
   position: relative;
   height: 168px;
+  flex-shrink: 0;                       /* 封面固定 168px,不被 flex 压缩 */
   background: var(--bg-surface-2);
   border-bottom: 1px solid var(--border);
   overflow: hidden;
@@ -278,14 +313,25 @@
 }
 .tpl-card .body {
   padding: var(--s-4);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--s-2);
+  flex: 1;                              /* 填满封面以下的剩余高度,使 footer 能 margin-top:auto 贴底 */
+  min-height: 0;                        /* 允许内容区收缩,超出由各自 clamp/overflow 省略,不挤 footer */
 }
-.tpl-card .body .name {
+/* 只作用作品卡标题(body 直接子)；账号卡的 .name 嵌在 .account-ident 里,用 > 排除,避免被三行固定挤乱 */
+.tpl-card .body > .name {
   font-family: var(--font-display);
   font-weight: 600;
   font-size: var(--text-lg);
   letter-spacing: -0.01em;
+  line-height: 1.4;
+  /* 固定 3 行高度:超出 … 截断,不足留空占位,使各卡片分割线水平对齐 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: calc(1.4em * 3);
 }
 .tpl-card .body .desc {
   font-size: var(--text-sm);
@@ -302,8 +348,13 @@
   gap: var(--s-3);
   padding-top: var(--s-3);
   border-top: 1px solid var(--border);
-  margin-top: var(--s-2);
+  margin-top: auto;                     /* 钉在卡片底部:无论上方标题/标签几行,分割线与按钮位置一致 */
+  flex-shrink: 0;                       /* footer 不被压缩 */
 }
+/* 播放数据(PostCard)紧贴分割线:弹性空白吸到「标签与数据之间」,数据跟分割线走、不跟标签走。
+   数据吸走空白后,紧随的 footer 不再 auto(否则二者平分空白),靠 flex gap 与数据保持间距。 */
+.tpl-card .body .post-stats { margin-top: auto; }
+.tpl-card .body .post-stats + .footer { margin-top: 0; }
 /* footer 里的 badge：原封面右上角标签移到这里（pipeline_id），静态 chip 样式 */
 .tpl-card .body .footer .badge {
   font-family: var(--font-mono);

@@ -156,7 +156,14 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
           <ShenkuoCollectPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('asr')} />
         );
       case 'guiguzi':
-        return <GuiguziPanel jobId={jobId} job={job} onConfirmed={() => advance('guiguzi')} />;
+        return (
+          <GuiguziPanel
+            jobId={jobId}
+            job={job}
+            onConfirmed={() => advance('guiguzi')}
+            onGotoShenkuo={() => onAdvanceAgent('shenkuo')}
+          />
+        );
       case 'rw':
         return (
           <LiuyongPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('rw')} />
