@@ -5,6 +5,10 @@
 /* 汉堡入口默认隐藏：仅移动端 media query 内显示，桌面端筛选仍内联在分区标题行。 */
 .topbar-filter-menu { display: none; }
 
+/* 页面级横向溢出兜底：防止任何超宽元素导致 document body 横向滚动，
+   进而让 position:fixed 的 drawer 出现视口偏移（left:0 随页面滚动偏移）。 */
+html, body { overflow-x: hidden; }
+
 @media (max-width: 768px) {
   /* —— 顶栏：收紧内边距、品牌字号略降、露出右上角汉堡入口 —— */
   .topbar {
@@ -103,8 +107,17 @@
   .account-card .account-ident { padding-right: 64px; }
 
   /* —— 鬼谷子抽屉移动端 —— */
-  .drawer.wide { width: 100%; }
-  /* drawer body 禁横向滚动：overflow:auto 默认两轴可滚，移动端强制隐藏横轴 */
+  /* 宽度 100% + 重置桌面放大字号（桌面 1.2x 在移动端反而撑宽内容导致横向溢出） */
+  .drawer.wide {
+    width: 100%;
+    --text-2xs: 10.5px;
+    --text-xs:  11.5px;
+    --text-sm:  12.5px;
+    --text-base: 13.5px;
+    --text-md:  15px;
+    --text-lg:  17px;
+  }
+  /* drawer body 禁横向滚动，防止用户滑出内容区边界 */
   .drawer .body { overflow-x: hidden; }
   /* panel-section 标题行从 inline-flex 改为块级 flex，允许长标题换行而非撑宽容器 */
   .panel-section-title { display: flex; flex-wrap: wrap; }

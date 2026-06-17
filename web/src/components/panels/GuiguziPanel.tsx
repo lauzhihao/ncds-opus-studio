@@ -75,6 +75,14 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
   // 第一步分析的可编辑副本（用户改完再 2 选 1 出选题）。
   const [edits, setEdits] = useState<{ opus?: GuiguziAnalysis; deepseek?: GuiguziAnalysis }>({});
   const [activeAnalysisTab, setActiveAnalysisTab] = useState<'opus' | 'deepseek'>('opus');
+  // 切换 tab 时新显列的 AutoTextarea 曾是 display:none，scrollHeight=0 导致高度未算。
+  // useLayoutEffect 在 DOM 更新后立即重算，确保切入时高度贴合内容。
+  useLayoutEffect(() => {
+    document.querySelectorAll<HTMLTextAreaElement>('.guiguzi-cols .gg-field-input').forEach(el => {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    });
+  }, [activeAnalysisTab]);
   // 第二步选题提示词的可编辑副本（含 $source 占位；用户改完点重新选题就用它）。
   const [promptEdit, setPromptEdit] = useState<string>('');
   const [promptSyncedAt, setPromptSyncedAt] = useState<number | undefined>(undefined);
