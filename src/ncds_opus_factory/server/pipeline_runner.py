@@ -2091,7 +2091,7 @@ class PipelineRunner:
     # 真接入：rw 节点
     # ------------------------------------------------------------
     async def _execute_rw(self, job_id: str) -> dict[str, Any]:
-        """4 模型并行改写：opus / gpt5 / gemini_local / deepseek 同时跑 paper_card_talk profile。
+        """多模型并行改写：按 MODEL_CANDIDATES（当前 opus + deepseek）同时出稿，domain 写作方法驱动。
 
         每个模型直出 {"beats":[...]} JSON；本机不可用的模型保留在 drafts 列表里但
         status='failed' + reason='模型不可用'，让前端看到 4 槽真实状态。
@@ -2137,8 +2137,8 @@ class PipelineRunner:
                 model_status[model_id]["status"] = st
             self._push_model_progress(job_id, "rw", {k: dict(v) for k, v in model_status.items()})
 
-        on_progress(f"4 模型并行启动；source={len(source_text)} 字")
-        # 先推一帧全 pending，让前端立刻看到 4 行
+        on_progress(f"{len(MODEL_CANDIDATES)} 模型并行启动；source={len(source_text)} 字")
+        # 先推一帧全 pending，让前端立刻看到每个模型一行
         self._push_model_progress(job_id, "rw", {k: dict(v) for k, v in model_status.items()})
 
         # 增量产物：每个模型完成立即写盘 + push drafts，前端不必等全部完成才能看/选。
@@ -2196,7 +2196,7 @@ class PipelineRunner:
         success_count = sum(1 for d in drafts_out if d.get("status") == "success")
         if success_count == 0:
             reasons = "; ".join(f"{d['model_id']}={d.get('reason')}" for d in drafts_out)
-            raise RuntimeError(f"4 个模型全部失败：{reasons}")
+            raise RuntimeError(f"{len(MODEL_CANDIDATES)} 个模型全部失败：{reasons}")
 
         on_progress(f"完成：{success_count}/{len(MODEL_CANDIDATES)} 成功")
 
@@ -2646,19 +2646,21 @@ def _polish_transcript_with_opus(
 
 
 # ---------------------------------------------------------------------------
-# RW 4 模型并行调度（替代旧 content_rewrite_runner.mjs 路径）
+# RW 多模型并行调度（替代旧 content_rewrite_runner.mjs 路径）
 # ---------------------------------------------------------------------------
 
-# 4 模型 candidate 表。runner 决定调用方式：
+# candidate 表。runner 决定调用方式：
 #   - opus    : `opus launch -- ...` 透传到 claude CLI（Claude Opus 4.8）
 #   - scodex  : `scodex launch -- ...` 透传到 codex CLI（GPT-5.5）
 #   - gemini  : `~/.gemini/g.sh` —— 本机未安装则直接标"模型不可用"
 #   - deepseek: HTTP POST 到 deepseek API —— 需 DEEPSEEK_API_KEY，未设则标"模型不可用"
 # label 仅作展示兜底（前端 MODEL_LABELS 优先）；runner/model 是真实调用，保持不动。
-# rw 候选模型。原为 4 模型并行（opus/gpt5-codex/gemini/deepseek），现按需求只保留 deepseek
-# 单模型出稿（codex 订阅失效 + 用户指定只留 deepseek）。runner 派发见 _invoke_rw_candidate。
-# label 沿用"改写方案 D"与前端 MODEL_LABELS[deepseek] 对齐（单候选时前端只渲染这一个 tab）。
+# rw 候选模型。原为 4 模型并行（opus/gpt5-codex/gemini/deepseek），codex 订阅失效后曾裁成
+# deepseek 单候选；现按需求恢复 opus + deepseek 双模型并行出稿。runner 派发见 _invoke_rw_candidate。
+# label 与前端 MODEL_LABELS（opus=改写方案 A / deepseek=改写方案 D）对齐；下游全部循环本表，
+# 增删候选即生效（前端 tab、质检、增量写盘、重写/优化均数据驱动）。
 MODEL_CANDIDATES: list[dict[str, str]] = [
+    {"id": "opus",         "label": "改写方案 A",  "runner": "opus",         "model": "claude-opus-4-8"},
     {"id": "deepseek",     "label": "改写方案 D",  "runner": "deepseek",     "model": "deepseek-v4-pro"},
 ]
 

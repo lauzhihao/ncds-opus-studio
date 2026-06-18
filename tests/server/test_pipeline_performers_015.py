@@ -678,15 +678,15 @@ def _seed_asr_items(jd: Path, items_data: list[dict]) -> list[dict[str, Any]]:
     return items
 
 
-def test_run_rw_step_single_deepseek_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """MODEL_CANDIDATES 现仅剩 deepseek：deepseek 成功 → 1 稿 success、draft.md 写盘、
-    success/candidate count 均为 1（原 4 模型并行已裁成 deepseek 单候选）。"""
+def test_run_rw_step_opus_deepseek_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """MODEL_CANDIDATES = opus + deepseek 双模型并行：两个都成功 →
+    success/candidate count 均为 2、各自 draft.md 写盘、drafts 按 MODEL_CANDIDATES 顺序（opus 在前）。"""
     jd = tmp_path / "job1"
     asr_items = _seed_asr_items(jd, [{"content": "测试素材文章。"}])
 
     async def stub_invoke(cand, user_prompt, system_prompt, on_progress, on_status=None):
-        assert cand["id"] == "deepseek"          # 候选只剩 deepseek
-        return "# 改写稿 D\n\n正文内容。"
+        # 每个候选回各自可辨识的稿，验证 model_dir 隔离写盘。
+        return f"# 改写稿 {cand['id']}\n\n正文内容。"
 
     monkeypatch.setattr(perf, "_invoke_rw", stub_invoke)
     # 质检闸门走真 ai_taste/quality_rubric 会调 opus（慢/依赖环境）；本测试只验出稿编排，跳过质检。
@@ -694,15 +694,18 @@ def test_run_rw_step_single_deepseek_success(tmp_path: Path, monkeypatch: pytest
 
     out = perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items)
 
-    assert out["success_count"] == 1
-    assert out["candidate_count"] == 1
-    assert out["profile"] == "douyin_cog"        # DEFAULT_RW_PROFILE 的具体值，非同义反复
+    assert out["success_count"] == 2
+    assert out["candidate_count"] == 2
+    # drafts 顺序锁定 MODEL_CANDIDATES（opus 在前），前端默认 tab 落 opus。
+    assert [d["model_id"] for d in out["drafts"]] == ["opus", "deepseek"]
 
     drafts = {d["model_id"]: d for d in out["drafts"]}
-    assert drafts["deepseek"]["status"] == "success"
-    assert drafts["deepseek"]["draft_relpath"] == "02_rw/deepseek/draft.md"
-    assert (jd / "02_rw" / "deepseek" / "draft.md").is_file()
-    assert "改写稿 D" in (jd / "02_rw" / "deepseek" / "draft.md").read_text(encoding="utf-8")
+    for mid in ("opus", "deepseek"):
+        assert drafts[mid]["status"] == "success"
+        assert drafts[mid]["draft_relpath"] == f"02_rw/{mid}/draft.md"
+        path = jd / "02_rw" / mid / "draft.md"
+        assert path.is_file()
+        assert f"改写稿 {mid}" in path.read_text(encoding="utf-8")
 
 
 def test_run_rw_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -719,8 +722,9 @@ def test_run_rw_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.Monke
         perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items)
 
 
-def test_run_rw_step_profile_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """profile 参数透传到返回值 + 影响 _build_rw_prompt（不验证 prompt 内容，只验证返回字段）。"""
+def test_run_rw_step_ignores_legacy_profile_kwarg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """体裁 profile 已废（写作改 domain 驱动）：传入 legacy ``profile`` kwarg 应被静默忽略——
+    不报错、不出现在返回值里（向前兼容老调用方）。"""
     jd = tmp_path / "job3"
     asr_items = _seed_asr_items(jd, [{"content": "内容。"}])
 
@@ -731,9 +735,11 @@ def test_run_rw_step_profile_passed_through(tmp_path: Path, monkeypatch: pytest.
         raise MU("跳过")
 
     monkeypatch.setattr(perf, "_invoke_rw", stub_one_ok)
+    monkeypatch.setattr(perf, "_apply_rw_qc", lambda *a, **k: {})
 
     out = perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items, profile="paper_card_talk")
-    assert out["profile"] == "paper_card_talk"
+    assert "profile" not in out                  # 体裁已不再是返回契约
+    assert out["success_count"] == 1             # opus 被 stub skip，仅 deepseek 成功
 
 
 def test_run_rw_step_codeblock_stripped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

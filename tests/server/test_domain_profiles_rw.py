@@ -86,38 +86,45 @@ def test_all_profiles_have_per_agent_fields():
 # _build_rw_prompt：domain_guidance 双向验证
 # ---------------------------------------------------------------------------
 
-def _call_build(profile: str = "douyin_cog", source: str = "测试源文档内容。",
+# 体裁 profile 层已废：_build_rw_prompt 现签名 (source_text, user_requirements="", domain_guidance=None)，
+# domain_guidance 非空即作为唯一写作权威逐字注入，为空则回退通用兜底 _GENERIC_RW_BODY。
+# 兜底首句「你是资深中文内容写手」只在无 domain 分支出现，domain 注入时被替换掉 —— 用它当区分哨兵。
+_GENERIC_SENTINEL = "你是资深中文内容写手"
+
+
+def _call_build(source: str = "测试源文档内容。",
                 domain_guidance: str | None = None) -> tuple[str, str]:
-    return pr._build_rw_prompt(profile, source, domain_guidance=domain_guidance)
+    return pr._build_rw_prompt(source, domain_guidance=domain_guidance)
 
 
 def test_build_rw_prompt_no_domain_guidance_baseline():
-    """无 domain_guidance 时输出不含"领域写作要求"章节（行为与原来完全一致）。"""
+    """无 domain_guidance 时回退通用兜底（含兜底哨兵），不被领域写作方法替换。"""
     _, user_prompt = _call_build(domain_guidance=None)
-    assert "领域写作要求" not in user_prompt
+    assert _GENERIC_SENTINEL in user_prompt
 
 
 def test_build_rw_prompt_empty_domain_guidance_skipped():
-    """空字符串 domain_guidance 不注入（等同 None）。"""
+    """空字符串 domain_guidance 不注入（等同 None，仍走兜底）。"""
     _, user_prompt = _call_build(domain_guidance="")
-    assert "领域写作要求" not in user_prompt
+    assert _GENERIC_SENTINEL in user_prompt
 
 
 def test_build_rw_prompt_whitespace_domain_guidance_skipped():
-    """纯空白 domain_guidance 不注入。"""
+    """纯空白 domain_guidance 不注入（仍走兜底）。"""
     _, user_prompt = _call_build(domain_guidance="   \n  ")
-    assert "领域写作要求" not in user_prompt
+    assert _GENERIC_SENTINEL in user_prompt
 
 
 def test_build_rw_prompt_finance_guidance_injected():
-    """传入 finance draft_prompt 时，user_prompt 必须包含领域写作要求章节。"""
+    """传入 finance liuyong 写作方法时：guidance 全文逐字注入，且兜底层被替换掉。"""
     finance_profile = get_profile("finance")
     assert finance_profile is not None
     guidance = finance_profile["liuyong"]
     assert guidance  # 确保非 None
 
     _, user_prompt = _call_build(domain_guidance=guidance)
-    assert "领域写作要求" in user_prompt
+    assert guidance.strip() in user_prompt   # domain 写作方法作为唯一权威逐字注入
+    assert _GENERIC_SENTINEL not in user_prompt  # 兜底被替换，不叠加
 
 
 def test_build_rw_prompt_finance_guidance_contains_compliance_keywords():
@@ -151,13 +158,13 @@ def test_build_rw_prompt_domain_guidance_appears_before_source():
     assert pos_guidance < pos_source, "domain_guidance 应出现在源文档之前"
 
 
-def test_build_rw_prompt_genre_profile_not_replaced():
-    """注入 domain_guidance 后，体裁 profile 原有内容仍保留（叠加，不替换）。"""
-    _, without = _call_build(profile="caijing", domain_guidance=None)
-    _, with_domain = _call_build(profile="caijing", domain_guidance="额外领域指导。")
-    # caijing profile 的特征关键词应在两种情况下都存在
-    assert "财经" in without
-    assert "财经" in with_domain
+def test_build_rw_prompt_domain_guidance_is_additive():
+    """注入 domain_guidance 后只替换"写作要求"权威层，通用脚手架(通用约束+源文档)仍保留(叠加不替换)。"""
+    marker = "额外领域指导_MARKER。"
+    _, with_domain = _call_build(domain_guidance=marker)
+    assert marker in with_domain          # 领域写作方法注入
+    assert "【通用约束】" in with_domain    # 通用约束脚手架仍在
+    assert "== 源文档 ==" in with_domain    # 源文档章节仍在
 
 
 # ---------------------------------------------------------------------------

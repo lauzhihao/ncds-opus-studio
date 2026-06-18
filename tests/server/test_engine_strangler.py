@@ -30,7 +30,8 @@ class _FakeEngine:
         self.calls.append(("create", recipe_id, inputs))
         return SimpleNamespace(meta=SimpleNamespace(instance_id=iid))
 
-    async def reset_step(self, iid: str, node: str):
+    async def reset_step(self, iid: str, node: str, force: bool = False):
+        # force：对齐真 InstanceRunner.reset_step（pipeline_runner 重跑前会带 force= 清 orphan running）。
         self.calls.append(("reset", iid, node))
         return [node]
 

@@ -7,7 +7,7 @@
 slice-1 范围（最小后端验证）：
 - ``lines`` / ``storyboard``：真实复用 ``_execute_lines`` / ``_execute_storyboard`` 的 opus
   结构化算法（经 :func:`_opus_structure` 间接层，便于测试注入桩；不重写算法）。
-- ``asr/rw/tts/image/render`` 的真实包装（含 video_pipeline/tts_gen/render.mjs 子进程、4 模型 rw）
+- ``asr/rw/tts/image/render`` 的真实包装（含 video_pipeline/tts_gen/render.mjs 子进程、多模型 rw）
   需抽 PipelineRunner 实例方法 / 真实外部依赖，留后续 slice；其 e2e 编排已由集成测试用桩验证。
 
 约定：performer 经 ``step_inputs`` 收到 ``job_dir``（= ``video-jobs/{job_id}``），读写其下 ``02_rw/``。
@@ -308,7 +308,7 @@ def run_asr_step(
 
 
 # ---------------------------------------------------------------------------
-# RW performer：4 模型并行改写，同步包装 asyncio 并发。
+# RW performer：多模型并行改写（按 MODEL_CANDIDATES），同步包装 asyncio 并发。
 # 忠实复刻 PipelineRunner._execute_rw，做了以下替换：
 #   - state.nodes["asr"].outputs.items → 参数 asr_items
 #   - self.video_jobs_dir/job_id → Path(job_dir)
@@ -317,7 +317,7 @@ def run_asr_step(
 #     关键进度经 on_progress 文本透出。
 # 写作要求由作品垂类标签(domain)的 liuyong 写作方法独家驱动（「体裁 profile」已废）。
 # 同步函数（引擎在 to_thread 里跑）：内部用 asyncio.run() 跑 gather 并发，
-# 不改成串行，保留原版 4 模型真并发语义。
+# 不改成串行，保留原版多模型真并发语义。
 # ---------------------------------------------------------------------------
 def run_rw_step(
     on_progress: Callable[[str], None],
@@ -326,7 +326,7 @@ def run_rw_step(
     asr_items: list[dict[str, Any]],
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """RW：4 模型并行改写，产出 02_rw/{model_id}/draft.md。
+    """RW：多模型并行改写（按 MODEL_CANDIDATES），产出 02_rw/{model_id}/draft.md。
 
     产物布局（与 PipelineRunner._execute_rw 完全对齐）：
       02_rw/{model_id}/draft.md     — 各模型 markdown 改写稿（仅 success）
@@ -357,7 +357,7 @@ def run_rw_step(
             domain_guidance = dp.get("liuyong")
     system_prompt, user_prompt = _build_rw_prompt(source_text, domain_guidance=domain_guidance)
 
-    on_progress(f"4 模型并行启动；source={len(source_text)} 字")
+    on_progress(f"{len(MODEL_CANDIDATES)} 模型并行启动；source={len(source_text)} 字")
 
     # make_draft：把单模型结果（成功文本 / 异常）转成 draft dict，成功时写盘。
     # 内部实现与原版 _execute_rw 的 make_draft 闭包完全对齐。
@@ -426,7 +426,7 @@ def run_rw_step(
     success_count = sum(1 for d in drafts_out if d.get("status") == "success")
     if success_count == 0:
         reasons = "; ".join(f"{d['model_id']}={d.get('reason')}" for d in drafts_out)
-        raise RuntimeError(f"4 个模型全部失败：{reasons}")
+        raise RuntimeError(f"{len(MODEL_CANDIDATES)} 个模型全部失败：{reasons}")
 
     on_progress(f"完成：{success_count}/{len(MODEL_CANDIDATES)} 成功")
 
