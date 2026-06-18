@@ -574,7 +574,7 @@ def test_execute_real_clears_flag_before_start(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 补充（步4 验收收尾）：killpg 杀孙进程 + legacy _execute_asr 可取消
+# 补充（步4 验收收尾）：killpg 杀整个进程组（含孙进程）
 # ---------------------------------------------------------------------------
 
 def test_terminate_proc_group_kills_grandchild(tmp_path: Path) -> None:
@@ -611,39 +611,3 @@ def test_terminate_proc_group_kills_grandchild(tmp_path: Path) -> None:
             dead = True
             break
     assert dead, f"孙进程 {grandchild_pid} 应随进程组一起被 killpg 杀死（terminate 只杀直接子进程会漏）"
-
-
-def test_execute_asr_legacy_raises_task_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """legacy _execute_asr（NOF_ENGINE_NODES=legacy 回退路径）：_run_video_pipeline
-    （via _run_in_thread_cancellable）抛 TaskCancelled 时不被 per-item / polish 的 except Exception 吞，
-    整个方法应冒出 TaskCancelled（与 _execute_asr_collect 一致）。"""
-    runner = _make_runner(tmp_path)
-    job_id = "job-tc-legacy"
-    node = "asr"
-    job_dir = runner.video_jobs_dir / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
-    state = {
-        "job_id": job_id, "pipeline_id": "paper_card_talk_015", "title": "test",
-        "created_at": time.time(), "updated_at": time.time(),
-        "inputs": {"urls": ["https://v.douyin.com/legacy123"]},
-        "nodes": {node: {"name": node, "status": "idle", "started_at": None, "finished_at": None,
-                         "progress": "", "outputs": {}, "error": None, "task_id": None}},
-        "node_positions": {}, "node_configs": {}, "mock": False, "engine_iid": None,
-    }
-    (job_dir / "pipeline_state.json").write_text(json.dumps(state), encoding="utf-8")
-
-    # 让 pipeline_script.is_file() 通过（_execute_asr 找不到脚本会先 RuntimeError）
-    dummy_script = tmp_path / "video_pipeline.py"
-    dummy_script.write_text("# dummy", encoding="utf-8")
-    monkeypatch.setenv("NOF_VIDEO_PIPELINE_SCRIPT", str(dummy_script))
-
-    # _run_in_thread_cancellable 直接抛 TaskCancelled（模拟 video_pipeline killpg 后抛）
-    async def fake_thread_cancellable(fn: Any, flag_path: Any, /, *args: Any, **kwargs: Any) -> Any:
-        raise TaskCancelled("cancel in video_pipeline")
-    runner._run_in_thread_cancellable = fake_thread_cancellable  # type: ignore[method-assign]
-
-    async def _run() -> None:
-        with pytest.raises(TaskCancelled):
-            await runner._execute_asr(job_id)
-
-    asyncio.run(_run())

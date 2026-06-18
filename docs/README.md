@@ -22,7 +22,7 @@ uv pip install --python .venv/bin/python3 <pkg>
 2. `nof-server`（:8810，HTTP/SSE/入队，纯 producer 不执行任务；`NOF_SERVER_HOST`/`NOF_SERVER_PORT` 可覆盖）
 3. `nof-worker`（`.venv/bin/python3 -m ncds_opus_factory.server.worker`，唯一消费+执行+写状态）
 
-Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退出。同 cmd 只能起一个 nof-worker（出队 CAS 单进程语义）。重启 nof-server 不打断 worker 在跑任务。launchd 常驻见 `scripts/install_nof_worker.sh`。
+Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退出。同 cmd 只能起一个 nof-worker（出队 CAS 单进程语义）。重启 nof-server 不打断 worker 在跑任务。launchd 常驻见 `bin/install_nof_worker.sh`。
 
 **后端热重载（dev）**：worker 拆分后 8810 是纯 producer，任务都在 worker 跑，给 nof-server 加 `--reload` 已**不再**误杀长任务（旧红线作废）。dev 起法：
 ```bash
@@ -30,7 +30,7 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 ```
 `--reload-dir src` 只盯后端源码；存 `.py` 自动重启（会断掉当时挂着的 SSE/in-flight 请求，客户端自动重连）。**只热重载后端**——前端改动仍要 `npm run build`（见下）。生产别长开 `--reload`。
 
-**一键起 HMR 三件套（前后端都免 build 免刷）**：`scripts/dev_up.sh {up|down|restart|status}` —— 确保 redis → 起 vite(:5173) → 起 `NOF_DEV=1` + `--reload` 的 nof-server，访问入口 `http://localhost:8810/studio/`（带尾斜杠走 dev 反代，HMR WS 同走 8810）。**不碰 nof-worker**（只查状态提示；worker 起停仍走 `install_nof_worker.sh`）。注意：`up`/`restart` 要**在交互终端里跑**——常驻进程靠 `nohup+disown` detach，别在会被回收的子 shell（如 agent 后台任务）里跑，否则进程组被杀牵连。dev 专用，正式部署仍要 `npm run build`。
+**一键起 HMR 三件套（前后端都免 build 免刷）**：`bin/dev_up.sh {up|down|restart|status}`（最省事：`bin/reload-server.sh` = 先 `kill -9` 清 8810/5173 再 `dev_up up`，或 claude 里 `!bin/reload-server.sh` / `/reload-server`）—— 确保 redis → 起 vite(:5173) → 起 `NOF_DEV=1` + `--reload` 的 nof-server，访问入口 `http://localhost:8810/studio/`（带尾斜杠走 dev 反代，HMR WS 同走 8810）。**不碰 nof-worker**（只查状态提示；worker 起停走 `bin/install_nof_worker.sh` 或 `bin/reload-worker.sh`）。注意：`up`/`restart` 要**在交互终端里跑**——常驻进程靠 `nohup+disown` detach，别在会被回收的子 shell（如 agent 后台任务）里跑，否则进程组被杀牵连。dev 专用，正式部署仍要 `npm run build`。
 
 ### /studio 前端（web/，React + Vite）
 - dev：`cd web && npm run dev`（vite :5173）+ `NOF_DEV=1 nof-server`，访问 `http://localhost:8810/studio`，HMR 同走 8810 反代（依赖 httpx + websockets，已声明 pyproject）。
@@ -41,7 +41,7 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 ### 项目地图看门狗
 `.project_map` 由 `scripts/map_project_watchdog.py` 自动重生成（mtime 轮询 + 30s 去抖）。手动重生成：`python3 scripts/map_project.py`。launchd 自启：
 ```bash
-./scripts/install_map_watchdog.sh install|status|logs|restart|uninstall
+./bin/install_map_watchdog.sh install|status|logs|restart|uninstall
 ```
 日志 `state/map_watchdog.{out,err}.log`、PID/锁 `state/map_project_watchdog.{pid,lock}`（均 gitignored）。若 `.project_map` 比 `src/` 源文件旧 → 看门狗没在跑。
 

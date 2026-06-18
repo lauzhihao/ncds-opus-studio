@@ -37,6 +37,8 @@ interface Props {
   onClose: () => void;
   // 跨 agent 推进：打开下一个 agent 抽屉。
   onAdvanceAgent: (nextAgentId: AgentId) => void;
+  // 鬼谷子选定选题时上报：让 page 翻 angleConfirmed（解耦后选题不再触发 rw 的 SSE，需本地脉冲）。
+  onTopicConfirmed?: () => void;
 }
 
 function defaultIdleState(name: string): NodeState {
@@ -60,7 +62,7 @@ const STATUS_DOT_ZH: Record<NodeStatus, string> = {
   failed: '失败',
 };
 
-export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClose, onAdvanceAgent }: Props) {
+export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClose, onAdvanceAgent, onTopicConfirmed }: Props) {
   const { members } = agent;
   const Icon = agent.icon;
 
@@ -160,7 +162,11 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
           <GuiguziPanel
             jobId={jobId}
             job={job}
-            onConfirmed={() => advance('guiguzi')}
+            onConfirmed={() => {
+              // 解耦：选题确认既翻鬼谷子 DONE（上报 page 脉冲），又跳到柳永面板（柳永停 IDLE 待手动启动）。
+              onTopicConfirmed?.();
+              advance('guiguzi');
+            }}
             onGotoShenkuo={() => onAdvanceAgent('shenkuo')}
           />
         );

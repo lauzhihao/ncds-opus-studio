@@ -143,7 +143,7 @@ worker_status() {
   if pgrep -f "ncds_opus_factory.server.worker" >/dev/null 2>&1; then
     log "nof-worker: up (untouched by this script)"
   else
-    log "nof-worker: DOWN -> offline tasks won't execute (start: scripts/install_nof_worker.sh restart)"
+    log "nof-worker: DOWN -> offline tasks won't execute (start: bin/install_nof_worker.sh restart)"
   fi
 }
 

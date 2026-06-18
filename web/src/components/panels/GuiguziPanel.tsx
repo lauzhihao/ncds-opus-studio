@@ -106,18 +106,26 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
     api.getGuiguzi(jobId).then(setResult).catch(() => setResult(null));
   }, [jobId]);
 
-  // running（分析/出题中）时轮询，直到 analyzed/done/failed。
+  // running（分析/出题中）时靠已有 SSE 流驱动刷新，取代旧的 2s 定时轮询。
+  // 鬼谷子是异步 virtual agent，完成时后端发 job_updated（pipeline_runner._run_guiguzi_*_bg
+  // 末尾 _emit）；useJobStream 收到就 refetch getJob → job 引用更新 → 这里回拉一次 guiguzi 结果，
+  // 直到 status 翻 analyzed/done/failed（running 转 false 即停）。边缘触发：活跃窗口外零请求。
   useEffect(() => {
     if (!running) return;
-    const t = window.setInterval(async () => {
-      try {
-        setResult(await api.getGuiguzi(jobId));
-      } catch {
-        /* 暂时读不到忽略，下个 tick 再试 */
-      }
-    }, 2000);
-    return () => window.clearInterval(t);
-  }, [running, jobId]);
+    let cancelled = false;
+    api
+      .getGuiguzi(jobId)
+      .then((d) => {
+        if (!cancelled) setResult(d);
+      })
+      .catch(() => {
+        /* 暂时读不到忽略，下个事件再试 */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // job：已有 SSE 流的脉冲，每来一帧事件就核对一次结果（鬼谷子完成的 job_updated 也在内）。
+  }, [running, jobId, job]);
 
   // 分析完成 → 用最新分析初始化可编辑副本（每次新分析到达都重置）。
   useEffect(() => {
@@ -170,7 +178,9 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
     }
   }
 
-  // N 选 1：选定一个选题 → 交柳永出稿。
+  // N 选 1：选定一个选题 → 自启动柳永出稿。
+  // 状态解耦（v2）：选定的选题持久化到 localStorage，作为鬼谷子 DONE 的**真信号**——一旦选定就
+  // 不再随柳永(rw) 的状态变动（手动停下/取消/失败/重置都不让鬼谷子回退）。柳永仍照旧自启动。
   async function chooseTopic(t: GuiguziTopic) {
     if (!asrDone) {
       showToast('请先完成沈括的采集与转写');
@@ -182,9 +192,13 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
     } catch {
       /* 忽略 */
     }
+    // 先翻鬼谷子 DONE（本地脉冲，与下面起 rw 是否成功无关），再自启动柳永 + 跳柳永面板。
+    onConfirmed?.();
     try {
-      await api.runNode(jobId, 'rw');
-      onConfirmed?.();
+      // 重起一个新的 rw 进程（force 表达「重新提交」意图）。柳永取消后引擎步可能残留 orphan running，
+      // 真正的根治在后端 _execute_via_engine：每次跑前 reset_step(force=True) 无条件清掉再重跑，
+      // 否则会撞「无法重置运行中的步」永久起不来。
+      await api.runNode(jobId, 'rw', undefined, true);
     } catch (e) {
       showToast('启动出稿失败，请稍后再试');
       console.error('[GuiguziPanel] runNode(rw) 失败', e);
@@ -534,7 +548,7 @@ function ModelColumn({
               )}
               <div className="guiguzi-topic-overlay">
                 <PenLine size={14} strokeWidth={2} />
-                {chosen ? '已选 · 交柳永' : '选这个'}
+                {chosen ? '重新提交' : '选这个'}
               </div>
             </div>
           );

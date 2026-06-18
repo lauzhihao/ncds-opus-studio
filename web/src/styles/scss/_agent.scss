@@ -606,20 +606,10 @@
   font-weight: 600;
   pointer-events: none;
 }
+/* 所有卡片（含 chosen）统一：rest 不显遮罩、hover 出全幅矩形黑遮罩（贴卡片圆角）。
+   chosen 的标识由 accent 描边环 + 遮罩内「重新提交」文案承担，不再加常驻角标。 */
 .guiguzi-topic:hover .guiguzi-topic-overlay {
   display: flex;
-}
-/* 选定态常驻右下角小角标（accent 色，不盖正文）；hover 时仍走全幅黑遮罩 */
-.guiguzi-topic.chosen .guiguzi-topic-overlay {
-  display: flex;
-  inset: auto 6px 6px auto;
-  background: none;
-  color: var(--accent);
-}
-.guiguzi-topic.chosen:hover .guiguzi-topic-overlay {
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
 }
 
 /* —— 通用命令步面板 —— */

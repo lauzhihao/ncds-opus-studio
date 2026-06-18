@@ -514,8 +514,6 @@ class PipelineRunner:
         self._save(state)
         self._emit(job_id, {"type": "job_updated", "job_id": job_id})
 
-    # parse_inputs 已废弃：解析在前端完成，后端只通过 update_inputs 持久化。
-
     # ---------- 重跑 / 调度 ----------
 
     def _reset_node(self, n: NodeState) -> None:
@@ -763,7 +761,10 @@ class PipelineRunner:
         if n.status != "done":
             raise ValueError("rw node not done; run rw first")
         drafts = (n.outputs or {}).get("drafts") or []
-        if not any(isinstance(d, dict) and d.get("model_id") == model_id for d in drafts):
+        entry = next(
+            (d for d in drafts if isinstance(d, dict) and d.get("model_id") == model_id), None
+        )
+        if entry is None:
             raise KeyError(f"unknown model: {model_id}")
         cand = next((c for c in MODEL_CANDIDATES if c["id"] == model_id), None)
         if cand is None:
@@ -780,8 +781,8 @@ class PipelineRunner:
         if not source_text:
             raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
-        profile = (state.node_configs.get("rw") or {}).get("profile", DEFAULT_RW_PROFILE)
-        system_prompt, user_prompt = _build_rw_prompt(profile, source_text)
+        domain_guidance = _rw_domain_guidance(state.inputs.get("domain"))
+        system_prompt, user_prompt = _build_rw_prompt(source_text, domain_guidance=domain_guidance)
 
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "rw", f"[rerun {model_id}] {text}")
@@ -806,10 +807,94 @@ class PipelineRunner:
         model_dir.mkdir(parents=True, exist_ok=True)
         (model_dir / "draft.md").write_text(cleaned + "\n", encoding="utf-8")
 
+        # 重写后重跑质检闸门，回写 entry 的 qc/qc_rubric -> 前端雷达图/质量分随新稿刷新
+        # （否则会停在上一版旧数据；与 refine_rw_model 保持一致）
+        try:
+            qc = await asyncio.to_thread(_apply_rw_qc, model_dir, model_id, on_progress)
+            entry.update(qc)
+        except Exception as exc:  # noqa: BLE001 — 质检失败不拖垮重写稿
+            on_progress(f"质检异常（不影响稿件）: {exc}")
+
         # 如果用户当前选中的就是这个模型，把 02_rw/draft.md 也同步更新
         # 并 invalidate 下游（lines 已 done 的话需要重跑：LINES 会重新调 LLM）
         if (n.outputs or {}).get("selected_model_id") == model_id:
             shutil.copyfile(model_dir / "draft.md", rw_root / "draft.md")
+            for dn in get_pipeline(state.pipeline_id).downstream_of("rw"):
+                if state.nodes[dn].status != "idle":
+                    self._reset_node(state.nodes[dn])
+
+        state.updated_at = time.time()
+        self._save(state)
+        self._emit(
+            job_id,
+            {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)},
+        )
+
+    async def refine_rw_model(self, job_id: str, model_id: str) -> None:
+        """按 rubric 质检建议优化 rw 某模型的当前 draft（不重新生成、基于现有稿 + issues）。
+
+        触发点：用户在 RW 抽屉某模型 tab 点「按建议优化」。与 rewrite_rw_model 不同：
+        不重跑模型，而是把现有 draft.md + qc_rubric.issues 交给 opus 做最小改动优化，
+        优化后**重跑质检并回写 drafts entry 的 qc/qc_rubric**（前端雷达图随之刷新）。
+        """
+        state = self._load(job_id)
+        if state.mock:
+            if not any(c["id"] == model_id for c in MODEL_CANDIDATES):
+                raise KeyError(f"unknown model: {model_id}")
+            await self._mock_regen_delay()
+            n = state.nodes.get("rw")
+            if n is not None:
+                self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
+            return
+        n = state.nodes.get("rw")
+        if n is None:
+            raise KeyError("rw node not found")
+        if n.status != "done":
+            raise ValueError("rw node not done; run rw first")
+        drafts = (n.outputs or {}).get("drafts") or []
+        entry = next(
+            (d for d in drafts if isinstance(d, dict) and d.get("model_id") == model_id), None
+        )
+        if entry is None:
+            raise KeyError(f"unknown model: {model_id}")
+        if entry.get("status") == "failed":
+            raise ValueError("失败的模型无法优化")
+        issues = list((entry.get("qc_rubric") or {}).get("issues") or [])
+        if not issues:
+            raise ValueError("当前稿没有可用的优化建议")
+
+        job_dir = self.video_jobs_dir / job_id
+        rw_root = job_dir / "02_rw"
+        model_dir = rw_root / model_id
+        draft_path = model_dir / "draft.md"
+        if not draft_path.is_file():
+            raise FileNotFoundError("draft.md 不存在，无法优化")
+        text = draft_path.read_text(encoding="utf-8").strip()
+        if not text:
+            raise ValueError("当前稿为空")
+
+        from ncds_opus_factory.common import quality_rubric
+
+        def on_progress(msg: str) -> None:
+            self._push_progress(job_id, "rw", f"[refine {model_id}] {msg}")
+
+        on_progress(f"按 {len(issues)} 条建议优化启动")
+        refined = await asyncio.to_thread(quality_rubric.refine, text, issues)
+        if not refined or len(refined.strip()) < 200:
+            raise RuntimeError("优化未返回有效稿（已保留原稿）")
+        draft_path.write_text(refined.strip() + "\n", encoding="utf-8")
+        on_progress("优化稿写盘完成，重跑质检")
+
+        # 重跑质检闸门（ai_taste 终判 + rubric 评分），回写 entry 的 qc/qc_rubric -> 雷达图刷新
+        try:
+            qc = await asyncio.to_thread(_apply_rw_qc, model_dir, model_id, on_progress)
+            entry.update(qc)
+        except Exception as exc:  # noqa: BLE001 — 质检失败不拖垮优化稿
+            on_progress(f"质检异常（不影响稿件）: {exc}")
+
+        # 选中的就是这个模型时，同步定稿入口并 invalidate 下游
+        if (n.outputs or {}).get("selected_model_id") == model_id:
+            shutil.copyfile(draft_path, rw_root / "draft.md")
             for dn in get_pipeline(state.pipeline_id).downstream_of("rw"):
                 if state.nodes[dn].status != "idle":
                     self._reset_node(state.nodes[dn])
@@ -1269,7 +1354,11 @@ class PipelineRunner:
             iid = engine.create_instance("paper_card_talk_015", inputs=job.inputs).meta.instance_id
             job.engine_iid = iid          # 持久化句柄，重启后复用同一实例（不留孤儿）
             self._save(job)
-        await engine.reset_step(iid, node_name)   # 回 idle，支持重跑
+        # force：无条件回 idle 重跑。watcher 宽限期后的 asyncio 强制 cancel 只回收 facade 节点、
+        # 不碰引擎 step（_execute except asyncio.CancelledError 分支），会留下 orphan running 的引擎步，
+        # 之后普通 reset_step 撞「无法重置运行中的步」永久起不来。run_node 的 _running_nodes 守卫已保证
+        # 走到这里时旧 task 必 done（旧线程已死），故此处 force 重置 orphan running 是安全的。
+        await engine.reset_step(iid, node_name, force=True)
         # 闭合签名：各 pct015_* performer 不能盲 splat config，driver 按节点装配 step_inputs。
         step_inputs = self._engine_step_inputs(job, node_name)
         # 引擎路径无 TaskRunner task_id；用实例 iid 作节点追踪句柄，失败时前端可复制上报。
@@ -1296,9 +1385,9 @@ class PipelineRunner:
         """为生产引擎 performer 装配该步的 step_inputs。
 
         performer 是闭合签名（不能盲 splat config，否则 TypeError），故 driver 负责把上游产物/
-        全局输入折进 step_inputs（与旧 _execute_asr/_execute_rw 的取数口径一致）：
+        全局输入折进 step_inputs（与旧 _execute_rw 的取数口径一致）：
           - asr：urls + shares（inputs 只存了 shares、无顶层 urls 时从 shares 派生 url）
-          - rw ：asr_items（asr 节点 outputs.items）+ profile（node_configs.rw.profile）
+          - rw ：asr_items（asr 节点 outputs.items）；写作由 domain 驱动（引擎从实例 inputs 透传 domain）
           - 其余（lines/storyboard/tts/image/render）：只读 02_rw/episode.json，job_dir 足矣
         """
         si: dict[str, Any] = {"job_dir": str(self.video_jobs_dir / job.job_id)}
@@ -1314,7 +1403,7 @@ class PipelineRunner:
             asr_node = job.nodes.get("asr")
             asr_out = (asr_node.outputs or {}) if asr_node else {}
             si["asr_items"] = list(asr_out.get("collected") or asr_out.get("items") or [])
-            si["profile"] = (job.node_configs.get("rw") or {}).get("profile", DEFAULT_RW_PROFILE)
+            # 体裁 profile 已废；写作 domain 由引擎从实例 inputs 透传给 performer，无需在此装配。
         return si
 
     # ------------------------------------------------------------
@@ -1998,219 +2087,6 @@ class PipelineRunner:
             raise RuntimeError(f"全部 {len(urls)} 个作品采集失败，详见各作品状态")
         return {"collected": collected, "collect_dir": str(collect_dir)}
 
-    async def _execute_asr(self, job_id: str) -> dict[str, Any]:
-        """[legacy] 旧转写实现（video_pipeline + opus 文章）。沈括统一走采集后由
-        _execute_asr_collect 取代；保留以便 NOF_ENGINE_NODES=legacy 回退或临时切回转写模式。
-        串行跑 inputs.urls 里每条媒体链接，只跑 video_pipeline.py 转写 + 清洗稿。
-        填 items[]（front-end 两 tab：听写稿 / 文章解析）。精华稿（highlight）已
-        从 asr 节点剥离 —— "爆款精华"现在由 rw 节点的 4 模型并行改写承担。
-
-        刻意绕过 scripts/video_job_worker.mjs 整套飞书编排 —— studio 画布场景没有
-        chatId/accountId 上下文，直接对接 video_pipeline.py 的本地产物。
-        """
-        state = self._load(job_id)
-        urls = list(state.inputs.get("urls") or [])
-        if not urls:
-            raise ValueError("inputs.urls is empty; paste media links into the INPUT node first")
-
-        job_dir = self.video_jobs_dir / job_id
-        asr_root = job_dir / "01_asr"
-        asr_root.mkdir(parents=True, exist_ok=True)
-
-        # skills/ 留 repo 根、不进任何包（P1.7）；用 core repo_root() 定位 + NOF_VIDEO_PIPELINE_SCRIPT
-        # env 兜底，不再数 parents[N]（拆 src-layout 后深度会变）。
-        from ncds_opus_core.common.paths import repo_root as _repo_root
-
-        env_script = os.getenv("NOF_VIDEO_PIPELINE_SCRIPT")
-        pipeline_script = (
-            Path(env_script)
-            if env_script
-            else _repo_root() / "skills" / "video-pipeline" / "scripts" / "video_pipeline.py"
-        )
-        if not pipeline_script.is_file():
-            raise RuntimeError(f"video_pipeline.py not found at {pipeline_script}")
-
-        def on_progress(text: str) -> None:
-            self._push_progress(job_id, "asr", text)
-
-        # shares 是 InputPanel 解析出的标题/作者，按 URL 对齐
-        shares_by_url: dict[str, dict[str, Any]] = {}
-        for s in state.inputs.get("shares") or []:
-            if isinstance(s, dict) and isinstance(s.get("url"), str):
-                shares_by_url[s["url"]] = s
-
-        # 全局下载缓存：跨 job 复用同一 URL 已下载的 mp4。
-        # 目录结构：video-jobs/_downloads/<url_md5>/<platform>_*.mp4
-        # 命中时把 cache 里的 mp4 symlink 进 item_dir/raw/，video_pipeline.py 的
-        # download_video fast-path 看到 raw/ 已有 mp4 就跳过实际下载；
-        # 未命中时正常下载到 raw/，下载完成后把真 mp4 迁移到 cache 再 symlink 回来。
-        downloads_cache = self.video_jobs_dir / "_downloads"
-        downloads_cache.mkdir(parents=True, exist_ok=True)
-
-        # 作品级进度：每条 URL 一行，pending → running(各阶段 stage) → done | failed
-        item_status: dict[str, dict[str, Any]] = {}
-        for i, u in enumerate(urls, start=1):
-            sh = shares_by_url.get(u) or {}
-            item_status[str(i)] = {
-                "index": i,
-                "title": str(sh.get("title") or sh.get("author") or ""),
-                "url": u,
-                "status": "pending",
-                "stage": "",
-                "error": "",
-            }
-
-        def push_items() -> None:
-            self._push_outputs_patch(job_id, "asr", "item_progress", {k: dict(v) for k, v in item_status.items()})
-
-        push_items()
-
-        items: list[dict[str, Any]] = []
-        for idx, url in enumerate(urls, start=1):
-            item_status[str(idx)]["status"] = "running"
-            item_status[str(idx)]["stage"] = "准备中"
-            push_items()
-            try:
-                item_dir = asr_root / str(idx)
-                item_dir.mkdir(parents=True, exist_ok=True)
-
-                url_md5 = hashlib.md5(url.encode("utf-8")).hexdigest()
-                url_md5_short = url_md5[:12]
-                cache_dir = downloads_cache / url_md5
-                cache_dir.mkdir(parents=True, exist_ok=True)
-
-                # 幂等 stamp：用 url 的 short md5 标记 item_dir 当前归属哪条 URL。
-                # URL 变了（用户在 INPUT 节点改了链接）→ 清掉旧产物重新链入缓存。
-                stamp_path = item_dir / ".url-stamp"
-                existing_stamp = (
-                    stamp_path.read_text(encoding="utf-8").strip()
-                    if stamp_path.is_file() else ""
-                )
-                if existing_stamp and existing_stamp != url_md5_short:
-                    on_progress(f"[{idx}/{len(urls)}] URL 已变更，清掉旧产物")
-                    shutil.rmtree(item_dir)
-                    item_dir.mkdir(parents=True, exist_ok=True)
-                stamp_path.write_text(url_md5_short, encoding="utf-8")
-
-                # 缓存→raw/ symlink：若全局缓存里已有此 URL 对应的 mp4，链进 item_dir/raw/
-                raw_dir = item_dir / "raw"
-                raw_dir.mkdir(parents=True, exist_ok=True)
-                cached_mp4s = sorted(cache_dir.glob("*.mp4"))
-                if cached_mp4s:
-                    on_progress(
-                        f"[{idx}/{len(urls)}] 命中下载缓存，复用 {cached_mp4s[0].name}（跳过下载）"
-                    )
-                    for mp4 in cached_mp4s:
-                        link = raw_dir / mp4.name
-                        if not link.exists():
-                            link.symlink_to(mp4.resolve())
-
-                on_progress(f"[{idx}/{len(urls)}] 启动 video_pipeline.py")
-
-                def on_line(line: str, i: int = idx, total: int = len(urls)) -> None:
-                    lbl = _asr_stage_label(line)
-                    if lbl and item_status[str(i)]["stage"] != lbl:
-                        item_status[str(i)]["stage"] = lbl
-                        push_items()
-                    on_progress(f"[{i}/{total}] {line}")
-
-                # 装协作式取消 checker：video_pipeline 的 killpg 轮询读 cancel.current() → 命中杀整组。
-                await self._run_in_thread_cancellable(
-                    _run_video_pipeline, self._cancel_flag(job_id, "asr"),
-                    pipeline_script=pipeline_script,
-                    url=url,
-                    output_dir=item_dir,
-                    on_line=on_line,
-                )
-
-                # 跑完后扫一遍 raw/，把刚下载的真 mp4 迁移到全局缓存 + 在原位留 symlink。
-                # 这样下次同 URL（含其它 job）跑时，cached_mp4s 那段就能命中。
-                for mp4 in raw_dir.glob("*.mp4"):
-                    if mp4.is_symlink():
-                        continue
-                    cache_target = cache_dir / mp4.name
-                    if not cache_target.exists():
-                        shutil.move(str(mp4), str(cache_target))
-                    else:
-                        mp4.unlink()
-                    mp4.symlink_to(cache_target.resolve())
-
-                result_json = item_dir / "deliverables" / "result.json"
-                if not result_json.is_file():
-                    raise RuntimeError(f"video_pipeline 未产出 result.json: {result_json}")
-                result = json.loads(result_json.read_text(encoding="utf-8"))
-
-                transcript_abs = result.get("rawTranscriptPath") or result.get("transcript")
-                if not transcript_abs or not Path(transcript_abs).is_file():
-                    raise RuntimeError(f"transcript 缺失或不存在: {transcript_abs}")
-
-                # 文章整理：调本机 opus（claude）把原始 transcript polish 成 markdown 文章。
-                # 不复用 video_pipeline.py 内部的 polishing 链路（它依赖 ~/.openclaw/openclaw.json
-                # 模型映射 + gemini/codex 双模型并行，本机配置不全）。
-                item_status[str(idx)]["stage"] = "整理文章"
-                push_items()
-                article_path = item_dir / "article.md"
-                share = shares_by_url.get(url) or {}
-                try:
-                    polished = await asyncio.to_thread(
-                        _polish_transcript_with_opus,
-                        transcript_path=Path(transcript_abs),
-                        output_path=article_path,
-                        title_hint=str(share.get("title") or share.get("author") or ""),
-                    )
-                    on_progress(f"[{idx}/{len(urls)}] " + (
-                        "调 opus 整理成文章" if polished else "文章已是最新,跳过 opus"))
-                    article_abs = str(article_path)
-                except _cancel.TaskCancelled:
-                    raise  # 取消不能被当成 polish 失败 fallback 吞掉
-                except Exception as exc:
-                    on_progress(f"[{idx}/{len(urls)}] opus polish 失败：{exc}；fallback 到原始 transcript")
-                    article_abs = transcript_abs
-
-                items.append({
-                    "index": idx,
-                    "url": url,
-                    "title": str(share.get("title") or ""),
-                    "author": str(share.get("author") or ""),
-                    "transcript_relpath": str(Path(transcript_abs).resolve().relative_to(job_dir)),
-                    "article_relpath": str(Path(article_abs).resolve().relative_to(job_dir)),
-                    "error": None,
-                })
-                item_status[str(idx)]["status"] = "done"
-                item_status[str(idx)]["stage"] = "完成"
-                push_items()
-                on_progress(f"[{idx}/{len(urls)}] 完成")
-            except _cancel.TaskCancelled:
-                # TaskCancelled 继承 RuntimeError，不能被下面的 except Exception 当单条失败吞掉——
-                # 取消应中止整个节点（与 _execute_asr_collect 一致）
-                raise
-            except Exception as exc:
-                msg = str(exc)
-                first_line = msg.splitlines()[0] if msg.splitlines() else "未知错误"
-                item_status[str(idx)]["status"] = "failed"
-                item_status[str(idx)]["stage"] = "失败"
-                item_status[str(idx)]["error"] = msg
-                push_items()
-                on_progress(f"[{idx}/{len(urls)}] 失败：{first_line}")
-                sh = shares_by_url.get(url) or {}
-                items.append({
-                    "index": idx,
-                    "url": url,
-                    "title": str(sh.get("title") or ""),
-                    "author": str(sh.get("author") or ""),
-                    "transcript_relpath": "",
-                    "article_relpath": "",
-                    "error": msg,
-                })
-                continue
-
-
-        succeeded = [it for it in items if not it.get("error")]
-        if not succeeded:
-            raise RuntimeError(f"全部 {len(urls)} 个作品处理失败，详见各作品状态")
-
-        return {"items": items, "asr_dir": str(asr_root)}
-
     # ------------------------------------------------------------
     # 真接入：rw 节点
     # ------------------------------------------------------------
@@ -2243,8 +2119,8 @@ class PipelineRunner:
         if not source_text:
             raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
-        profile = (state.node_configs.get("rw") or {}).get("profile", DEFAULT_RW_PROFILE)
-        system_prompt, user_prompt = _build_rw_prompt(profile, source_text)
+        domain_guidance = _rw_domain_guidance(state.inputs.get("domain"))
+        system_prompt, user_prompt = _build_rw_prompt(source_text, domain_guidance=domain_guidance)
 
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "rw", text)
@@ -2329,7 +2205,6 @@ class PipelineRunner:
             "selected_model_id": None,
             "candidate_count": len(drafts_out),
             "success_count": success_count,
-            "profile": profile,
         }
 
     # ------------------------------------------------------------
@@ -2622,7 +2497,7 @@ def _run_tts_gen_015(
 
 def _asr_stage_label(line: str) -> str | None:
     """从 video_pipeline.py 的 stdout 行识别当前阶段，给作品级状态行做实时 stage 文案。
-    polish（opus 整理）那步不在 video_pipeline 里，由 _execute_asr 单独设置。
+    polish（opus 整理）那步不在 video_pipeline 里，由 asr 转写流程单独设置。
     """
     s = line or ""
     if not s:
@@ -3010,70 +2885,26 @@ def _call_deepseek_for_rw(user_prompt: str, system_prompt: str, model_id: str) -
     return call_deepseek(user_prompt, system_prompt=system_prompt, model=model_id)
 
 
-# RW 体裁 profile（对应飞书 /rw -p 参数）。每个 profile 给一段「体裁定调」task 正文，
-# 复刻 scripts/rewrite_profiles.mjs 各 profile 的 draft prompt 精华，但统一要求输出
-# markdown 文章（RW 抽屉通读 + LINES 再切 beats）。freestyle 不限定体裁。
-RW_PROFILE_META: dict[str, str] = {
-    "douyin_cog": "抖音口播",
-    "toutiao": "头条图文",
-    "caijing": "抖音财经",
-    "jitang": "心灵鸡汤",
-    "freestyle": "自由发挥",
-}
+# RW 写作兜底正文：仅当作品**无垂类标签(domain)**时用这段通用写作要求。
+# 有 domain 时，写作改由 domain_profiles 的 liuyong 槽位（该垂类的完整写作方法，含目标体裁/
+# 结构/语言标准/合规红线）独家驱动——「体裁 profile」这一层已废（格式由垂类标签规定，二者职责重叠）。
+_GENERIC_RW_BODY: list[str] = [
+    "你是资深中文内容写手。请根据下面源文档的内容与气质，写一篇高质量、可直接使用的中文稿件。",
+    "",
+    "【写作要求】",
+    "- 体裁、风格、结构由你判断什么最适合这份素材；",
+    "- 开头黄金 3 秒抛钩子（反差 / 反常识 / 悬念），结尾有力收束；",
+    "- 口语化、强节奏、信息密度高；不堆术语、不写 AI 味套话（如「首先 / 其次 / 综上所述」）；",
+    "- 合理分段，必要时加 `## ` 小标题。",
+]
 
-_RW_PROFILE_BODY: dict[str, list[str]] = {
-    "douyin_cog": [
-        "你是抖音口播稿的资深写手。请把下面的源文档改写成一篇可直接口播的抖音稿。",
-        "",
-        "【体裁要求】",
-        "- 开头黄金 3 秒抛钩子：反差 / 反常识结论 / 悬念，一句话抓住注意力；",
-        "- 四段式推进：钩子 -> 展开冲突或反差 -> 给出洞察/干货 -> 收束 + 行动号召；",
-        "- 全程口语化、第二人称「你」，像对着镜头说话；短句、强节奏，不写书面长句；",
-        "- 善用对比、反转、追问；信息密度高但不堆术语；",
-        "- 不要 AI 味套话（如「首先 / 其次 / 综上所述 / 值得注意的是」）；",
-        "- 正文 1200-1600 字，适配 60-90 秒口播。",
-    ],
-    "toutiao": [
-        "你是【今日头条】爆款图文写手。请把下面的源文档改写成一篇可直接发布的头条图文稿。",
-        "",
-        "【体裁要求】",
-        "- 开头黄金 3 秒抛钩子：用反差 / 反常识结论 / 数据冲击抓住注意力；",
-        "- 正文分 3-5 个大板块层层推进，板块小标题用 `## `；",
-        "- 善用对比、反转、追问句式；信息密度高、可读性强；",
-        "- 结尾收束 + 自然引导评论互动；",
-        "- 正文 1800-2000 字。",
-    ],
-    "caijing": [
-        "你是抖音财经口播稿的资深写手。请把下面的源文档改写成一篇抖音财经口播稿。",
-        "",
-        "【体裁要求】",
-        "- 开头钩子直接抛出核心反差或反常识结论，黄金 3 秒抓注意力；",
-        "- 专业但通俗，把复杂财经逻辑讲得人人能懂；",
-        "- 节奏感强，善用对比、反转、追问；适当复用金句结构；",
-        "- 结尾落到低门槛行动号召，自然引导互动；",
-        "- 正文 1800-2000 字。",
-    ],
-    "jitang": [
-        "你是擅长写抖音情绪向口播稿的中文写手。请把下面的源文档改写成一篇情绪共鸣口播稿。",
-        "",
-        "【体裁要求】",
-        "- 以第二人称「你」为主语，拉近距离；",
-        "- 用具体生活画面替换抽象形容词，让情绪可感；",
-        "- 不要用财经术语包装，不要用「加油 / 你可以的 / 慢慢来」之类的空泛鸡汤套话；",
-        "- 节奏起伏，结尾给一句有力量的收束；",
-        "- 正文 1800-2200 字。",
-    ],
-    "freestyle": [
-        "你是资深中文内容写手。请根据下面源文档的内容与气质自由发挥，写一篇高质量的中文文章。",
-        "",
-        "【体裁要求】",
-        "- 体裁、风格、结构不限，由你判断什么最适合这份素材；",
-        "- 保证可读性：合理分段，必要时加 `## ` 小标题；",
-        "- 有清晰的开头钩子和结尾收束。",
-    ],
-}
 
-DEFAULT_RW_PROFILE = "douyin_cog"
+def _rw_domain_guidance(domain: str | None) -> str | None:
+    """取作品垂类(domain)的写作方法 prompt（domain_profiles.liuyong）；无/未知 domain → None。"""
+    from ncds_opus_factory.server.domain_profiles import get_profile
+
+    dp = get_profile(domain) if domain else None
+    return dp.get("liuyong") if dp else None
 
 
 def _rw_source_text(asr_items: list[dict[str, Any]], job_dir: Path) -> str:
@@ -3157,33 +2988,27 @@ def _apply_rw_qc(model_dir: Path, model_id: str, on_progress: Callable[[str], No
 
 
 def _build_rw_prompt(
-    profile: str,
     source_text: str,
     user_requirements: str = "",
     domain_guidance: str | None = None,
 ) -> tuple[str, str]:
-    """按体裁 profile 构造 RW 的 (system_prompt, user_prompt)。
+    """构造 RW 的 (system_prompt, user_prompt)。
 
-    本阶段产物 = 候选稿 markdown 文章（**不是** beats[] JSON）。RW 关心体裁与叙事质量，
-    LINES 阶段才把定稿切成 beats[]。未知 profile 回退到 freestyle。
+    本阶段产物 = 候选稿 markdown 文章（**不是** beats[] JSON）；LINES 阶段才把定稿切成 beats[]。
 
-    domain_guidance: 来自 domain_profiles 的 liuyong 槽位的领域写作指导，叠加在体裁 profile
-    之上（体裁提供结构底座，domain 提供领域专属调性/合规红线）。None 时行为与原来完全一致。
+    写作要求来源（单一权威，已无「体裁 profile」叠加层）：
+      - domain_guidance（domain_profiles 的 liuyong 槽位）非空 → 它就是该垂类的完整写作方法
+        （含目标体裁/结构/语言标准/合规红线），独家驱动写作；
+      - 为空（作品无垂类标签）→ 回退到通用兜底 _GENERIC_RW_BODY。
     """
-    profile = profile if profile in _RW_PROFILE_BODY else DEFAULT_RW_PROFILE
-    label = RW_PROFILE_META.get(profile, profile)
     system_prompt = (
-        f"你是中文内容改写的资深写手，本次目标体裁是「{label}」。"
-        "请输出 markdown 正文，保留原意、不编造事实，不要输出 JSON 或代码块包裹。"
+        "你是中文内容改写的资深写手。请按下方【写作要求】把源文档改写成一篇可直接使用的中文稿件，"
+        "保留原意、不编造事实，输出 markdown 正文，不要 JSON 或代码块包裹。"
     )
-    parts: list[str] = list(_RW_PROFILE_BODY[profile])
-    # 注入领域写作指导（叠加在体裁底座之上，domain 专属调性/合规红线不散入体裁 profile）。
     if domain_guidance and domain_guidance.strip():
-        parts += [
-            "",
-            "【领域写作要求（叠加在体裁要求之上，同等优先级）】",
-            domain_guidance.strip(),
-        ]
+        parts: list[str] = ["【写作要求】", domain_guidance.strip()]
+    else:
+        parts = list(_GENERIC_RW_BODY)
     parts += [
         "",
         "【通用约束】",
@@ -3341,24 +3166,5 @@ def _read_episode(job_dir: Path) -> dict[str, Any] | None:
         return json.loads(ep_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-
-
-def _load_template_fonts() -> list[dict[str, Any]]:
-    """从模板自带 episode.json 拉 fonts 数组。
-
-    字体清单是模板资源声明（决定浏览器 @font-face 注入 + Inspector 字体下拉选项），
-    不是 rw 模型该决定的内容。所以 rw 产出 episode.json 时直接 inherit 模板的字体清单。
-    单一真理源 = templates/paper_card_talk_015/.015-draft-assets/episode.json#fonts。
-    """
-    tpl_ep = (
-        _template_dir("paper_card_talk_015")
-        / ".015-draft-assets" / "episode.json"
-    )
-    try:
-        ep = json.loads(tpl_ep.read_text(encoding="utf-8"))
-        fonts = ep.get("fonts")
-        return fonts if isinstance(fonts, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
 
 

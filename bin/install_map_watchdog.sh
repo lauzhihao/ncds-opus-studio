@@ -56,7 +56,7 @@ write_plist() {
     <key>ProgramArguments</key>
     <array>
         <string>$PYTHON_BIN</string>
-        <string>$SCRIPT_DIR/map_project_watchdog.py</string>
+        <string>$PROJECT_ROOT/scripts/map_project_watchdog.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$PROJECT_ROOT</string>

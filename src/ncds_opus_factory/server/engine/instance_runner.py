@@ -335,25 +335,29 @@ class InstanceRunner:
             self._emit_decision(instance_id, step_id, decision, note)
             return state
 
-    async def reset_step(self, instance_id: str, step_id: str) -> list[str]:
+    async def reset_step(self, instance_id: str, step_id: str, force: bool = False) -> list[str]:
         """硬重置该步 **及全部传递下游** 为 ``idle``（改稿后下游失效，design §10）。
 
         保留 ``config``（运行参数复用），清运行态（draft/outputs/decision/review/error/时间戳）。
-        ``running`` 步不可重置（拒绝，防扯掉在跑的工作线程）。重置后重算 ``meta`` 状态
-        （completed/failed 实例被重激活为 running）。返回被重置的 step_id（拓扑序）。
+        ``running`` 步默认不可重置（拒绝，防扯掉在跑的工作线程）；``force=True`` 时无条件重置——
+        仅用于调用方已确证旧执行线程已死、引擎步残留 orphan ``running`` 的场景：watcher 宽限期后的
+        asyncio 强制 cancel 只回收 facade、不碰引擎 step（见 pipeline_runner._execute_via_engine；
+        run_node 的 _running_nodes 守卫保证重跑前旧 task 已 done，故 force 安全）。
+        重置后重算 ``meta`` 状态（completed/failed 实例被重激活为 running）。返回被重置的 step_id（拓扑序）。
         """
         async with self._lock_for(instance_id):
             recipe = self._recipe_for(instance_id)
             if step_id not in recipe.step_ids():
                 raise FileNotFoundError(f"step not found: {instance_id}/{step_id}")
             targets = self._with_descendants(recipe, step_id)
-            running = [
-                sid for sid in targets
-                if (st := self.store.get_step_state(instance_id, sid)) is not None
-                and st.status == "running"
-            ]
-            if running:
-                raise ValueError(f"无法重置运行中的步: {running} ({instance_id})")
+            if not force:
+                running = [
+                    sid for sid in targets
+                    if (st := self.store.get_step_state(instance_id, sid)) is not None
+                    and st.status == "running"
+                ]
+                if running:
+                    raise ValueError(f"无法重置运行中的步: {running} ({instance_id})")
             reset_ids = [sid for sid in recipe.topological_order() if sid in targets]
             for sid in reset_ids:
                 old = self.store.get_step_state(instance_id, sid)

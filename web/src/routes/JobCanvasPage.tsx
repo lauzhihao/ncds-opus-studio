@@ -28,7 +28,14 @@ import { AgentCard, type AgentCardData } from '../components/AgentCard';
 import { AgentDrawer } from '../components/AgentDrawer';
 import { PulseEdge } from '../components/PulseEdge';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
-import { AGENTS, agentIndex, agentProgressText, agentStatus, type AgentId } from '../config/agents';
+import {
+  AGENTS,
+  agentIndex,
+  agentProgressText,
+  agentStatus,
+  guiguziChosenStorageKey,
+  type AgentId,
+} from '../config/agents';
 import { parseTitleTags } from '../utils/title';
 
 const NODE_TYPES = { card: AgentCard };
@@ -54,6 +61,8 @@ export function JobCanvasPage() {
   const nav = useNavigate();
   const [pipeline, setPipeline] = useState<PipelineDef | null>(null);
   const [openAgent, setOpenAgent] = useState<AgentId | null>(null);
+  // 选题确认的本地脉冲：解耦后选定选题不再触发 rw 的 SSE，靠它让 angleConfirmed 立即重算翻鬼谷子 DONE。
+  const [angleTick, setAngleTick] = useState(0);
   const { job, connected } = useJobStream(jobId);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<AgentCardData>([]);
@@ -97,11 +106,20 @@ export function JobCanvasPage() {
     });
   }, [job, jobId]);
 
-  // 鬼谷子选题"已确认"= 柳永(rw) 已起步（确认选题即触发 rw）。可靠且响应式，无需 localStorage。
-  const angleConfirmed = useMemo(
-    () => ['queued', 'running', 'done'].includes(job?.nodes.rw?.status ?? 'idle'),
-    [job?.nodes.rw?.status],
-  );
+  // 鬼谷子的"已确认"= 最终选题已选定（持久化于 localStorage，chooseTopic 写入），与柳永(rw) 是否
+  // 起步**解耦**：选定即标 DONE，即便柳永随后被取消/重置/失败/根本没起步，鬼谷子仍保持 DONE
+  // （选题已是它的产出）。兜底：localStorage 缺失但 rw 已起步过（老任务/换设备）也认作已确认。
+  // 响应式来源：angleTick（选题确认脉冲，解耦后选题不触发 SSE）+ job（SSE 脉冲，覆盖刷新/rw 兜底）。
+  const angleConfirmed = useMemo(() => {
+    let chosen = false;
+    try {
+      chosen = !!(jobId && localStorage.getItem(guiguziChosenStorageKey(jobId)));
+    } catch {
+      /* localStorage 不可用时忽略，退回 rw 状态兜底 */
+    }
+    const rwStarted = ['queued', 'running', 'done'].includes(job?.nodes.rw?.status ?? 'idle');
+    return chosen || rwStarted;
+  }, [job, jobId, angleTick]);
 
   // —— 首次：构建 6 个 agent 节点 + 串行连线 + 初始布局
   useEffect(() => {
@@ -294,6 +312,7 @@ export function JobCanvasPage() {
           angleConfirmed={angleConfirmed}
           onClose={() => setOpenAgent(null)}
           onAdvanceAgent={(next) => setOpenAgent(next)}
+          onTopicConfirmed={() => setAngleTick((t) => t + 1)}
         />
       )}
     </div>

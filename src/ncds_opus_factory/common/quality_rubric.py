@@ -212,6 +212,59 @@ def score(text: str, *, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> dict[
     }
 
 
+def build_refine_prompt(text: str, issues: list[str]) -> str:
+    """构造"按 rubric 建议优化口播稿"的 prompt:只针对 issues 改 + 同一套体裁护栏。
+
+    与 build_rubric_prompt 共用护栏精神(保护爆款骨架),但这里是改写而非打分:
+    要求只输出优化后的完整口播稿,不解释、不 JSON、不 markdown 代码块。
+    """
+    bullets = "\n".join(f"- {it}" for it in issues)
+    return "\n".join([
+        "你是抖音知识口播脚本的资深操盘手。下面这条口播稿质检出了几个问题,请只针对这些问题做最小改动优化。",
+        "这是【口播台词】不是书面文章,改完仍要能直接照着念。",
+        "",
+        "== 待优化的问题(只解决这些,别动没问题的地方) ==",
+        bullets,
+        "",
+        "== 硬性护栏(违反就是改坏了) ==",
+        "- 金句收尾、3-4 招分点结构、冒犯式反差钩子、长口播、可照搬的逐字台词:这些是爆款要素,一律保留,不许为了'简洁'删掉。",
+        "- 不要把锋芒/观点/情绪/攻击性改没了——口播就是要这些。",
+        "- 不要新增注水、车轱辘话、过度叮嘱;不要把短句顿挫全改成书面长句。",
+        "- 只改 issues 指出的地方,其余原文尽量逐字保留。",
+        "",
+        "== 输出格式 ==",
+        "只输出优化后的【完整口播稿正文】,从第一句到最后一句。不要任何解释、不要前言、不要 JSON、不要 markdown 代码块包裹。",
+        "",
+        "== 原稿 ==",
+        text,
+    ])
+
+
+def refine(
+    text: str, issues: list[str], *, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+) -> str | None:
+    """按 rubric 优化建议(issues)重写一条口播稿,返回优化后的全文。
+
+    定位:这是"按建议优化"按钮的后端能力——不重新生成,只基于现有稿+issues 做最小改动。
+    opus 不可用 / 调用失败 / 输出过短 -> 返回 None(由调用方决定保留原稿,绝不抛异常)。
+    """
+    if not available() or not text.strip() or not issues:
+        return None
+    try:
+        raw = _call_opus_judge(build_refine_prompt(text, issues), timeout_seconds)
+    except Exception:  # 优化失败不致命,调用方保留原稿
+        return None
+    out = (raw or "").strip()
+    if not out:
+        return None
+    # 剥模型偶发自带的 ```markdown ... ``` 包裹
+    if out.startswith("```"):
+        inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", out)
+        if inner:
+            out = inner.group(1).strip()
+    return out or None
+
+
 if __name__ == "__main__":
     import sys
 

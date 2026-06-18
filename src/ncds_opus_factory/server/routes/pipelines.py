@@ -18,6 +18,7 @@ POST   /jobs/{job_id}/nodes/{node}/run           跑某节点（会 reset 自身
 POST   /jobs/{job_id}/nodes/{node}/cancel        取消正在跑的节点
 PUT    /jobs/{job_id}/nodes/{node}/position      更新节点画布位置
 POST   /jobs/{job_id}/nodes/rw/rewrite/{model}   单模型重写 rw draft
+POST   /jobs/{job_id}/nodes/rw/refine/{model}    按 rubric 建议优化某模型 draft
 PUT    /jobs/{job_id}/nodes/rw/select            选某模型 draft 为定稿
 POST   /jobs/{job_id}/nodes/image/regen/{scene}  重生某 scene 容器图
 POST   /jobs/{job_id}/nodes/tts/regen-scene/{s}  重生某 scene 音频
@@ -250,6 +251,17 @@ async def rewrite_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
     except KeyError as e:
         raise HTTPException(404, _exc_msg(e))
     except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "job_id": job_id, "model_id": model_id}
+
+
+@router.post("/jobs/{job_id}/nodes/rw/refine/{model_id}")
+async def refine_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
+    try:
+        await PIPELINE_RUNNER.refine_rw_model(job_id, model_id)
+    except KeyError as e:
+        raise HTTPException(404, _exc_msg(e))
+    except (ValueError, FileNotFoundError) as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "model_id": model_id}
 

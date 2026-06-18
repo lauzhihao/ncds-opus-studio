@@ -28,7 +28,6 @@ from ncds_opus_core.templates import template_dir as _template_dir
 from ncds_opus_factory.commands import render_015
 from ncds_opus_factory.server import storyboard_director
 from ncds_opus_factory.server.pipeline_runner import (
-    DEFAULT_RW_PROFILE,
     MODEL_CANDIDATES,
     _ModelUnavailable,
     _build_lines_prompt,
@@ -129,7 +128,7 @@ def _episode_path(job_dir: Path) -> Path:
 
 # ---------------------------------------------------------------------------
 # ASR performer：串行跑每条 URL → video_pipeline.py 转写 + opus polish 成文章。
-# 忠实复刻 PipelineRunner._execute_asr，做了以下替换：
+# 转写逻辑的唯一实现（早期画布执行已删）。相对画布执行模式做了以下替换：
 #   - state.inputs["urls"] → 参数 urls
 #   - self.video_jobs_dir/job_id → Path(job_dir)
 #   - 跨 job 下载缓存从 self.video_jobs_dir/"_downloads" → Path(job_dir).parent/"_downloads"
@@ -147,7 +146,7 @@ def run_asr_step(
 ) -> dict[str, Any]:
     """ASR：串行处理每条媒体 URL，产出 transcript + opus 整理稿 article.md。
 
-    产物布局（与 PipelineRunner._execute_asr 完全对齐）：
+    产物布局：
       01_asr/{idx}/deliverables/result.json    — video_pipeline.py 产出
       01_asr/{idx}/article.md                  — opus polish 后的文章（或 fallback 到 transcript）
     """
@@ -256,7 +255,7 @@ def run_asr_step(
                 raise RuntimeError(f"transcript 缺失或不存在: {transcript_abs}")
 
             # 文章整理：调本机 opus polish 原始 transcript 成 markdown 文章。
-            # 同 PipelineRunner._execute_asr，幂等命中则跳过 opus；失败时 fallback 到 transcript 路径。
+            # 幂等命中则跳过 opus；失败时 fallback 到 transcript 路径。
             article_path = item_dir / "article.md"
             share = shares_by_url.get(url) or {}
             try:
@@ -312,11 +311,11 @@ def run_asr_step(
 # RW performer：4 模型并行改写，同步包装 asyncio 并发。
 # 忠实复刻 PipelineRunner._execute_rw，做了以下替换：
 #   - state.nodes["asr"].outputs.items → 参数 asr_items
-#   - state.node_configs["rw"]["profile"] → 参数 profile（缺省 DEFAULT_RW_PROFILE）
 #   - self.video_jobs_dir/job_id → Path(job_dir)
 #   - self._push_progress → on_progress
 #   - 删掉 push_model_progress/push_outputs_patch 增量进度，on_status 给 no-op；
 #     关键进度经 on_progress 文本透出。
+# 写作要求由作品垂类标签(domain)的 liuyong 写作方法独家驱动（「体裁 profile」已废）。
 # 同步函数（引擎在 to_thread 里跑）：内部用 asyncio.run() 跑 gather 并发，
 # 不改成串行，保留原版 4 模型真并发语义。
 # ---------------------------------------------------------------------------
@@ -325,7 +324,6 @@ def run_rw_step(
     *,
     job_dir: str,
     asr_items: list[dict[str, Any]],
-    profile: str | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """RW：4 模型并行改写，产出 02_rw/{model_id}/draft.md。
@@ -333,8 +331,8 @@ def run_rw_step(
     产物布局（与 PipelineRunner._execute_rw 完全对齐）：
       02_rw/{model_id}/draft.md     — 各模型 markdown 改写稿（仅 success）
 
-    kwargs 中的 domain（由 instance_runner 从 instance inputs 透传）用于取领域写作指导；
-    其余未知 kwargs 忽略（向前兼容）。
+    kwargs 中的 domain（由 instance_runner 从 instance inputs 透传）取该垂类的写作方法
+    （domain_profiles.liuyong）驱动写作；其余未知 kwargs 忽略（向前兼容）。
     """
     jd = Path(job_dir)
     if not asr_items:
@@ -348,17 +346,16 @@ def run_rw_step(
     if not source_text:
         raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
-    effective_profile = profile if profile is not None else DEFAULT_RW_PROFILE
     # domain 由 instance_runner 从 instance inputs 透传（task-2.2 已落地）；
-    # 取 domain_profiles 的 liuyong 槽位作为领域写作指导，叠加在体裁 profile 之上。
-    # domain 为空或 profile 无 liuyong 时 domain_guidance=None，行为与原来完全一致。
+    # 取 domain_profiles 的 liuyong 槽位作为该垂类的写作方法，独家驱动写作。
+    # domain 为空或无 liuyong 时 domain_guidance=None → _build_rw_prompt 回退通用兜底。
     domain: str | None = kwargs.get("domain")
     domain_guidance: str | None = None
     if domain:
         dp = _get_domain_profile(domain)
         if dp is not None:
             domain_guidance = dp.get("liuyong")
-    system_prompt, user_prompt = _build_rw_prompt(effective_profile, source_text, domain_guidance=domain_guidance)
+    system_prompt, user_prompt = _build_rw_prompt(source_text, domain_guidance=domain_guidance)
 
     on_progress(f"4 模型并行启动；source={len(source_text)} 字")
 
@@ -438,7 +435,6 @@ def run_rw_step(
         "selected_model_id": None,
         "candidate_count": len(drafts_out),
         "success_count": success_count,
-        "profile": effective_profile,
     }
 
 

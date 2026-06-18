@@ -10,7 +10,7 @@
 // 注：本阶段（A）RW 不再出 beats JSON；LINES 节点接收 02_rw/draft.md 后调 LLM 把它结构化。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Play, RefreshCw, Square } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Play, RefreshCw, Sparkles, Square } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type { NodeState, PipelineNodeDef, RwDraft } from '../../api/types';
@@ -26,15 +26,7 @@ interface Props {
 
 const NEXT_NODE = 'lines';
 
-// RW 体裁选项（对应飞书 /rw -p 参数）。freestyle = 无固定提示词，模型自由发挥。
-const RW_PROFILES: { id: string; label: string }[] = [
-  { id: 'douyin_cog', label: '抖音口播' },
-  { id: 'toutiao', label: '头条图文' },
-  { id: 'caijing', label: '抖音财经' },
-  { id: 'jitang', label: '心灵鸡汤' },
-  { id: 'freestyle', label: '自由发挥' },
-];
-const DEFAULT_RW_PROFILE = 'douyin_cog';
+// 体裁 profile 已废：写作由作品垂类标签(domain)的写作方法独家驱动，柳永不再让用户选体裁。
 
 const RUBRIC_DIMS = ['节奏', '真实性', '精炼度', '直接性', '信任度'];
 
@@ -93,21 +85,33 @@ function QcRadar({ dims, max = 10, size = 180 }: { dims: Record<string, number>;
 
 // 柳永质检报告：AI 味 verdict + rubric 5 维度雷达图（对齐 app liuyong 详情页 _QCReport）。
 // 质检字段（qc/qc_rubric）由后端质检闸门产出；还在后台跑时字段未到，整块不渲染。
-function QcReport({ draft }: { draft?: RwDraft }) {
+// AI 味 verdict 只在「仍超标」(fail) 时提示：pass 是自动打回重写后的常态终判，
+// 对用户无信息量、反像系统自言自语，故 pass 时静默（只留质量等级 pill）。
+function QcReport({
+  draft,
+  onRefine,
+  refining,
+  canRefine,
+}: {
+  draft?: RwDraft;
+  onRefine?: () => void;
+  refining?: boolean;
+  canRefine?: boolean;
+}) {
   if (!draft || draft.status !== 'success') return null;
   const qc = draft.qc;
   const rub = draft.qc_rubric;
   if (!qc && !rub) return null;
-  const pass = qc?.verdict === 'pass';
+  const showFail = qc?.verdict === 'fail';
   return (
     <div className="rw-qc-report">
-      {/* 顶部一行：AI 味 verdict（左）+ 质量等级 pill（右） */}
-      {(qc?.verdict || rub?.grade) && (
+      {/* 顶部一行：AI 味「仍超标」告警（仅 fail，左）+ 质量等级 pill（右） */}
+      {(showFail || rub?.grade) && (
         <div className="rw-qc-head">
-          {qc?.verdict ? (
-            <span className={`rw-qc-verdict ${pass ? 'pass' : 'fail'}`}>
-              {pass ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
-              AI 味 {pass ? '通过' : '仍超标'}
+          {showFail ? (
+            <span className="rw-qc-verdict fail">
+              <AlertTriangle size={14} />
+              AI 味仍超标
             </span>
           ) : (
             <span />
@@ -129,7 +133,27 @@ function QcReport({ draft }: { draft?: RwDraft }) {
 
       {rub?.issues && rub.issues.length > 0 && (
         <div className="rw-qc-issues">
-          <span className="rw-qc-issues-label">优化建议</span>
+          <div className="rw-qc-issues-head">
+            <span className="rw-qc-issues-label">优化建议</span>
+            {onRefine && (
+              <button
+                type="button"
+                className="btn sm primary rw-qc-refine-btn"
+                disabled={!canRefine}
+                title={
+                  refining
+                    ? '优化中…'
+                    : canRefine
+                      ? '让模型按上述建议优化当前稿（保留爆款骨架），改完自动重跑质检'
+                      : '需先等本模型完成'
+                }
+                onClick={onRefine}
+              >
+                <Sparkles size={11} strokeWidth={1.9} />
+                {refining ? '优化中…' : '立即优化'}
+              </button>
+            )}
+          </div>
           {rub.issues.slice(0, 3).map((it, i) => (
             <span key={i} className="rw-qc-issue" title={it}>
               {it}
@@ -160,21 +184,23 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   const selectedModelId =
     (nodeState.outputs?.selected_model_id as string | null | undefined) ?? null;
   const status = nodeState.status;
-  // 体裁 profile：idle 时用户可选（本地 state）；跑过后 outputs.profile 是实际用的体裁
-  const ranProfile = nodeState.outputs?.profile as string | undefined;
-  const [profile, setProfile] = useState<string>(ranProfile || DEFAULT_RW_PROFILE);
-  // 跑完后同步成实际用的体裁（done/running 时锁定显示）
+
+  // 节点真正离开 running/queued（SSE 翻状态/取消落地/失败）后，清掉乐观「停止中」态。
   useEffect(() => {
-    if (ranProfile) setProfile(ranProfile);
-  }, [ranProfile]);
-  const profileLocked = status === 'running' || status === 'queued' || status === 'done';
+    if (status !== 'running' && status !== 'queued') setStopping(false);
+  }, [status]);
 
   const [tab, setTab] = useState<string>(successDrafts[0]?.model_id ?? '');
   const [cache, setCache] = useState<Record<string, string>>({});
   const [loadingTab, setLoadingTab] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [rewriteBusy, setRewriteBusy] = useState(false);
+  const [refineBusy, setRefineBusy] = useState(false);
   const [pendingRerun, setPendingRerun] = useState(false);
+  // 乐观「停止中…」过渡态：cancel 是协作式的，POST 秒回 {cancelled:true} 只是信号已收下，
+  // 节点要等 worker 跑到检查点真正停下、SSE 把 status 翻出 running 才落地。点「停止」即进入此态，
+  // 给即时反馈（不伪造 idle——进程确实还在跑）；status 离开 running/queued 后自动清。
+  const [stopping, setStopping] = useState(false);
 
   // tab 未设或当前 tab 已不在成功列表里（如增量过程中），落到第一个成功稿
   useEffect(() => {
@@ -254,7 +280,7 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   async function doRun() {
     setActionBusy(true);
     try {
-      await api.runNode(jobId, nodeDef.name, { profile });
+      await api.runNode(jobId, nodeDef.name);
     } catch (e) {
       showToast('启动失败，请稍后再试');
       console.error('[LiuyongPanel] 启动失败', e);
@@ -265,9 +291,11 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
 
   async function doCancel() {
     setActionBusy(true);
+    setStopping(true); // 乐观进入「停止中…」：真正 idle 等 SSE 翻 status（见 stopping 注释）
     try {
       await api.cancelNode(jobId, nodeDef.name);
     } catch (e) {
+      setStopping(false); // 取消请求本身失败，回滚过渡态
       showToast('停止失败，请稍后再试');
       console.error('[LiuyongPanel] 停止失败', e);
     } finally {
@@ -294,6 +322,27 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
     }
   }
 
+  // 「按建议优化」：把当前 tab 的稿连同 rubric issues 交给后端，让 opus 按建议最小改动优化。
+  // 是长 await（opus 几分钟）；后端改完会重跑质检并 emit 新 qc_rubric，前端清缓存重拉 draft.md。
+  async function doRefineTab() {
+    if (!tab) return;
+    setRefineBusy(true);
+    try {
+      await flushDrafts(); // 先落盘用户当前编辑，避免被优化稿覆盖丢失
+      await api.refineRwModel(jobId, tab);
+      setCache((c) => {
+        const next = { ...c };
+        delete next[tab];
+        return next;
+      });
+    } catch (e) {
+      showToast('优化失败，请稍后再试');
+      console.error('[LiuyongPanel] 按建议优化失败', e);
+    } finally {
+      setRefineBusy(false);
+    }
+  }
+
   async function doAdvance() {
     if (!tab) return;
     setActionBusy(true);
@@ -313,8 +362,8 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   function renderActionBtn() {
     if (status === 'running' || status === 'queued') {
       return (
-        <button className="btn primary sm" disabled={actionBusy} onClick={doCancel}>
-          <Square size={11} strokeWidth={2.2} fill="currentColor" /> 停止
+        <button className="btn primary sm" disabled={actionBusy || stopping} onClick={doCancel}>
+          <Square size={11} strokeWidth={2.2} fill="currentColor" /> {stopping ? '停止中…' : '停止'}
         </button>
       );
     }
@@ -349,14 +398,23 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   const loading = loadingTab === tab;
   const currentDraft = drafts.find((d) => d.model_id === tab);
   // 成功的稿件默认可编辑（textarea 直接改 + 防抖落盘）；失败/加载中不可编辑
-  const editable = currentDraft?.status === 'success' && !loading;
+  const editable = currentDraft?.status === 'success' && !loading && !refineBusy;
   // 单模型重试：节点不在跑 + 本模型当前不在 rewrite + (本模型 success 或 failed)
   const canRewriteThisTab =
     !rewriteBusy &&
+    !refineBusy &&
     !actionBusy &&
     status === 'done' &&
     currentDraft != null &&
     currentDraft.status !== undefined;
+  // 「按建议优化」可用：节点 done + 本稿 success + 有 rubric issues + 无其他进行中操作
+  const canRefineThisTab =
+    !refineBusy &&
+    !rewriteBusy &&
+    !actionBusy &&
+    status === 'done' &&
+    currentDraft?.status === 'success' &&
+    (currentDraft?.qc_rubric?.issues?.length ?? 0) > 0;
 
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
   if (drafts.length === 0 && status === 'idle') {
@@ -366,23 +424,6 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   return (
     <div className="rw-panel-root liuyong-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
-
-      {/* 体裁选项（-p）：idle 可选，running/done 锁定显示实际用的体裁 */}
-      <div className="rw-profile-bar">
-        <span className="rw-profile-label">体裁</span>
-        {RW_PROFILES.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className={`rw-profile-chip${profile === p.id ? ' active' : ''}`}
-            disabled={profileLocked}
-            onClick={() => setProfile(p.id)}
-            title={p.id === 'freestyle' ? '无固定提示词，模型按原文自由发挥' : `-p ${p.id}`}
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
 
       <div className="rw-panel-header">
         <div
@@ -429,7 +470,7 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
               type="button"
               className="btn sm icon-only primary"
               title="用此模型 · 下一步（启动 lines）"
-              disabled={actionBusy || status !== 'done' || !tab}
+              disabled={actionBusy || refineBusy || status !== 'done' || !tab}
               onClick={doAdvance}
             >
               <Play size={12} strokeWidth={2} fill="currentColor" />
@@ -449,7 +490,12 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
             />
           )}
           {/* 质检报告放在改写正文下方 */}
-          <QcReport draft={currentDraft} />
+          <QcReport
+            draft={currentDraft}
+            onRefine={doRefineTab}
+            refining={refineBusy}
+            canRefine={canRefineThisTab}
+          />
         </>
       )}
 

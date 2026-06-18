@@ -210,41 +210,6 @@ textarea.code-pane.editable {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.2; }
 }
-/* RW 体裁选项栏（-p profile 选择） */
-.rw-profile-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s-2);
-  margin-bottom: var(--s-3);
-}
-.rw-profile-label {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  color: var(--ink-3);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.rw-profile-chip {
-  padding: 3px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  background: transparent;
-  color: var(--ink-2);
-  font-size: var(--text-xs);
-  cursor: pointer;
-  transition: all 0.12s;
-}
-.rw-profile-chip:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink-1); }
-.rw-profile-chip.active {
-  border-color: var(--accent, #4285F4);
-  background: var(--accent-tint, rgba(66, 133, 244, 0.1));
-  color: var(--accent, #4285F4);
-  font-weight: 500;
-}
-.rw-profile-chip:disabled { cursor: default; opacity: 0.75; }
-.rw-profile-chip.active:disabled { opacity: 1; }
-
 /* 统一提示 banner（面板标题上方，带左色条） */
 .panel-hint {
   padding: var(--s-2) var(--s-3);
@@ -776,6 +741,17 @@ textarea.code-pane.editable:focus {
   gap: 6px;
   padding-top: var(--s-3);
   border-top: 1px solid var(--border);
+}
+/* 优化建议小标题行：左标题 + 右「按建议优化」按钮 */
+.rw-qc-issues-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.rw-qc-refine-btn {
+  flex-shrink: 0;
+  gap: 4px;
 }
 .rw-qc-issues-label {
   font-family: var(--font-mono);

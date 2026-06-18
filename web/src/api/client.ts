@@ -115,6 +115,10 @@ export const api = {
     post<{ ok: boolean; job_id: string; model_id: string }>(
       `/jobs/${jobId}/nodes/rw/rewrite/${modelId}`,
     ),
+  refineRwModel: (jobId: string, modelId: string) =>
+    post<{ ok: boolean; job_id: string; model_id: string }>(
+      `/jobs/${jobId}/nodes/rw/refine/${modelId}`,
+    ),
   selectRwModel: (jobId: string, modelId: string) =>
     put<{ ok: boolean; job_id: string; selected_model_id: string }>(
       `/jobs/${jobId}/nodes/rw/select`,

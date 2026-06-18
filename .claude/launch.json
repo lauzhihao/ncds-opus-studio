@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "studio",
-      "runtimeExecutable": "./scripts/dev_up.sh",
+      "runtimeExecutable": "./bin/dev_up.sh",
       "runtimeArgs": ["status"],
       "port": 8810
     },
