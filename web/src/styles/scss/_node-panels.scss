@@ -227,6 +227,32 @@ textarea.code-pane.editable {
   color: var(--status-failed, #d1242f);
 }
 
+/* 节点 5 分钟强制超时告警：钉在抽屉(.drawer)右下角的直角标签（取代旧的全局 toast 页面右下角）。
+   .body 为 static、.drawer 为 fixed —— absolute 包含块落在 .drawer，故不被 body 滚动裁剪。 */
+.nsb-timeout-tag {
+  position: absolute;
+  right: var(--s-4);
+  bottom: var(--s-4);
+  z-index: 5;
+  max-width: calc(100% - var(--s-5) * 2);
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 0; /* 直角标签 */
+  box-shadow:
+    inset 3px 0 0 var(--status-failed),
+    var(--shadow-4);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--ink-1);
+  animation: toast-in var(--dur-base) var(--ease-out);
+}
+.nsb-timeout-tag svg { flex: none; color: var(--status-failed); }
+
 /* 抽屉顶部统一节点状态条：沿用 panel-hint 的直角 + 左色条风格（border-radius:0）。
    左色条 = 状态指示灯：running/queued 呼吸、done/failed 静止。 */
 .node-status-bar {

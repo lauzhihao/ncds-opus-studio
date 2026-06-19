@@ -1,6 +1,6 @@
 // 抽屉顶部统一节点状态条：左侧色条 = 状态指示灯（沿用 panel-hint 的直角风格，border-radius:0）。
 // running/queued 呼吸 + 实时计时；done/failed 静止 + 总耗时；failed 展开错误信息 + 任务 ID（可一键复制）。
-// running 满 5 分钟前端强制超时：自动调 cancel（已幂等）止损。idle 不渲染——交给面板内引导。
+// running 满 5 分钟前端强制超时：自动调 cancel（已幂等）止损 + 在抽屉右下角弹直角告警标签，标签持续到节点脱离运行态（按钮恢复「开始改写」）为止。idle 不渲染——交给面板内引导。
 
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Copy, Loader2 } from 'lucide-react';
@@ -8,7 +8,6 @@ import { AlertTriangle, CheckCircle2, Copy, Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import type { NodeState, NodeStatus } from '../api/types';
 import { formatElapsed } from '../utils/format';
-import { useToast } from './Toast';
 
 const TIMEOUT_S = 300; // 前端强制超时：5 分钟
 
@@ -22,10 +21,11 @@ const STATUS_ZH: Record<NodeStatus, string> = {
 
 export function NodeStatusBar({ nodeState, jobId }: { nodeState: NodeState; jobId: string }) {
   const { name, status, progress, error, task_id, started_at, finished_at } = nodeState;
-  const { showToast } = useToast();
   const [copied, setCopied] = useState(false);
   const [nowS, setNowS] = useState(() => Date.now() / 1000);
   const timedOutRef = useRef(false);
+  // 超时告警标签（抽屉右下角直角标签，脱离全局 toast 页面层）显隐。
+  const [timedOut, setTimedOut] = useState(false);
 
   const active = status === 'running' || status === 'queued';
 
@@ -37,20 +37,23 @@ export function NodeStatusBar({ nodeState, jobId }: { nodeState: NodeState; jobI
     return () => window.clearInterval(id);
   }, [active]);
 
-  // 离开运行态（结束/重置）时复位超时闸，允许下一轮重跑再计时。
+  // 离开运行态（结束/取消/重置）时复位超时闸与告警标签：节点回 idle/failed 即按钮恢复「开始改写」，标签随之撤下。
   useEffect(() => {
-    if (!active) timedOutRef.current = false;
+    if (!active) {
+      timedOutRef.current = false;
+      setTimedOut(false);
+    }
   }, [active]);
 
-  // 5 分钟强制超时：自动调取消（cancel 已幂等，必成功 → 节点回 idle、脱离 loading）。
+  // 5 分钟强制超时：弹抽屉内告警 + 自动调取消（cancel 已幂等，必成功 → 节点回 idle、脱离 loading）。
   useEffect(() => {
     if (!active || started_at == null || timedOutRef.current) return;
     if (nowS - started_at > TIMEOUT_S) {
       timedOutRef.current = true;
-      showToast('本步骤已运行超 5 分钟，已自动取消');
+      setTimedOut(true);
       api.cancelNode(jobId, name).catch(() => { /* 失败静默；SSE 仍会纠偏 */ });
     }
-  }, [active, started_at, nowS, jobId, name, showToast]);
+  }, [active, started_at, nowS, jobId, name]);
 
   // 空闲态不占位。
   if (status === 'idle') return null;
@@ -81,31 +84,40 @@ export function NodeStatusBar({ nodeState, jobId }: { nodeState: NodeState; jobI
   }
 
   return (
-    <div className={`node-status-bar status-${status}`} role="status" aria-live="polite">
-      <div className="nsb-main">
-        {active && <Loader2 className="nsb-icon spin" size={15} strokeWidth={2} />}
-        {status === 'done' && <CheckCircle2 className="nsb-icon" size={15} strokeWidth={1.9} />}
-        {status === 'failed' && <AlertTriangle className="nsb-icon" size={15} strokeWidth={1.9} />}
-        <span className="nsb-status">{STATUS_ZH[status]}</span>
-        {elapsedText && <span className="nsb-elapsed">{elapsedText}</span>}
-        {active && progress && <span className="nsb-progress">{progress}</span>}
-        {/* running/done 也露出任务ID（failed 在下方详情块带复制按钮，这里不重复） */}
-        {status !== 'failed' && task_id && (
-          <span className="nsb-taskid nsb-taskid-inline">任务 ID&nbsp;&nbsp;{task_id}</span>
+    <>
+      <div className={`node-status-bar status-${status}`} role="status" aria-live="polite">
+        <div className="nsb-main">
+          {active && <Loader2 className="nsb-icon spin" size={15} strokeWidth={2} />}
+          {status === 'done' && <CheckCircle2 className="nsb-icon" size={15} strokeWidth={1.9} />}
+          {status === 'failed' && <AlertTriangle className="nsb-icon" size={15} strokeWidth={1.9} />}
+          <span className="nsb-status">{STATUS_ZH[status]}</span>
+          {elapsedText && <span className="nsb-elapsed">{elapsedText}</span>}
+          {active && progress && <span className="nsb-progress">{progress}</span>}
+          {/* running/done 也露出任务ID（failed 在下方详情块带复制按钮，这里不重复） */}
+          {status !== 'failed' && task_id && (
+            <span className="nsb-taskid nsb-taskid-inline">任务 ID&nbsp;&nbsp;{task_id}</span>
+          )}
+        </div>
+
+        {status === 'failed' && (error || task_id) && (
+          <div className="nsb-fail">
+            {error && <div className="nsb-error">{error}</div>}
+            <div className="nsb-meta">
+              {task_id && <span className="nsb-taskid">任务 ID&nbsp;&nbsp;{task_id}</span>}
+              <button className="btn ghost sm nsb-copy" onClick={copyReport}>
+                <Copy size={12} strokeWidth={1.8} /> {copied ? '已复制' : '复制'}
+              </button>
+            </div>
+          </div>
         )}
       </div>
 
-      {status === 'failed' && (error || task_id) && (
-        <div className="nsb-fail">
-          {error && <div className="nsb-error">{error}</div>}
-          <div className="nsb-meta">
-            {task_id && <span className="nsb-taskid">任务 ID&nbsp;&nbsp;{task_id}</span>}
-            <button className="btn ghost sm nsb-copy" onClick={copyReport}>
-              <Copy size={12} strokeWidth={1.8} /> {copied ? '已复制' : '复制'}
-            </button>
-          </div>
+      {timedOut && active && (
+        <div className="nsb-timeout-tag" role="alert">
+          <AlertTriangle size={15} strokeWidth={1.9} />
+          <span>本步骤已运行超 5 分钟，已自动取消</span>
         </div>
       )}
-    </div>
+    </>
   );
 }
