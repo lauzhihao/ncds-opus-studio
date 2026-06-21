@@ -300,6 +300,7 @@ class TestGuiguziAnalyzeDomain:
 
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_opus", fake_call_opus)
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_deepseek", fake_call_deepseek)
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_agy", fake_call_deepseek)
 
         guiguzi.analyze(self._ITEMS, domain="finance")
 
@@ -340,6 +341,7 @@ class TestGuiguziAnalyzeDomain:
 
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_opus", fake_call)
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_deepseek", fake_call)
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_agy", fake_call)
 
         guiguzi.analyze(self._ITEMS, domain="unknown_xyz")
 
@@ -375,6 +377,7 @@ class TestGuiguziGenerateTopicsDomain:
 
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_opus", fake_call)
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_deepseek", fake_call)
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_agy", fake_call)
         # stub topic_store.merge 避免文件副作用
         monkeypatch.setattr("ncds_opus_factory.common.topic_store.merge",
                             lambda topics, **_: {"added": len(topics), "skipped": 0})
@@ -399,6 +402,7 @@ class TestGuiguziGenerateTopicsDomain:
 
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_opus", fake_call)
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_deepseek", fake_call)
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_agy", fake_call)
         monkeypatch.setattr("ncds_opus_factory.common.topic_store.merge",
                             lambda topics, **_: {"added": len(topics), "skipped": 0})
 
@@ -425,6 +429,7 @@ class TestGuiguziGenerateTopicsDomain:
 
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_opus", fake_call)
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_deepseek", fake_call)
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_agy", fake_call)
         monkeypatch.setattr("ncds_opus_factory.common.topic_store.merge",
                             lambda topics, **_: {"added": len(topics), "skipped": 0})
 

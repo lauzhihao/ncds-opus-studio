@@ -145,13 +145,18 @@ html, body { overflow-x: hidden; }
     background: var(--accent-tint);
     font-weight: 600;
   }
-  /* 非活跃列隐藏，切换为单列 */
+  /* 非活跃列隐藏，切换为单列（3模型通用） */
   .guiguzi-cols.tab-active-opus .model-deepseek,
-  .guiguzi-cols.tab-active-deepseek .model-opus {
+  .guiguzi-cols.tab-active-opus .model-agy,
+  .guiguzi-cols.tab-active-deepseek .model-opus,
+  .guiguzi-cols.tab-active-deepseek .model-agy,
+  .guiguzi-cols.tab-active-agy .model-opus,
+  .guiguzi-cols.tab-active-agy .model-deepseek {
     display: none;
   }
   .guiguzi-cols.tab-active-opus,
-  .guiguzi-cols.tab-active-deepseek {
+  .guiguzi-cols.tab-active-deepseek,
+  .guiguzi-cols.tab-active-agy {
     grid-template-columns: 1fr;
   }
 

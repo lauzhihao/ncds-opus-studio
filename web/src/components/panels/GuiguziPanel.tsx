@@ -1,10 +1,11 @@
-// 鬼谷子（选题）面板 —— 两步流·评论驱动双模型。
+// 鬼谷子（选题）面板 —— 两步流·评论驱动多模型。
 //
 // 沈括(asr) 完成后，用户在沈括面板点选 1-5 条高赞评论作选题参考（存 localStorage）。本面板：
-//   A. 已选评论 +「分析爆款原因」按钮 → 第一步 analyze（双模型并行反推爆款原因，不固定赛道）。
-//   B. 双栏展示两模型的结构化分析，用户**可编辑** + 每栏「用这份分析出选题」→ 第二步 generate。
-//   C. 双栏展示选题，hover 选定一个（N 选 1）→ 放行柳永(rw) 出稿。
+//   A. 已选评论 +「分析爆款原因」按钮 → 第一步 analyze（多模型并行反推爆款原因，不固定赛道）。
+//   B. 多栏展示各模型的结构化分析，用户**可编辑** + 每栏「用这份分析出选题」→ 第二步 generate。
+//   C. 多栏展示选题，hover 选定一个（N 选 1）→ 放行柳永(rw) 出稿。
 // 评论变化时支持增量「更新选题」/ 全量「重新选题」；改分析则回 A 点「重新分析」。
+// 不可用的模型（如 opus 订阅过期）自动隐藏，不展示也不显示错误。
 
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
 import { FileText, Heart, Lightbulb, Loader2, MessageCircle, PenLine, Search, Sparkles } from 'lucide-react';
@@ -25,21 +26,24 @@ import { useToast } from '../Toast';
 interface Props {
   jobId: string;
   job: JobState;
-  onConfirmed?: () => void; // 确认选题后推进到柳永
-  onGotoShenkuo?: () => void; // 空状态里「沈括」链接：切换到沈括面板去采集/选评论
+  onConfirmed?: () => void;
+  onGotoShenkuo?: () => void;
 }
 
-// 抖音口径点赞数：<1w 原样，<1亿 用 w，≥1亿 用 亿（与沈括面板一致）。
+// 模型元信息：name → label
+const MODEL_META: Record<string, string> = {
+  opus: 'Opus 4.8',
+  deepseek: 'DeepSeek',
+  agy: 'AGY',
+};
+const ALL_MODELS = Object.keys(MODEL_META);
+
 function diggCount(n: number): string {
   if (n >= 1e8) return `${(n / 1e8).toFixed(1)}亿`;
   if (n >= 1e4) return `${(n / 1e4).toFixed(1)}w`;
   return String(n);
 }
 
-// 自动贴合内容高度的 textarea。
-//   - 不传 fitKey：每次输入都重算高度（随文字增长，永不滚动）——给分析字段用。
-//   - 传 fitKey：只在 fitKey 变化时（如提示词重新加载）按内容贴合一次；之后高度固定，
-//     用户编辑变长则框内滚动（配合 CSS overflow-y:auto）——给选题提示词用。
 function AutoTextarea({
   value,
   fitKey,
@@ -50,7 +54,6 @@ function AutoTextarea({
     const el = ref.current;
     if (!el) return;
     el.style.height = 'auto';
-    // +6 缓冲：border-top(1px) + 子像素取整，避免恰好贴合时仍冒出滚动条
     el.style.height = `${el.scrollHeight + (fitKey === undefined ? 0 : 6)}px`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, fitKey === undefined ? [value] : [fitKey]);
@@ -70,20 +73,18 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
   const { showToast } = useToast();
   const [items, setItems] = useState<GuiguziItem[]>(() => readItems(jobId));
   const [result, setResult] = useState<GuiguziResult | null>(null);
-  const [busyAction, setBusyAction] = useState(false); // 提交中（提交后由轮询接管）
+  const [busyAction, setBusyAction] = useState(false);
   const [chosenTitle, setChosenTitle] = useState<string | null>(null);
-  // 第一步分析的可编辑副本（用户改完再 2 选 1 出选题）。
-  const [edits, setEdits] = useState<{ opus?: GuiguziAnalysis; deepseek?: GuiguziAnalysis }>({});
-  const [activeAnalysisTab, setActiveAnalysisTab] = useState<'opus' | 'deepseek'>('opus');
-  // 切换 tab 时新显列的 AutoTextarea 曾是 display:none，scrollHeight=0 导致高度未算。
-  // useLayoutEffect 在 DOM 更新后立即重算，确保切入时高度贴合内容。
+  const [edits, setEdits] = useState<Record<string, GuiguziAnalysis>>({});
+  const [activeAnalysisTab, setActiveAnalysisTab] = useState<string>('');
+
   useLayoutEffect(() => {
     document.querySelectorAll<HTMLTextAreaElement>('.guiguzi-cols .gg-field-input').forEach(el => {
       el.style.height = 'auto';
       el.style.height = `${el.scrollHeight}px`;
     });
   }, [activeAnalysisTab]);
-  // 第二步选题提示词的可编辑副本（含 $source 占位；用户改完点重新选题就用它）。
+
   const [promptEdit, setPromptEdit] = useState<string>('');
   const [promptSyncedAt, setPromptSyncedAt] = useState<number | undefined>(undefined);
 
@@ -94,7 +95,26 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
   const done = result?.status === 'done';
   const busy = busyAction || running;
 
-  // 进面板：回填已选评论 + 已选定选题 + 拉一次已有结果。
+  const analysisMap = result?.analysis as Record<string, GuiguziAnalysisColumn | undefined> | undefined;
+  const candidatesMap = result?.candidates as Record<string, GuiguziCandidate | undefined> | undefined;
+
+  // 可用模型列表（无 error 的）
+  const availAnalysis = analyzed
+    ? ALL_MODELS.filter((m) => analysisMap?.[m] && !analysisMap[m]?.error)
+    : [];
+  const availTopics = done
+    ? ALL_MODELS.filter((m) => candidatesMap?.[m] && !candidatesMap[m]?.error)
+    : [];
+
+  // 默认选中第一个可用模型
+  if (analyzed && availAnalysis.length > 0 && !availAnalysis.includes(activeAnalysisTab)) {
+    // 在 render 期同步更新（非 useEffect），避免 tab 切到不可用模型
+    if (activeAnalysisTab !== availAnalysis[0]) {
+      // eslint-disable-next-line react-compiler/react-internal/no-unused-state
+      setActiveAnalysisTab(availAnalysis[0]);
+    }
+  }
+
   useEffect(() => {
     setItems(readItems(jobId));
     try {
@@ -106,10 +126,6 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
     api.getGuiguzi(jobId).then(setResult).catch(() => setResult(null));
   }, [jobId]);
 
-  // running（分析/出题中）时靠已有 SSE 流驱动刷新，取代旧的 2s 定时轮询。
-  // 鬼谷子是异步 virtual agent，完成时后端发 job_updated（pipeline_runner._run_guiguzi_*_bg
-  // 末尾 _emit）；useJobStream 收到就 refetch getJob → job 引用更新 → 这里回拉一次 guiguzi 结果，
-  // 直到 status 翻 analyzed/done/failed（running 转 false 即停）。边缘触发：活跃窗口外零请求。
   useEffect(() => {
     if (!running) return;
     let cancelled = false;
@@ -118,27 +134,23 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
       .then((d) => {
         if (!cancelled) setResult(d);
       })
-      .catch(() => {
-        /* 暂时读不到忽略，下个事件再试 */
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
-    // job：已有 SSE 流的脉冲，每来一帧事件就核对一次结果（鬼谷子完成的 job_updated 也在内）。
   }, [running, jobId, job]);
 
-  // 分析完成 → 用最新分析初始化可编辑副本（每次新分析到达都重置）。
   useEffect(() => {
     if (analyzed && result?.analysis) {
-      setEdits({
-        opus: { ...(result.analysis.opus?.analysis ?? {}) },
-        deepseek: { ...(result.analysis.deepseek?.analysis ?? {}) },
-      });
+      const next: Record<string, GuiguziAnalysis> = {};
+      for (const m of ALL_MODELS) {
+        const a = analysisMap?.[m]?.analysis;
+        if (a) next[m] = { ...a };
+      }
+      setEdits(next);
     }
   }, [analyzed, result?.updated_at]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 出选题完成 → 用本次提示词模板初始化可编辑副本。render 期同步（而非 useEffect）：
-  // 否则 AutoTextarea 的 layout effect 先于 passive effect，贴合时拿到的是旧/空值，box 变矮。
   if (done && result?.prompt != null && result.updated_at !== promptSyncedAt) {
     setPromptSyncedAt(result.updated_at);
     setPromptEdit(result.prompt);
@@ -149,7 +161,6 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
       showToast('请先让沈括完成采集');
       return;
     }
-    // items 为空也放行：后端「直接拆解」会改用沈括采集的全部原文分析（不强制选评论）。
     setBusyAction(true);
     try {
       setResult(await api.analyzeGuiguzi(jobId, items));
@@ -162,9 +173,7 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
   }
 
   async function generate(analysis: GuiguziAnalysis, opts: { force?: boolean; prompt?: string } = {}) {
-    // items 为空也放行：无评论时后端用沈括原文 + 分析自由出题（不逐条锚定评论）。
     setBusyAction(true);
-    // 乐观清空：点击即进入 generating 态、清掉下面的选题结果，不等网络往返。
     setResult((prev) =>
       prev ? { ...prev, status: 'running', stage: 'generating', candidates: null, topics: null, progress: '出题中…' } : prev,
     );
@@ -178,9 +187,6 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
     }
   }
 
-  // N 选 1：选定一个选题 → 自启动柳永出稿。
-  // 状态解耦（v2）：选定的选题持久化到 localStorage，作为鬼谷子 DONE 的**真信号**——一旦选定就
-  // 不再随柳永(rw) 的状态变动（手动停下/取消/失败/重置都不让鬼谷子回退）。柳永仍照旧自启动。
   async function chooseTopic(t: GuiguziTopic) {
     if (!asrDone) {
       showToast('请先完成沈括的采集与转写');
@@ -189,15 +195,9 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
     setChosenTitle(t.title);
     try {
       localStorage.setItem(guiguziChosenStorageKey(jobId), JSON.stringify(t));
-    } catch {
-      /* 忽略 */
-    }
-    // 先翻鬼谷子 DONE（本地脉冲，与下面起 rw 是否成功无关），再自启动柳永 + 跳柳永面板。
+    } catch { /* ignore */ }
     onConfirmed?.();
     try {
-      // 重起一个新的 rw 进程（force 表达「重新提交」意图）。柳永取消后引擎步可能残留 orphan running，
-      // 真正的根治在后端 _execute_via_engine：每次跑前 reset_step(force=True) 无条件清掉再重跑，
-      // 否则会撞「无法重置运行中的步」永久起不来。
       await api.runNode(jobId, 'rw', undefined, true);
     } catch (e) {
       showToast('启动出稿失败，请稍后再试');
@@ -207,18 +207,16 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
 
   const hasAnalysis = !!(
     result?.analysis &&
-    (result.analysis.opus?.analysis || result.analysis.deepseek?.analysis)
+    ALL_MODELS.some((m) => analysisMap?.[m]?.analysis)
   );
   const hasTopics =
     done &&
-    ((result?.candidates?.opus?.topics?.length ?? 0) > 0 ||
-      (result?.candidates?.deepseek?.topics?.length ?? 0) > 0);
+    ALL_MODELS.some((m) => (candidatesMap?.[m]?.topics?.length ?? 0) > 0);
 
-  // 变化检测（作用于第二步选题）：当前已选评论 vs 已出题覆盖的评论（按评论文本）。
   const coveredComments = new Set<string>();
   if (done) {
-    for (const m of ['opus', 'deepseek'] as const) {
-      for (const t of result?.candidates?.[m]?.topics ?? []) {
+    for (const m of availTopics) {
+      for (const t of candidatesMap?.[m]?.topics ?? []) {
         if (t.anchor_comment) coveredComments.add(t.anchor_comment);
       }
     }
@@ -226,10 +224,8 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
   const currentComments = items.map((it) => it.comment);
   const newCount = currentComments.filter((c) => !coveredComments.has(c)).length;
   const removedCount = [...coveredComments].filter((c) => !currentComments.includes(c)).length;
-  // 仅评论驱动时检测变化；无评论「直接拆解」(items 为空)不参与增量比对。
   const changed = items.length > 0 && hasTopics && (newCount > 0 || removedCount > 0);
 
-  // 「分析爆款原因」按钮：有评论时在右上角；无评论时挪到空状态里（文案「直接拆解爆款原因」）。
   const analyzeButton = (
     <button
       className="btn primary sm"
@@ -250,12 +246,10 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
 
   return (
     <div className="panel guiguzi-panel">
-      {/* A. 已选评论 + 分析按钮 */}
       <div className="panel-section">
         <div className="panel-section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <MessageCircle size={14} strokeWidth={1.8} />
           <span style={{ flex: 1 }}>选题参考 · 已选 {items.length}/5 条评论</span>
-          {/* 选了评论才在右上角显示；没选评论时按钮在下方空状态里（「直接拆解」） */}
           {items.length > 0 && analyzeButton}
         </div>
         {!asrDone ? (
@@ -293,69 +287,63 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
         )}
       </div>
 
-      {/* 分析中 / 出题中：评论区下方居中转圈 */}
       {running && (
         <div className="panel-section">
           <div className="gg-loading">
             <Loader2 size={30} strokeWidth={1.8} className="spin" />
             <div className="dim-mono">
               {result?.progress ||
-                (stage === 'analyzing' ? '双模型并行分析爆款原因中…' : 'opus / deepseek 双模型并行出题中…')}
+                (stage === 'analyzing' ? '多模型并行分析爆款原因中…' : '多模型并行出题中…')}
             </div>
           </div>
         </div>
       )}
 
-      {/* B. 爆款原因分析（双栏可编辑）+ 2 选 1 出选题 —— 仅 analyzed 阶段 */}
-      {analyzed && (
+      {analyzed && availAnalysis.length > 0 && (
         <div className="panel-section">
           <div className="panel-section-title">
-            <Lightbulb size={14} strokeWidth={1.8} /> 爆款原因 · 双模型 · 改一改、选一个出选题
+            <Lightbulb size={14} strokeWidth={1.8} /> 爆款原因 · 改一改、选一个出选题
           </div>
-          {/* 移动端选项卡：桌面端由 CSS 隐藏，双栏仍并列 */}
           <div className="gg-tabs">
-            <button
-              className={`gg-tab${activeAnalysisTab === 'opus' ? ' active' : ''}`}
-              onClick={() => setActiveAnalysisTab('opus')}
-            >
-              Opus 4.8
-            </button>
-            <button
-              className={`gg-tab${activeAnalysisTab === 'deepseek' ? ' active' : ''}`}
-              onClick={() => setActiveAnalysisTab('deepseek')}
-            >
-              DeepSeek
-            </button>
+            {availAnalysis.map((m) => (
+              <button
+                key={m}
+                className={`gg-tab${activeAnalysisTab === m ? ' active' : ''}`}
+                onClick={() => setActiveAnalysisTab(m)}
+              >
+                {MODEL_META[m] || m}
+              </button>
+            ))}
           </div>
-          <div className={`guiguzi-cols tab-active-${activeAnalysisTab}`}>
-            <AnalysisColumn
-              name="opus"
-              label="Opus 4.8"
-              col={result?.analysis?.opus}
-              value={edits.opus ?? {}}
-              onChange={(a) => setEdits((p) => ({ ...p, opus: a }))}
-              onUse={() => generate(edits.opus ?? {}, { force: true })}
-              disabled={busy}
-            />
-            <AnalysisColumn
-              name="deepseek"
-              label="DeepSeek"
-              col={result?.analysis?.deepseek}
-              value={edits.deepseek ?? {}}
-              onChange={(a) => setEdits((p) => ({ ...p, deepseek: a }))}
-              onUse={() => generate(edits.deepseek ?? {}, { force: true })}
-              disabled={busy}
-            />
+          <div className={`guiguzi-cols cols-${availAnalysis.length} tab-active-${activeAnalysisTab}`}>
+            {availAnalysis.map((m) => (
+              <AnalysisColumn
+                key={m}
+                name={m}
+                label={MODEL_META[m] || m}
+                value={edits[m] ?? {}}
+                onChange={(a) => setEdits((p) => ({ ...p, [m]: a }))}
+                onUse={() => generate(edits[m] ?? {}, { force: true })}
+                disabled={busy}
+              />
+            ))}
           </div>
         </div>
       )}
 
-      {/* C. 选题产出（双栏 N 选 1）—— done 阶段 */}
-      {done && (
+      {analyzed && availAnalysis.length === 0 && (
+        <div className="panel-section">
+          <div className="empty-state" style={{ padding: 'var(--s-4)', color: 'var(--danger, #e5484d)' }}>
+            所有模型均不可用，无法分析。
+          </div>
+        </div>
+      )}
+
+      {done && availTopics.length > 0 && (
         <div className="panel-section">
           <div className="panel-section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <PenLine size={14} strokeWidth={1.8} />
-            <span style={{ flex: 1 }}>选题产出 · 双模型 · 点选一个交柳永</span>
+            <span style={{ flex: 1 }}>选题产出 · 点选一个交柳永</span>
             {hasTopics && (
               <button
                 className="btn ghost sm"
@@ -367,7 +355,6 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
               </button>
             )}
           </div>
-          {/* 选题提示词（含 $source 原文占位，可编辑）：改完点上方「重新选题」就用它 */}
           {result?.prompt != null && (
             <details className="gg-prompt" open>
               <summary>
@@ -398,9 +385,25 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
               （只为新评论补题，已出题的保留）；或上方「重新选题」全部重出。
             </div>
           )}
-          <div className="guiguzi-cols">
-            <ModelColumn name="opus" label="Opus 4.8" cand={result?.candidates?.opus} chosenTitle={chosenTitle} onChoose={chooseTopic} />
-            <ModelColumn name="deepseek" label="DeepSeek" cand={result?.candidates?.deepseek} chosenTitle={chosenTitle} onChoose={chooseTopic} />
+          <div className={`guiguzi-cols cols-${availTopics.length}`}>
+            {availTopics.map((m) => (
+              <ModelColumn
+                key={m}
+                name={m}
+                label={MODEL_META[m] || m}
+                cand={candidatesMap?.[m]}
+                chosenTitle={chosenTitle}
+                onChoose={chooseTopic}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {done && availTopics.length === 0 && (
+        <div className="panel-section">
+          <div className="empty-state" style={{ padding: 'var(--s-4)', color: 'var(--danger, #e5484d)' }}>
+            所有模型均不可用，无法出选题。
           </div>
         </div>
       )}
@@ -420,7 +423,6 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
 function AnalysisColumn({
   name,
   label,
-  col,
   value,
   onChange,
   onUse,
@@ -428,20 +430,11 @@ function AnalysisColumn({
 }: {
   name: string;
   label: string;
-  col?: GuiguziAnalysisColumn;
   value: GuiguziAnalysis;
   onChange: (a: GuiguziAnalysis) => void;
   onUse: () => void;
   disabled: boolean;
 }) {
-  if (col?.error) {
-    return (
-      <div className={`guiguzi-col model-${name}`}>
-        <div className="guiguzi-col-head">{label}</div>
-        <div className="guiguzi-col-error">模型不可用：{col.error}</div>
-      </div>
-    );
-  }
   const set = (patch: Partial<GuiguziAnalysis>) => onChange({ ...value, ...patch });
   return (
     <div className={`guiguzi-col model-${name}`}>
@@ -499,14 +492,11 @@ function ModelColumn({
   chosenTitle: string | null;
   onChoose: (t: GuiguziTopic) => void;
 }) {
-  // 按潜力分倒序：分最高的在最上面（缺分按 0 计垫底）。
   const topics = [...(cand?.topics ?? [])].sort((a, b) => (b.potential ?? 0) - (a.potential ?? 0));
   return (
     <div className={`guiguzi-col model-${name}`}>
       <div className="guiguzi-col-head">{label}</div>
-      {cand?.error ? (
-        <div className="guiguzi-col-error">模型不可用：{cand.error}</div>
-      ) : topics.length === 0 ? (
+      {topics.length === 0 ? (
         <div className="dim-mono" style={{ padding: 'var(--s-2)' }}>无产出</div>
       ) : (
         topics.map((t, i) => {

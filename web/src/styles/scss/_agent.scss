@@ -279,7 +279,7 @@
   padding-top: var(--s-2);
 }
 
-/* —— 鬼谷子选题（评论驱动双模型）—— */
+/* —— 鬼谷子选题（评论驱动多模型）—— */
 /* 已选评论（选题方案种子） */
 .guiguzi-seed-list {
   list-style: none;
@@ -332,15 +332,17 @@
   white-space: nowrap;
 }
 
-/* 双栏对比：opus | deepseek */
-/* 移动端选项卡入口：桌面端隐藏，双栏仍并列 */
+/* 多栏对比：opus | deepseek | agy */
+/* 移动端选项卡入口：桌面端隐藏，多栏仍并列 */
 .gg-tabs { display: none; }
 
 .guiguzi-cols {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: var(--s-3);
 }
+.guiguzi-cols.cols-1 { grid-template-columns: 1fr; }
+.guiguzi-cols.cols-2 { grid-template-columns: 1fr 1fr; }
+.guiguzi-cols.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
 .guiguzi-col {
   display: flex;
   flex-direction: column;
@@ -358,6 +360,9 @@
 }
 .guiguzi-col.model-deepseek .guiguzi-col-head {
   border-bottom-color: var(--ink-3);
+}
+.guiguzi-col.model-agy .guiguzi-col-head {
+  border-bottom-color: #10b981;
 }
 .guiguzi-col-error {
   font-size: var(--text-2xs);

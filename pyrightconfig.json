@@ -1,0 +1,12 @@
+{
+  "include": ["src", "packages/core/src", "tests"],
+  "exclude": ["**/node_modules", "**/__pycache__", "**/.venv"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "typeCheckingMode": "standard",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "pythonVersion": "3.11",
+  "pythonPlatform": "All",
+  "extraPaths": ["src", "packages/core/src"]
+}

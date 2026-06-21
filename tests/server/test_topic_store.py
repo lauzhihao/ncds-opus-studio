@@ -358,6 +358,7 @@ def test_guiguzi_run_two_step_merges_and_keeps_result_shape(monkeypatch):
 
     monkeypatch.setattr(guiguzi, "call_opus", fake_opus)
     monkeypatch.setattr(guiguzi, "call_deepseek", _fake_caller(deepseek_topics))
+    monkeypatch.setattr(guiguzi, "call_agy", _fake_caller(deepseek_topics))
     items = [{"text": "搞钱认知破局原文", "comment": "评论一"},
              {"text": "搞钱认知破局原文", "comment": "评论二"}]
     res = guiguzi.run(items=items)
@@ -365,16 +366,17 @@ def test_guiguzi_run_two_step_merges_and_keeps_result_shape(monkeypatch):
     # 出题 prompt 带评论 + 自动选定的分析(爆款原因作指导)
     assert "评论一" in captured["opus_topic_prompt"]
     assert "因为反差" in captured["opus_topic_prompt"]
-    # 双模型分析都在;chosen_analysis 自动取 opus
+    # 三模型分析都在;chosen_analysis 自动取 opus
     assert res["analysis"]["opus"]["analysis"]["hook_reason"] == "因为反差"
     assert res["chosen_analysis"]["audience"] == "打工人"
-    # 双栏各 2 题(锚定评论以入参为准)
+    # 三栏各 2 题(锚定评论以入参为准)
     assert [t["title"] for t in res["candidates"]["opus"]["topics"]] == ["题A", "题B"]
     assert res["candidates"]["opus"]["topics"][0]["anchor_comment"] == "评论一"
     assert res["candidates"]["opus"]["topics"][0]["source_model"] == "opus"
     assert [t["title"] for t in res["candidates"]["deepseek"]["topics"]] == ["题A", "题C"]
-    # topics 扁平 = opus + deepseek;out 指向库文件;入库按 title 去重(题A/题B/题C)
-    assert len(res["topics"]) == 4
+    assert [t["title"] for t in res["candidates"]["agy"]["topics"]] == ["题A", "题C"]
+    # topics 扁平 = opus + deepseek + agy;out 指向库文件;入库按 title 去重(题A/题B/题C)
+    assert len(res["topics"]) == 6
     assert res["out"] == str(topic_store.default_topics_path())
     lib = topic_store.load()["topics"]
     assert {t["title"] for t in lib} == {"题A", "题B", "题C"}

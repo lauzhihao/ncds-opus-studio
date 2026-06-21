@@ -48,6 +48,39 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["E501"]
+select = [
+  "E", "W",  # pycodestyle
+  "F",       # pyflakes
+  "I",       # isort
+  "N",       # pep8-naming
+  "UP",      # pyupgrade
+  "YTT",     # flake8-2020
+  "ASYNC",   # flake8-async
+  "S",       # bandit (security)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+pretty = true
+show_error_codes = true
+explicit_package_bases = true
+namespace_packages = true
+mypy_path = ["src", "packages/core/src"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+ignore_errors = true
+
 # Monorepo workspace。当前唯一独立子包 = packages/core（纯能力库）；本根包 = factory（含 server +
 # 生产引擎 server/engine/ + agents + web）。统一生产引擎方向见 docs/PRODUCTION-ENGINE-DESIGN.md。
 # （旧"三包对等拆分"已作废，packages/studio 空骨架已删。）
@@ -56,4 +89,4 @@ members = ["packages/*"]
 
 [dependency-groups]
 # 仅测试用：queue_test / task_runner_test 用 fakeredis 跑，免 CI 依赖真 redis-server
-dev = ["fakeredis>=2"]
+dev = ["fakeredis>=2", "ruff>=0.15", "mypy>=2.1"]

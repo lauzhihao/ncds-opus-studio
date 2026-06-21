@@ -24,12 +24,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_factory.common import topic_store
+from ncds_opus_factory.common.agy_cli import call_agy
 from ncds_opus_factory.common.deepseek_cli import call_deepseek
 from ncds_opus_factory.common.opus_cli import call_opus
 
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("NOF_SCOUT_TIMEOUT", "900"))
 MAX_ITEMS = 5  # 与前端"最多选 5 条评论"对齐;调用方应已限,这里兜底截断
-MODELS = ("opus", "deepseek")
+MODELS = ("opus", "deepseek", "agy")
 
 ProgressFn = Callable[[str], None]
 # 单模型 caller:吃 prompt 文本,返回模型原始输出文本(失败抛 RuntimeError)。
@@ -45,6 +46,7 @@ def _callers(timeout_seconds: int) -> dict[str, CallerFn]:
     return {
         "opus": lambda p: call_opus(p, timeout_seconds=timeout_seconds, env=env),
         "deepseek": lambda p: call_deepseek(p, timeout_seconds=timeout_seconds),
+        "agy": lambda p: call_agy(p, timeout_seconds=timeout_seconds),
     }
 
 

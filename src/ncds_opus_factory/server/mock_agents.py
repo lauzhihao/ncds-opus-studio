@@ -102,16 +102,16 @@ def mock_guiguzi_analyze(on_progress: Callable[[str], None] = _noop, **params: A
             "direction": "顺着'省钱反而穷'的反差,做认知反转型短口播",
         }
 
-    return {m: {"analysis": _analysis(m), "error": None} for m in ("opus", "deepseek")}
+    return {m: {"analysis": _analysis(m), "error": None} for m in ("opus", "deepseek", "agy")}
 
 
 def mock_guiguzi_topics(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
-    """第二步 mock：评论驱动双模型选题（candidates 双栏 + topics 扁平兼容）。
+    """第二步 mock：多模型选题（candidates 三栏 + topics 扁平兼容）。
 
     与真 generate_topics 一样经 topic_store.merge 落库、out 指向真实库文件——卧龙永远真跑
     round 逻辑,续跑段从**库**里挑题(P5),mock 不落库 E2E 就测不到这条链。
     """
-    on_progress("鬼谷子(MOCK): 评论驱动双模型出题")
+    on_progress("鬼谷子(MOCK): 多模型并行出题")
     time.sleep(0.4)
 
     def _topic(kw: str, i: int, model: str) -> dict[str, Any]:
@@ -119,16 +119,18 @@ def mock_guiguzi_topics(on_progress: Callable[[str], None] = _noop, **params: An
                 "why": "落地反击感", "potential": 95 - i * 8,
                 "anchor_comment": f"评论:{kw}", "source_model": model, "source": "mock"}
 
-    # 双栏:opus 与 deepseek 各按同样的 5 条评论各出 5 个选题(标题去重,入库不翻倍)
+    # 三栏:opus / deepseek / agy 各按同样的 5 条评论各出 5 个选题(标题去重,入库不翻倍)
     opus = [_topic(kw, i, "opus") for i, kw in enumerate(_MOCK_KWS)]
     deepseek = [_topic(kw, i, "deepseek") for i, kw in enumerate(_MOCK_KWS)]
+    agy = [_topic(kw, i, "agy") for i, kw in enumerate(_MOCK_KWS)]
     candidates = {"opus": {"topics": opus, "error": None},
-                  "deepseek": {"topics": deepseek, "error": None}}
-    flat = opus + deepseek
+                  "deepseek": {"topics": deepseek, "error": None},
+                  "agy": {"topics": agy, "error": None}}
+    flat = opus + deepseek + agy
     # 溯源如实记 mock(条目自带 source=mock,相等则不挪 bench_source):
     # 谎报 guiguzi 会让误开 mock 混入生产库的罐头题事后无法按 source 清理
     merged = topic_store.merge(flat, source="mock")
-    on_progress(f"鬼谷子完成(MOCK): 双模型各 {len(_MOCK_KWS)} 个(入库 {merged['added']} 新/{merged['skipped']} 重复)")
+    on_progress(f"鬼谷子完成(MOCK): 三模型各 {len(_MOCK_KWS)} 个(入库 {merged['added']} 新/{merged['skipped']} 重复)")
     return {"candidates": candidates, "topics": flat,
             "out": str(topic_store.default_topics_path()), "added": merged["added"]}
 

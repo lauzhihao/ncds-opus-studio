@@ -220,9 +220,9 @@ export interface GuiguziResult {
   status: 'running' | 'analyzed' | 'done' | 'failed';
   stage?: 'analyzing' | 'analyzed' | 'generating' | 'done' | 'failed';
   items?: GuiguziItem[];
-  analysis?: { opus?: GuiguziAnalysisColumn; deepseek?: GuiguziAnalysisColumn } | null; // 第一步双栏
+  analysis?: Record<string, GuiguziAnalysisColumn | undefined> | null; // 第一步多模型
   chosen_analysis?: GuiguziAnalysis | null; // 第二步选定/编辑的那份
-  candidates?: { opus?: GuiguziCandidate; deepseek?: GuiguziCandidate } | null; // 第二步选题
+  candidates?: Record<string, GuiguziCandidate | undefined> | null; // 第二步多模型选题
   prompt?: string | null; // 本次出选题用的提示词模板（含 $source 占位），供前端回显/编辑
   topics?: GuiguziTopic[] | null;
   error?: string | null;
