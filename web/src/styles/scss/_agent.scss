@@ -292,7 +292,7 @@
 /* 已选评论：序号(顶) / 评论(占满) / 点赞量(末行最右) */
 .guiguzi-seed {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--s-2);
   padding: 6px 10px;
   border: 1px solid var(--bg-overlay);
@@ -301,7 +301,6 @@
 }
 .guiguzi-seed-idx {
   flex-shrink: 0;
-  align-self: flex-start;
   width: 16px;
   height: 16px;
   border-radius: 50%;

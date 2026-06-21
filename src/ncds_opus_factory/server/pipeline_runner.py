@@ -1786,14 +1786,26 @@ class PipelineRunner:
         return self.video_jobs_dir / job_id / "guiguzi.json"
 
     def get_guiguzi(self, job_id: str) -> dict[str, Any] | None:
-        """读 per-job 选题结果 guiguzi.json（无则 None）。前端轮询此接口取 running/done。"""
+        """读 per-job 选题结果 guiguzi.json（无则 None）。前端轮询此接口取 running/done。
+
+        检测「僵尸 running」：旧 server 崩溃后 guiguzi.json 残留 running 态但
+        _guiguzi_tasks 无对应后台任务，直接删文件让前端回到未开始状态。
+        """
         p = self._guiguzi_path(job_id)
         if not p.exists():
             return None
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            doc = json.loads(p.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return None
+        task = self._guiguzi_tasks.get(job_id)
+        if task is None or task.done():
+            # 无存活后台任务 → 若是终态（done/analyzed）正常返回，否则删文件
+            if doc.get("status") in ("done", "analyzed"):
+                return doc
+            p.unlink(missing_ok=True)
+            return None
+        return doc
 
     def _write_guiguzi(self, job_id: str, doc: dict[str, Any]) -> None:
         p = self._guiguzi_path(job_id)
@@ -1855,9 +1867,10 @@ class PipelineRunner:
             no_comments = True
             if not norm:
                 raise ValueError("没有可分析的素材:请先在沈括采集,或选 1-5 条高赞评论")
+        # 取消旧 task（如果有），始终重置状态
         old = self._guiguzi_tasks.get(job_id)
         if old is not None and not old.done():
-            return self.get_guiguzi(job_id) or {"status": "running", "stage": "analyzing", "items": norm}
+            old.cancel()
         # 重新分析 → 重置分析与选题(分析变了,旧题作废)
         doc = {"stage": "analyzing", "status": "running", "items": norm, "analysis": None,
                "chosen_analysis": None, "candidates": None, "topics": None, "out": None,
@@ -1922,9 +1935,10 @@ class PipelineRunner:
             no_comments = True
             if not norm:
                 raise ValueError("没有可出题的素材:请先在沈括采集,或选 1-5 条高赞评论")
+        # 取消旧 task（如果有），始终重置
         old = self._guiguzi_tasks.get(job_id)
         if old is not None and not old.done():
-            return self.get_guiguzi(job_id) or {"status": "running", "stage": "generating", "items": norm}
+            old.cancel()
 
         has_prompt = bool(prompt and prompt.strip())
         existing = self.get_guiguzi(job_id) or {}

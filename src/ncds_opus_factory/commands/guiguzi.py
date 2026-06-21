@@ -244,9 +244,9 @@ def analyze(
         for m, fut in futs.items():
             try:
                 out[m] = {"analysis": fut.result(), "error": None}
-            except Exception as exc:  # noqa: BLE001 — 单模型失败收成 error,不抛
-                out[m] = {"analysis": None, "error": f"{type(exc).__name__}: {exc}"}
-                on_progress(f"鬼谷子: {m} 分析失败 - {exc}")
+            except Exception:  # noqa: BLE001 — 单模型不可用则静默跳过，不向前端传播错误详情
+                out[m] = {"analysis": None, "error": "unavailable"}
+                on_progress(f"鬼谷子: {m} 不可用")
     return out
 
 
@@ -440,9 +440,9 @@ def generate_topics(
         for m, fut in futs.items():
             try:
                 candidates[m] = {"topics": fut.result(), "error": None}
-            except Exception as exc:  # noqa: BLE001 — 单模型失败收成 error,不抛
-                candidates[m] = {"topics": [], "error": f"{type(exc).__name__}: {exc}"}
-                on_progress(f"鬼谷子: {m} 失败 - {exc}")
+            except Exception:  # noqa: BLE001 — 单模型不可用则静默跳过，不向前端传播错误详情
+                candidates[m] = {"topics": [], "error": "unavailable"}
+                on_progress(f"鬼谷子: {m} 不可用")
 
     flat = [t for m in MODELS for t in candidates.get(m, {}).get("topics", [])]
     merged = topic_store.merge(flat, source="guiguzi")

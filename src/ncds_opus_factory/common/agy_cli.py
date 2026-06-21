@@ -3,7 +3,7 @@
 背景：g.sh 会在 prompt 头部注入 ~/.gemini/.gemini_knowledge.md 记忆库，且
 ~/.gemini/GEMINI.md 将角色固化为「抖音口播稿写作助手」，导致鬼谷子选题时
 AGY 产出偏置（偏心理赛道、角色错位）。本模块直接调 agy --print，彻底规避
-g.sh 的 prompt 构造逻辑。
+g.sh 的 prompt 构造逻辑；同时临时隐藏 GEMINI.md 解除角色硬约束。
 
 保持与 opus/deepseek 相同的 CallerFn 接口：吃 prompt 文本，返回原始输出文本，
 失败抛 RuntimeError。
@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 
 
 def _resolve_agy() -> str:
@@ -26,6 +27,26 @@ def _resolve_agy() -> str:
 
 
 _END_PATTERN = re.compile(r"^(?:——END——|————END————)$")
+
+# 线程锁：保护 GEMINI.md 临时隐藏/恢复操作不被并发抢写
+_GEMINI_LOCK = threading.Lock()
+_GEMINI_DIR = os.path.expanduser("~/.gemini")
+_GEMINI_MD = os.path.join(_GEMINI_DIR, "GEMINI.md")
+_GEMINI_DISABLED = os.path.join(_GEMINI_DIR, "GEMINI.md.disabled")
+
+
+def _disable_gemini_md() -> bool:
+    """临时隐藏 GEMINI.md 以解除角色硬约束。返回 True 表示实际移除了文件。"""
+    if not os.path.isfile(_GEMINI_MD):
+        return False
+    os.rename(_GEMINI_MD, _GEMINI_DISABLED)
+    return True
+
+
+def _restore_gemini_md(was_hidden: bool) -> None:
+    """恢复 GEMINI.md。"""
+    if was_hidden and os.path.isfile(_GEMINI_DISABLED):
+        os.rename(_GEMINI_DISABLED, _GEMINI_MD)
 
 
 def _strip_memory_update_block(text: str) -> str:
@@ -41,6 +62,12 @@ def _strip_memory_update_block(text: str) -> str:
     return "\n".join(out).rstrip()
 
 
+def _recover_orphaned_disabled() -> None:
+    """crash 兜底：若上次进程崩溃导致 GEMINI.md 未恢复，这里自动恢复。"""
+    if not os.path.isfile(_GEMINI_MD) and os.path.isfile(_GEMINI_DISABLED):
+        os.rename(_GEMINI_DISABLED, _GEMINI_MD)
+
+
 def call_agy(
     prompt: str,
     *,
@@ -48,20 +75,28 @@ def call_agy(
 ) -> str:
     """直接调 agy --print 跑一次，返回模型输出文本。
 
-    - 绕过 g.sh，避免 .gemini_knowledge.md / GEMINI.md 偏置注入。
+    - 绕过 g.sh，避免 .gemini_knowledge.md 偏置注入。
+    - 临时隐藏 GEMINI.md（线程安全），解除角色硬约束，用后自动恢复。
     - 设 cwd=$HOME，防止 agy 扫描项目目录下的 CLAUDE.md 等上下文文件。
     - 输出过滤：丢弃 ————END———— 记忆更新块（与 g.sh --safe 一致）。
     stdin=/dev/null，防止 agy 在非 TTY 环境下死锁等待 EOF。
     """
+    _recover_orphaned_disabled()
     agy = _resolve_agy()
-    proc = subprocess.run(  # noqa: S603 — agy path 由 _resolve_agy() 解析，非用户输入
-        [agy, "--print-timeout", f"{timeout_seconds}s", "-p", prompt],
-        capture_output=True,
-        text=True,
-        timeout=timeout_seconds + 30,
-        stdin=subprocess.DEVNULL,
-        cwd=os.path.expanduser("~"),
-    )
+    with _GEMINI_LOCK:
+        was_hidden = _disable_gemini_md()
+    try:
+        proc = subprocess.run(  # noqa: S603 — agy path 由 _resolve_agy() 解析，非用户输入
+            [agy, "--print-timeout", f"{timeout_seconds}s", "-p", prompt],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds + 30,
+            stdin=subprocess.DEVNULL,
+            cwd=os.path.expanduser("~"),
+        )
+    finally:
+        with _GEMINI_LOCK:
+            _restore_gemini_md(was_hidden)
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-500:]
         raise RuntimeError(f"agy exited {proc.returncode}: {tail}")

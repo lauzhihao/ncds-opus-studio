@@ -2,8 +2,10 @@
 # 一键起停「前后端 HMR 三件套」(dev 用)：vite dev + nof-server(NOF_DEV=1 + --reload)。
 # - 前端改 .tsx/.scss -> vite HMR 自动热更新(免 build 免刷)；后端改 .py -> uvicorn --reload 自动重载。
 # - 访问入口：http://localhost:8810/studio/ (带尾斜杠走 dev 反代，HMR WS 同走 8810)。
-# - 本脚本不碰 nof-worker(离线任务执行体)，只查它在不在跑并提示；worker 起停走 install_nof_worker.sh。
+# - 本脚本不碰 nof-worker(离线任务执行体)。
 # - dev 专用：正式部署仍要 `cd web && npm run build` 生成 dist(生产不走 vite)。
+#
+# 通过 screen 后台运行进程，完全脱离 shell 会话（即使 shell 被 kill 也不影响）。
 #
 # 用法：
 #   ./dev_up.sh up        # 确保 redis -> 起 vite -> 起 nof-server(dev)
@@ -19,15 +21,15 @@ WEB_DIR="$PROJECT_ROOT/web"
 STATE_DIR="$PROJECT_ROOT/state"
 HOST="${NOF_SERVER_HOST:-0.0.0.0}"
 PORT="${NOF_SERVER_PORT:-8810}"
-
+VITE_PORT=5173
 VITE_LOG="$STATE_DIR/vite-dev.out.log"
 SERVER_LOG="$STATE_DIR/nof-server.out.log"
-VITE_PID_FILE="$STATE_DIR/vite-dev.pid"
-SERVER_PID_FILE="$STATE_DIR/nof-server.pid"
-
-SERVER_PATTERN="uvicorn ncds_opus_factory.server.app:app"
+SCREEN_VITE="dev-vite"
+SCREEN_NOF="dev-nof"
 
 log() { echo "[dev_up] $*"; }
+
+port_listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 
 ensure_redis() {
   if redis-cli ping >/dev/null 2>&1; then
@@ -49,94 +51,40 @@ ensure_redis() {
   exit 1
 }
 
-kill_pattern() {
-  # $1 = pgrep pattern, $2 = human name
-  local pids
-  pids="$(pgrep -f "$1" || true)"
-  if [[ -z "$pids" ]]; then
-    log "$2: not running"
-    return
-  fi
-  # 先 SIGTERM 优雅退出；uvicorn --reload 的 reloader 偶尔不理 SIGTERM，
-  # 轮询确认退出，超时(~5s)仍在就升级 SIGKILL，避免旧进程赖着不走、占住端口。
-  # shellcheck disable=SC2086
-  kill $pids 2>/dev/null || true
-  local i
-  for i in $(seq 1 10); do
-    if ! pgrep -f "$1" >/dev/null 2>&1; then
-      log "$2: stopped (pids: $pids)"
-      return
-    fi
-    sleep 0.5
-  done
-  local survivors
-  survivors="$(pgrep -f "$1" || true)"
-  # shellcheck disable=SC2086
-  kill -9 $survivors 2>/dev/null || true
-  sleep 0.5
-  if pgrep -f "$1" >/dev/null 2>&1; then
-    log "$2: WARN still alive after SIGKILL (pids: $(pgrep -f "$1" | tr '\n' ' '))"
-  else
-    log "$2: stopped via SIGKILL (pids: $survivors)"
-  fi
-}
-
 start_vite() {
-  if pgrep -f "node .*/web/node_modules/.bin/vite" >/dev/null 2>&1; then
+  if port_listening "$VITE_PORT"; then
     log "vite: already running"
     return
   fi
   mkdir -p "$STATE_DIR"
-  # HMR WS 走 8810(访问入口是 nof-server 反代)，见 web/vite.config.ts
-  ( cd "$WEB_DIR" && NOF_HMR_PORT="$PORT" nohup npm run dev > "$VITE_LOG" 2>&1 < /dev/null & echo $! > "$VITE_PID_FILE"; disown 2>/dev/null || true )
-  sleep 2
-  if pgrep -f "node .*/web/node_modules/.bin/vite" >/dev/null 2>&1; then
-    log "vite: up (:5173, log: $VITE_LOG)"
-  else
-    log "ERROR: vite failed to start, see $VITE_LOG" >&2
-    exit 1
-  fi
-}
-
-# 等 :PORT 释放(最多 ~5s)：旧 server 退出后内核回收 listen socket 有延迟，
-# 不等就 bind 会撞 "address already in use"，新 server 起不来。
-wait_port_free() {
+  screen -dmS "$SCREEN_VITE" bash -c \
+    "cd '$WEB_DIR' && NOF_HMR_PORT='$PORT' npm run dev > '$VITE_LOG' 2>&1"
   local i
-  for i in $(seq 1 10); do
-    if ! lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  for i in $(seq 1 12); do
+    if port_listening "$VITE_PORT"; then
+      log "vite: up (:$VITE_PORT, log: $VITE_LOG)"
       return 0
     fi
-    sleep 0.5
+    sleep 1
   done
-  return 1
+  log "ERROR: vite not listening on :$VITE_PORT after 12s, see $VITE_LOG" >&2
+  exit 1
 }
 
 start_server() {
-  kill_pattern "$SERVER_PATTERN" "nof-server (old)"
-  if ! wait_port_free; then
-    log "ERROR: :$PORT 仍被占用，无法启动 nof-server (查: lsof -nP -iTCP:$PORT -sTCP:LISTEN)" >&2
-    exit 1
-  fi
   mkdir -p "$STATE_DIR"
-  NOF_DEV=1 nohup "$VENV_UVICORN" ncds_opus_factory.server.app:app \
-    --host "$HOST" --port "$PORT" --reload --reload-dir src \
-    > "$SERVER_LOG" 2>&1 < /dev/null &
-  echo $! > "$SERVER_PID_FILE"
-  disown 2>/dev/null || true
-  # 健康检查：带超时 + 重试，绝不无限挂起(curl 无 --max-time 时若 server 没起会永久阻塞)。
-  local code="" i
+  screen -dmS "$SCREEN_NOF" bash -c \
+    "NOF_DEV=1 exec '$VENV_UVICORN' ncds_opus_factory.server.app:app --host '$HOST' --port '$PORT' --reload --reload-dir src > '$SERVER_LOG' 2>&1"
+  local i
   for i in $(seq 1 10); do
-    sleep 1
-    code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://localhost:$PORT/studio/" 2>/dev/null || true)"
-    if [[ "$code" == "200" ]]; then
-      break
+    if port_listening "$PORT"; then
+      log "nof-server: up (NOF_DEV=1 + --reload, :$PORT)"
+      return 0
     fi
+    sleep 1
   done
-  if [[ "$code" == "200" ]]; then
-    log "nof-server: up (NOF_DEV=1 + --reload, :$PORT, /studio/ -> $code)"
-  else
-    log "WARN: nof-server /studio/ returned '${code:-timeout}' (vite up? see $SERVER_LOG)"
-  fi
+  log "ERROR: nof-server didn't start on :$PORT within 10s, see $SERVER_LOG" >&2
+  exit 1
 }
 
 worker_status() {
@@ -145,13 +93,6 @@ worker_status() {
   else
     log "nof-worker: DOWN -> offline tasks won't execute (start: bin/install_nof_worker.sh restart)"
   fi
-}
-
-status() {
-  redis-cli ping >/dev/null 2>&1 && log "redis: up" || log "redis: down"
-  pgrep -f "node .*/web/node_modules/.bin/vite" >/dev/null 2>&1 && log "vite: up (:5173)" || log "vite: down"
-  pgrep -f "$SERVER_PATTERN" >/dev/null 2>&1 && log "nof-server: up (:$PORT)" || log "nof-server: down"
-  worker_status
 }
 
 cmd="${1:-up}"
@@ -164,8 +105,8 @@ case "$cmd" in
     log "ready -> http://localhost:$PORT/studio/  (front HMR + back --reload; build-free)"
     ;;
   down)
-    kill_pattern "node .*/web/node_modules/.bin/vite" "vite"
-    kill_pattern "$SERVER_PATTERN" "nof-server"
+    screen -S "$SCREEN_VITE" -X quit 2>/dev/null || true
+    screen -S "$SCREEN_NOF" -X quit 2>/dev/null || true
     log "down complete (worker + redis left running)"
     ;;
   restart)
@@ -174,7 +115,10 @@ case "$cmd" in
     "$0" up
     ;;
   status)
-    status
+    redis-cli ping >/dev/null 2>&1 && log "redis: up" || log "redis: down"
+    port_listening "$VITE_PORT" && log "vite: up (:$VITE_PORT)" || log "vite: down"
+    port_listening "$PORT" && log "nof-server: up (:$PORT)" || log "nof-server: down"
+    worker_status
     ;;
   *)
     echo "usage: $0 {up|down|restart|status}" >&2
