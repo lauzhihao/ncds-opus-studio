@@ -61,6 +61,8 @@ _DEFAULT_CONCURRENCY: dict[str, int] = {
     "wolong": 1,     # sclaude 账号池;且 round 状态文件需要串行写(P3)
     "liuyong": 3,    # scodex 子进程
     "guiguzi": 4,
+    "wst": 5,        # 文生图
+    "tst": 5,        # 图生图
     "_default": 4,
 }
 _DEFAULT_DAILY_QUOTA: dict[str, int] = {

@@ -76,7 +76,11 @@ def run(
                "--timeout", str(timeout_seconds), *image_args, *(extra_args or [])]
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
     if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "图生图失败").strip())
+        _err = (result.stderr or result.stdout or "图生图失败").strip()
+        _m = re.search(r'HTTP (50[0-9])', _err)
+        if _m:
+            raise RuntimeError(f"上游服务错误({_m.group(1)})")
+        raise RuntimeError(_err)
 
     payload = json.loads(result.stdout or "{}")
     images = payload.get("images") if isinstance(payload.get("images"), list) else []

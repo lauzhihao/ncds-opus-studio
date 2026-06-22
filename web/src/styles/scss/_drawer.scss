@@ -611,3 +611,23 @@
   border-color: var(--accent);
 }
 
+/* Detail drawer footer: action buttons row */
+.chat-detail-footer {
+  display: flex;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-5);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* Concurrent count badge in drawer subtitle */
+.chat-concurrent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--accent);
+  margin-left: 8px;
+}
+
