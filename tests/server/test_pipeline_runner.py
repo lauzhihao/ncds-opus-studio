@@ -213,6 +213,78 @@ def test_execute_image_all_failed_raises(tmp_path: Path, monkeypatch: pytest.Mon
         asyncio.run(runner._execute_image(job.job_id))
 
 
+def test_execute_tts_uses_extracted_run_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    runner.write_episode(job.job_id, {
+        "beats": [
+            {"zh": "一", "scene": "s1"},
+            {"zh": "二", "scene": "s1"},
+            {"zh": "三", "scene": "s2"},
+        ],
+        "scenes": {},
+    })
+    tpl = tmp_path / "template" / ".015-draft-assets"
+    tpl.mkdir(parents=True)
+    (tpl / "tts_gen.py").write_text("# stub\n", encoding="utf-8")
+    monkeypatch.setattr(pr, "_template_dir", lambda _name: tmp_path / "template")
+
+    def fake_tts(*, script, episode_path, audio_dir, on_line, only=None, force=False):
+        assert Path(script).name == "tts_gen.py"
+        assert Path(audio_dir).name == "04_tts"
+        on_line("tts stub")
+        ep = json.loads(Path(episode_path).read_text(encoding="utf-8"))
+        for b in ep["beats"]:
+            b["audioFile"] = f"04_tts/scene-{b['scene']}.mp3"
+            b["audioStart"] = 0.0
+            b["audioEnd"] = 1.0
+        Path(episode_path).write_text(json.dumps(ep, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(pr, "_run_tts_gen_015", fake_tts)
+
+    out = asyncio.run(runner._execute_tts(job.job_id))
+
+    assert out["mode"] == "segmented"
+    assert out["scene_count"] == 2
+    assert out["audio_count"] == 2
+    assert len(out["items"]) == 3
+    assert out["items"][0]["audio_relpath"] == "04_tts/scene-s1.mp3"
+
+
+def test_execute_render_uses_extracted_run_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from ncds_opus_factory.commands import render_015
+
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    runner.write_episode(job.job_id, {"beats": [], "scenes": {}})
+    audio_dir = tmp_path / job.job_id / "04_tts"
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "scene-s1.mp3").write_bytes(b"mp3")
+    pic_dir = tmp_path / job.job_id / "03_image"
+    pic_dir.mkdir()
+    captured: dict = {}
+
+    def fake_render(**kwargs):
+        captured.update(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
+        return {
+            "output_path": kwargs["output_path"],
+            "video_size_bytes": 3,
+            "workdir": kwargs["workdir"],
+        }
+
+    monkeypatch.setattr(render_015, "run", fake_render)
+
+    out = asyncio.run(runner._execute_render(job.job_id))
+
+    assert out["video_relpath"] == "06_render/output.mp4"
+    assert out["video_size_bytes"] == 3
+    assert captured["episode_path"].endswith("02_rw/episode.json")
+    assert captured["audio_dir"].endswith("04_tts")
+    assert captured["picture_dir"].endswith("03_image")
+    assert captured["cleanup_workdir"] is True
+
+
 def test_execute_storyboard_fills_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
     job = runner.create_job("paper_card_talk_015", "t", {})

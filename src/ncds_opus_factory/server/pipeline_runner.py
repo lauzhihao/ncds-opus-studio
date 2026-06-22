@@ -43,8 +43,10 @@ from ncds_opus_factory.common.opus_cli import DEFAULT_OPUS_MODEL, call_opus, is_
 from ncds_opus_factory.server.pipeline_agent_tasks import PipelineAgentTasksMixin
 from ncds_opus_factory.server.pipeline_engine_bridge import PipelineEngineBridgeMixin
 from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
+from ncds_opus_factory.server.pipeline_render_tasks import PipelineRenderRun
 from ncds_opus_factory.server.pipeline_rw_tasks import PipelineRwRun
 from ncds_opus_factory.server.pipeline_storyboard_tasks import PipelineStoryboardRun
+from ncds_opus_factory.server.pipeline_tts_tasks import PipelineTtsRun
 
 logger = logging.getLogger(__name__)
 
@@ -1432,40 +1434,16 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         if ep is None:
             raise ValueError("episode.json not found; run rw first (or manually seed it)")
 
-        beats_raw = ep.get("beats") or []
-        if not beats_raw:
-            raise ValueError("episode.beats is empty; nothing to synthesize")
-
-        out_dir = job_dir / "04_tts"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        def on_progress(text: str) -> None:
-            self._push_progress(job_id, "tts", text)
-
         tts_gen = _template_dir("paper_card_talk_015") / ".015-draft-assets" / "tts_gen.py"
-        if not tts_gen.is_file():
-            raise RuntimeError(f"tts_gen.py not found: {tts_gen}")
-        ep_path = job_dir / "02_rw" / "episode.json"
-        on_progress(f"按 scene 整段合成（{len(beats_raw)} beats）…")
-        await asyncio.to_thread(
-            _run_tts_gen_015,
-            script=tts_gen,
-            episode_path=ep_path,
-            audio_dir=out_dir,
-            on_line=on_progress,
-        )
-        # 读回 tts_gen 写好时间戳的 episode，组装 beat 级 items（audio 指向 scene mp3）
-        ep2 = json.loads(ep_path.read_text(encoding="utf-8"))
-        items = _rebuild_tts_items_015(ep2)
-        scene_files = {it["audio_relpath"] for it in items if it.get("audio_relpath")}
-        on_progress(f"完成：{len(scene_files)} 段 scene 音频 · {len(items)} beats")
-        return {
-            "items": items,
-            "audio_dir": str(out_dir),
-            "mode": "segmented",
-            "scene_count": len(scene_files),
-            "audio_count": len(scene_files),
-        }
+        return await PipelineTtsRun(
+            runner=self,
+            job_id=job_id,
+            job_dir=job_dir,
+            episode=ep,
+            tts_gen_script=tts_gen,
+            run_tts_gen=_run_tts_gen_015,
+            rebuild_tts_items=_rebuild_tts_items_015,
+        ).run()
 
     # ------------------------------------------------------------
     # 真接入：image 节点
@@ -1735,40 +1713,14 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         依赖 02_rw/episode.json + 04_tts/*.mp3 + 03_image/*.webp。
         """
         job_dir = self.video_jobs_dir / job_id
-        episode_path = job_dir / "02_rw" / "episode.json"
-        if not episode_path.is_file():
-            raise ValueError("02_rw/episode.json missing; select an rw model first")
-        audio_dir = job_dir / "04_tts"
-        if not audio_dir.is_dir() or not any(audio_dir.glob("*.mp3")):
-            raise ValueError("04_tts/*.mp3 missing; run tts first")
-        picture_dir = job_dir / "03_image"
-        out_dir = job_dir / "06_render"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "output.mp4"
-
-        def on_progress(text: str) -> None:
-            self._push_progress(job_id, "render", text)
-
         from ncds_opus_factory.commands import render_015 as render_cmd
-        on_progress("启动 render_015（scene 整段合音）")
 
-        result = await asyncio.to_thread(
-            render_cmd.run,
-            episode_path=str(episode_path),
-            audio_dir=str(audio_dir),
-            output_path=str(out_path),
-            picture_dir=str(picture_dir) if picture_dir.is_dir() else None,
-            workdir=str(out_dir / "_render_workdir"),
-            cleanup_workdir=True,
-            on_progress=on_progress,
-        )
-
-        return {
-            "video_relpath": f"06_render/{out_path.name}",
-            "output_path": result.get("output_path", str(out_path)),
-            "video_size_bytes": result.get("video_size_bytes"),
-            "workdir": result.get("workdir"),
-        }
+        return await PipelineRenderRun(
+            runner=self,
+            job_id=job_id,
+            job_dir=job_dir,
+            render_run=render_cmd.run,
+        ).run()
 
 
 def _rebuild_tts_items_015(episode: dict[str, Any]) -> list[dict[str, Any]]:
