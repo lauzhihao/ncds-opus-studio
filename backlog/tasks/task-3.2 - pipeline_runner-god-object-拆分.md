@@ -82,3 +82,6 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 2026-06-22：第十五刀拆 RW/regen 用户操作，新增 `server/pipeline_rw_operations.py` / `PipelineRwOperationsMixin` 与 `server/pipeline_regen_operations.py` / `PipelineRegenOperationsMixin`，把 RW 单模型重写、rubric 优化、选稿、preview 生图重生、image/tts scene 级重生和 mock regen 短路从 runner 移出；`PipelineRunner` 继续暴露同名 public methods 供 routes 使用。
 - 行数变化：`pipeline_runner.py` 从 1595 行降到 1093 行；新模块 `pipeline_rw_operations.py` 212 行，`pipeline_regen_operations.py` 284 行。
 - 验证：`py_compile` 通过；operation focused tests `50 passed`；pipeline/server focused tests `119 passed`；全量 `.venv/bin/python3 -m pytest -q` 609 passed, 173 warnings。
+- 2026-06-22：第十六刀拆 state/events/scheduler 基础设施，新增 `server/pipeline_models.py`、`server/pipeline_events.py`、`server/pipeline_state_store.py`、`server/pipeline_scheduler.py`，把 `NodeState`/`JobState`/`EventBus`、events.jsonl + progress patch、JobState 持久化/public state API、run_node/cancel/watchdog/mock/真实分发状态机移出；`pipeline_runner.py` 保留兼容导出、初始化和各 `_execute_*` 路由入口。
+- 行数变化：`pipeline_runner.py` 从 1093 行降到 195 行；新模块 `pipeline_models.py` 60 行，`pipeline_events.py` 101 行，`pipeline_state_store.py` 237 行，`pipeline_scheduler.py` 289 行。
+- 验证：`py_compile` 通过；state/events/scheduler focused tests `59 passed`；pipeline/server focused tests `123 passed`；全量 `.venv/bin/python3 -m pytest -q` 609 passed, 173 warnings。
