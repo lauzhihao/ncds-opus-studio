@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -184,6 +185,57 @@ def test_execute_lines_writes_episode_with_template_config(
     assert all(b["scene"] == "" for b in episode["beats"])
     assert episode["scenes"] == {}
     assert "audio" in episode and "playback" in episode
+
+
+def test_execute_asr_collect_uses_extracted_run_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import ncds_opus_factory.common.tikhub_client as tc
+
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {
+        "shares": [
+            {"url": "https://v.douyin.com/ok"},
+            {"url": "https://v.douyin.com/bad"},
+            {"url": ""},
+        ],
+    })
+    seen: dict[str, Any] = {"calls": []}
+
+    def fake_resolve(url: str) -> str:
+        if "bad" in url:
+            raise RuntimeError("bad link")
+        return "aweme-ok"
+
+    async def fake_thread_cancellable(fn: Any, flag_path: Any, /, *args: Any, **kwargs: Any) -> Any:
+        seen["calls"].append((args, kwargs, flag_path))
+        assert kwargs["do_audio"] is False
+        assert kwargs["do_frames"] is False
+        assert kwargs["meta"] == {"desc": "meta desc"}
+        return {
+            "aweme_id": args[0],
+            "desc": "entry desc",
+            "status": {"transcribe": "ok"},
+            "text": "清洗稿",
+        }
+
+    monkeypatch.setattr(tc, "resolve_aweme_id", fake_resolve)
+    monkeypatch.setattr(tc, "fetch_one_video_detail", lambda aweme_id: {"id": aweme_id})
+    monkeypatch.setattr(tc, "extract_meta", lambda detail: {"desc": "meta desc"})
+    runner._run_in_thread_cancellable = fake_thread_cancellable  # type: ignore[method-assign]
+
+    out = asyncio.run(runner._execute_asr_collect(job.job_id))
+
+    assert out["collect_dir"].endswith("01_collect")
+    assert len(seen["calls"]) == 1
+    assert [e.get("aweme_id") for e in out["collected"]] == ["aweme-ok", ""]
+    assert out["collected"][0]["index"] == 1
+    assert out["collected"][0]["url"].endswith("/ok")
+    assert "bad link" in out["collected"][1]["error"]
+
+    patched = runner.get_job(job.job_id).nodes["asr"].outputs["collected"]
+    assert [e.get("aweme_id") for e in patched] == ["aweme-ok", ""]
 
 
 def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

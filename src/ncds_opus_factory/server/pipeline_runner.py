@@ -37,6 +37,7 @@ from ncds_opus_core.common import cancel as _cancel
 from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 from ncds_opus_factory.server.pipeline_agent_tasks import PipelineAgentTasksMixin
+from ncds_opus_factory.server.pipeline_asr_tasks import PipelineAsrCollectRun
 from ncds_opus_factory.server.pipeline_engine_bridge import PipelineEngineBridgeMixin
 from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
 from ncds_opus_factory.server.pipeline_lines_tasks import PipelineLinesRun
@@ -1471,72 +1472,16 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         top_comments/cover/hashtags/text/audio?/cutouts?/frames?/status + index/url/error）。
         collect_one 幂等 + works_repo 缓存：app/订阅采过的作品直接命中、秒出。
         """
-        from ncds_opus_factory.commands import shenkuo
-        from ncds_opus_factory.common import tikhub_client
-
         state = self._load(job_id)
-        urls = list(state.inputs.get("urls") or [])
-        if not urls:
-            urls = [s["url"] for s in (state.inputs.get("shares") or [])
-                    if isinstance(s, dict) and isinstance(s.get("url"), str) and s["url"].strip()]
-        if not urls:
-            raise ValueError("inputs.urls is empty; paste media links into the INPUT node first")
-
         job_dir = self.video_jobs_dir / job_id
-        collect_dir = job_dir / "01_collect"  # author_dir 占位（collect_one 仅用它做历史软链兼容）
-        collect_dir.mkdir(parents=True, exist_ok=True)
-
-        def on_progress(text: str) -> None:
-            self._push_progress(job_id, "asr", text)
-
-        collected_by_idx: dict[int, dict[str, Any]] = {}
-
-        def push_collected() -> None:
-            ordered = [collected_by_idx[k] for k in sorted(collected_by_idx)]
-            self._push_outputs_patch(job_id, "asr", "collected", ordered)
-
-        flag_path = self._cancel_flag(job_id, "asr")
-        for idx, url in enumerate(urls, start=1):
-            on_progress(f"[{idx}/{len(urls)}] 解析作品链接")
-            try:
-                aweme_id = tikhub_client.resolve_aweme_id(url)
-                if not aweme_id:
-                    raise RuntimeError(f"解析不出 aweme_id（仅支持抖音链接/口令）：{url}")
-                meta: dict[str, Any] = {}
-                try:
-                    meta = tikhub_client.extract_meta(tikhub_client.fetch_one_video_detail(aweme_id))
-                except Exception as exc:  # noqa: BLE001 — 元数据失败不阻塞主链路
-                    on_progress(f"[{idx}/{len(urls)}] 元数据获取失败（不阻塞）：{exc}")
-                entry = await self._run_in_thread_cancellable(
-                    shenkuo.collect_one, flag_path,
-                    aweme_id, collect_dir,
-                    meta=meta, on_progress=on_progress,
-                    do_audio=False, do_frames=False,
-                )
-                entry["index"] = idx
-                entry["url"] = url
-                collected_by_idx[idx] = entry
-                push_collected()
-                on_progress(f"[{idx}/{len(urls)}] 采集完成（文案/评论/数据）")
-            except _cancel.TaskCancelled:
-                # TaskCancelled 继承 RuntimeError，不能被下面的 except Exception 吞掉——
-                # 取消信号应中止整个节点，而不是被当成单条失败 continue
-                raise
-            except Exception as exc:  # noqa: BLE001 — 单条失败不拖垮整批
-                msg = str(exc)
-                first = msg.splitlines()[0] if msg.splitlines() else "未知错误"
-                on_progress(f"[{idx}/{len(urls)}] 失败：{first}")
-                collected_by_idx[idx] = {
-                    "index": idx, "url": url, "aweme_id": "", "status": {}, "error": msg,
-                }
-                push_collected()
-                continue
-
-        collected = [collected_by_idx[k] for k in sorted(collected_by_idx)]
-        succeeded = [e for e in collected if not e.get("error")]
-        if not succeeded:
-            raise RuntimeError(f"全部 {len(urls)} 个作品采集失败，详见各作品状态")
-        return {"collected": collected, "collect_dir": str(collect_dir)}
+        return await PipelineAsrCollectRun(
+            runner=self,
+            job_id=job_id,
+            job_dir=job_dir,
+            inputs=state.inputs,
+            flag_path=self._cancel_flag(job_id, "asr"),
+            run_in_thread_cancellable=self._run_in_thread_cancellable,
+        ).run()
 
     # ------------------------------------------------------------
     # 真接入：rw 节点

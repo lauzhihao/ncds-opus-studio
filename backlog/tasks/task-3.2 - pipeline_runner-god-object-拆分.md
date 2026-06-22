@@ -76,3 +76,6 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 2026-06-22：第十三刀拆 lines 执行上下文，新增 `server/pipeline_lines_tasks.py` / `PipelineLinesRun`，把 legacy `_execute_lines` 的 draft 校验、opus 调用、JSON 解析、beats 规整、模板 episode 合并和写盘移出；engine performer 同步从 lines 模块复用 `_build_lines_prompt` / `_load_template_episode`，runner 不再承载 lines 业务 helper。
 - 行数变化：`pipeline_runner.py` 从 1761 行降到 1650 行；新模块 `pipeline_lines_tasks.py` 151 行。
 - 验证：`py_compile` 通过；lines focused tests `72 passed`；pipeline/server focused tests `116 passed`；全量 `.venv/bin/python3 -m pytest -q` 606 passed, 173 warnings。
+- 2026-06-22：第十四刀拆 ASR 快采执行上下文，新增 `server/pipeline_asr_tasks.py` / `PipelineAsrCollectRun`，把 `_execute_asr_collect` 的 URL 归集、沈括 collect_one 快采循环、单条失败兜底、实时 `outputs.collected` patch 和 `TaskCancelled` 透传语义移出；runner 只读取 job inputs 并注入 cancel flag / cancellable thread runner。
+- 行数变化：`pipeline_runner.py` 从 1650 行降到 1595 行；新模块 `pipeline_asr_tasks.py` 94 行。
+- 验证：`py_compile` 通过；ASR/cancel focused tests `38 passed`；pipeline/server focused tests `117 passed`；全量 `.venv/bin/python3 -m pytest -q` 607 passed, 173 warnings。
