@@ -55,6 +55,13 @@ const VIDEO_PIPELINE_SCRIPT = path.join(workspaceDir, 'skills', 'video-pipeline'
 const PYTHON_BIN = resolvePythonBin(process.env);
 // DRIVE_SIMPLE_UPLOAD_MAX_BYTES 已不再使用：分片/简单上传由 lark-cli +upload 内部自动决定。
 
+export function isEnvFlagEnabled(name, env = process.env) {
+  return /^(1|true|yes|on)$/i.test(String(env?.[name] || '').trim());
+}
+
+const SKIP_HIGHLIGHT = isEnvFlagEnabled('NOF_ASR_SKIP_HIGHLIGHT');
+const SKIP_ARTIFACT_UPLOAD = isEnvFlagEnabled('NOF_ASR_SKIP_ARTIFACT_UPLOAD');
+
 export function getJobLayout(baseWorkspaceDir, jobId) {
   const resolvedJobsDir = path.join(baseWorkspaceDir, 'video-jobs');
   const resolvedJobDir = path.join(resolvedJobsDir, jobId);
@@ -1339,22 +1346,30 @@ async function main() {
   // 在所有转写完成后，聚合产生爆款精华分析文档（替代旧的多模型改写流程）。
   const transcribedResults = results.filter((item) => !item.error && (item.polishedTranscriptText || item.transcriptText));
   if (transcribedResults.length > 0) {
-    await sendProgress('开始提取爆款精华', { currentStage: 'highlight' });
-    try {
-      const highlight = await runHighlightStage({ jobId: payload.jobId, items: transcribedResults });
+    if (SKIP_HIGHLIGHT) {
+      await appendTraceLog('highlight_skipped', { reason: 'NOF_ASR_SKIP_HIGHLIGHT' });
+      await sendProgress('跳过爆款精华提取', { currentStage: 'highlight_skipped' });
       for (const item of transcribedResults) {
-        item.highlightDoc = highlight.doc;
-        item.highlightMarkdownPath = highlight.markdownPath;
+        item.highlightSkipped = true;
       }
-      await sendProgress(`爆款精华文档已生成: ${highlight.doc?.url || '(未上传)'}`, { currentStage: 'highlight_done' });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await appendTraceLog('highlight_failure', message);
-      await writeErrorLog(jobDir, payload.jobId, 'highlight_failure', message);
-      const briefError = message.split('\n').pop()?.trim() || message.slice(0, 120);
-      await sendProgress(`爆款精华提取失败: ${briefError}`, { currentStage: 'highlight_failed' });
-      for (const item of transcribedResults) {
-        item.highlightError = message;
+    } else {
+      await sendProgress('开始提取爆款精华', { currentStage: 'highlight' });
+      try {
+        const highlight = await runHighlightStage({ jobId: payload.jobId, items: transcribedResults });
+        for (const item of transcribedResults) {
+          item.highlightDoc = highlight.doc;
+          item.highlightMarkdownPath = highlight.markdownPath;
+        }
+        await sendProgress(`爆款精华文档已生成: ${highlight.doc?.url || '(未上传)'}`, { currentStage: 'highlight_done' });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await appendTraceLog('highlight_failure', message);
+        await writeErrorLog(jobDir, payload.jobId, 'highlight_failure', message);
+        const briefError = message.split('\n').pop()?.trim() || message.slice(0, 120);
+        await sendProgress(`爆款精华提取失败: ${briefError}`, { currentStage: 'highlight_failed' });
+        for (const item of transcribedResults) {
+          item.highlightError = message;
+        }
       }
     }
   }
@@ -1370,13 +1385,18 @@ async function main() {
     results,
     completedAt,
   });
-  try {
-    const artifactData = await uploadJobArtifacts(finalJob);
-    finalJob = await writeJob(artifactData);
-  } catch (error) {
-    finalJob = await writeJob({
-      artifactUploadError: error instanceof Error ? error.message : String(error),
-    });
+  if (SKIP_ARTIFACT_UPLOAD) {
+    await appendTraceLog('artifact_upload_skipped', { reason: 'NOF_ASR_SKIP_ARTIFACT_UPLOAD' });
+    finalJob = await writeJob({ artifactUploadSkipped: true });
+  } else {
+    try {
+      const artifactData = await uploadJobArtifacts(finalJob);
+      finalJob = await writeJob(artifactData);
+    } catch (error) {
+      finalJob = await writeJob({
+        artifactUploadError: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
   await writeLocalDeliverableSummary(results, finalJob);
   await syncTaskFromJob(finalJob, { completedAt: fail > 0 ? undefined : completedAt });

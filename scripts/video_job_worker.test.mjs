@@ -22,6 +22,7 @@ import {
   normalizeCreatedTask,
   parsePipelineSuccessLine,
   resolvePythonBin,
+  isEnvFlagEnabled,
   buildHighlightPrompt,
   runHighlightStage,
 } from './video_job_worker.mjs';
@@ -35,6 +36,15 @@ test('getJobLayout returns normalized task directories', () => {
   assert.equal(layout.jobPath, path.join('/tmp/workspace', 'video-jobs', 'vj_demo123', 'job.json'));
   assert.equal(layout.rawDir, path.join('/tmp/workspace', 'video-jobs', 'vj_demo123', 'raw'));
   assert.equal(layout.deliverablesDir, path.join('/tmp/workspace', 'video-jobs', 'vj_demo123', 'deliverables'));
+});
+
+test('isEnvFlagEnabled accepts only explicit truthy values', () => {
+  assert.equal(isEnvFlagEnabled('FLAG', { FLAG: '1' }), true);
+  assert.equal(isEnvFlagEnabled('FLAG', { FLAG: 'true' }), true);
+  assert.equal(isEnvFlagEnabled('FLAG', { FLAG: 'ON' }), true);
+  assert.equal(isEnvFlagEnabled('FLAG', { FLAG: '0' }), false);
+  assert.equal(isEnvFlagEnabled('FLAG', { FLAG: 'false' }), false);
+  assert.equal(isEnvFlagEnabled('FLAG', {}), false);
 });
 
 test('cleanupExpiredJobs selects only terminal entries older than retention window', async () => {
