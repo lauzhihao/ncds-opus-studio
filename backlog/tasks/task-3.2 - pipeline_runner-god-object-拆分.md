@@ -61,3 +61,6 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 2026-06-22：第八刀开始做文件尺寸实降，新增 `server/pipeline_image_tasks.py` / `PipelineImageRun`，把第六刀已成型的 image 运行上下文从 `pipeline_runner.py` 移出；`PipelineRunner._execute_image` 通过依赖注入传入 `_generate_scene_image`，避免反向 import 环且保留测试 monkeypatch 语义。
 - 行数变化：`pipeline_runner.py` 从 2791 行降到 2635 行；新模块 `pipeline_image_tasks.py` 179 行。
 - 验证：`py_compile pipeline_runner.py pipeline_image_tasks.py` 通过；image focused tests `37 passed`；pipeline/server focused tests `74 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 602 passed, 173 warnings。
+- 2026-06-22：第九刀继续文件尺寸实降，新增 `server/pipeline_storyboard_tasks.py` / `PipelineStoryboardRun`，把第七刀已成型的 storyboard 运行上下文从 `pipeline_runner.py` 移出；`PipelineRunner._execute_storyboard` 通过依赖注入传入 `_call_opus_for_rw` 与 model id，避免反向 import 环且保留测试 monkeypatch 语义。
+- 行数变化：`pipeline_runner.py` 从 2635 行降到 2575 行；新模块 `pipeline_storyboard_tasks.py` 81 行。
+- 验证：`py_compile pipeline_runner.py pipeline_storyboard_tasks.py` 通过；storyboard focused tests `59 passed`；pipeline/server focused tests `96 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 602 passed, 173 warnings。
