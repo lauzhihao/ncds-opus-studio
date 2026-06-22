@@ -1,7 +1,7 @@
 ---
 id: task-3.2
 title: pipeline_runner god-object 拆分
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-19 13:46'
 labels:
@@ -35,7 +35,12 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 agent 后台任务（enrich/refresh/guiguzi）抽出独立模块，pipeline_runner 行数显著下降，586 passed
-- [ ] #2 C6 复制抽成 helper（`_assert_known_model` + mock 短路），行为不变
+- [x] #2 C6 复制抽成 helper（`_assert_known_model` + mock 短路），行为不变
 - [ ] #3 每步拆分后回归 586 passed、web 全链路 UI 不退化
 - [ ] #4 拆分边界先对齐再动手（L2，prefer 小步多次）
 <!-- AC:END -->
+
+## 完成记录
+
+- 2026-06-22：第一刀先做低风险局部抽取：`rewrite_rw_model` / `refine_rw_model` 共用 `_assert_known_model()` 与 `_rw_mock_short_circuit()`，保留原有错误语义和 mock015 短路行为。
+- 验证：`pytest tests/server/test_pipeline_runner.py src/ncds_opus_factory/server/pipeline_runner_events_test.py src/ncds_opus_factory/server/pipelines_sse_test.py -q` 24 passed；`py_compile pipeline_runner.py` 与 `git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。

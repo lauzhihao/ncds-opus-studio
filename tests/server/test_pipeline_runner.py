@@ -7,6 +7,7 @@ _polish_transcript_with_opus 用「转写内容 + title_hint」的 sha256 当缓
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -106,6 +107,43 @@ def test_call_opus_for_rw_delegates_to_common_call_opus(monkeypatch: pytest.Monk
     assert captured["kwargs"]["system_prompt"] == "system"
     assert captured["kwargs"]["model"] == "model-x"
     assert captured["kwargs"]["timeout_seconds"] == pr.RW_LLM_TIMEOUT_SEC
+
+
+def test_rw_model_helpers_assert_known_model_and_mock_short_circuit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    cand = runner._assert_known_model("opus")
+    assert cand["id"] == "opus"
+    with pytest.raises(KeyError, match="unknown model: missing"):
+        runner._assert_known_model("missing")
+
+    async def no_delay() -> None:
+        return None
+
+    emitted: list[dict] = []
+    monkeypatch.setattr(runner, "_mock_regen_delay", no_delay)
+    monkeypatch.setattr(runner, "_emit", lambda _job_id, event: emitted.append(event))
+
+    state = pr.JobState(
+        job_id="j1",
+        pipeline_id="paper_card_talk_015",
+        title="t",
+        created_at=1.0,
+        updated_at=1.0,
+        nodes={"rw": pr.NodeState(name="rw", status="done")},
+        mock=True,
+    )
+
+    assert asyncio.run(runner._rw_mock_short_circuit(state, "j1", "opus")) is True
+    assert emitted[-1]["type"] == "node_status"
+    assert emitted[-1]["node"] == "rw"
+    with pytest.raises(KeyError, match="unknown model: missing"):
+        asyncio.run(runner._rw_mock_short_circuit(state, "j1", "missing"))
+
+    state.mock = False
+    assert asyncio.run(runner._rw_mock_short_circuit(state, "j1", "missing")) is False
 
 
 # --- 鬼谷子选题：job inputs 的 domain 透传到 guiguzi（task-2.5 调用方线程化）------ #

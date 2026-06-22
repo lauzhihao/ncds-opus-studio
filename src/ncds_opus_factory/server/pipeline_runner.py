@@ -747,6 +747,34 @@ class PipelineRunner:
         from ncds_opus_factory.server import mock as mock_mod
         await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
 
+    def _assert_known_model(
+        self,
+        model_id: str,
+        *,
+        missing_message: str | None = None,
+    ) -> dict[str, str]:
+        """返回 MODEL_CANDIDATES 中的候选；缺失时按既有语义抛 KeyError。"""
+        cand = next((c for c in MODEL_CANDIDATES if c["id"] == model_id), None)
+        if cand is None:
+            raise KeyError(missing_message or f"unknown model: {model_id}")
+        return cand
+
+    async def _rw_mock_short_circuit(self, state: JobState, job_id: str, model_id: str) -> bool:
+        """mock 作品的 RW 单模型操作短路。
+
+        rewrite/refine 在 mock015 下都不真调 LLM，只模拟耗时并重发 rw 节点状态。
+        非 mock 返回 False，让调用方继续真实路径。
+        """
+        if not state.mock:
+            return False
+        # mock 同样校验 model_id：否则 bogus 模型也会静默返回 200，与真实路径行为不一致。
+        self._assert_known_model(model_id)
+        await self._mock_regen_delay()
+        n = state.nodes.get("rw")
+        if n is not None:
+            self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
+        return True
+
     async def rewrite_rw_model(self, job_id: str, model_id: str) -> None:
         """重写 rw 某个模型的 draft（保留其他模型不动）。
 
@@ -754,15 +782,7 @@ class PipelineRunner:
         但只调单个模型，覆盖目标 model_id 的子目录。
         """
         state = self._load(job_id)
-        if state.mock:
-            # mock 同样校验 model_id：否则 bogus 模型也会静默返回 200，与真实路径行为不一致。
-            if not any(c["id"] == model_id for c in MODEL_CANDIDATES):
-                raise KeyError(f"unknown model: {model_id}")
-            # 各模型 draft 已由 rw mock 静态写好，不重生；sleep 后重发 rw 状态收尾
-            await self._mock_regen_delay()
-            n = state.nodes.get("rw")
-            if n is not None:
-                self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
+        if await self._rw_mock_short_circuit(state, job_id, model_id):
             return
         n = state.nodes.get("rw")
         if n is None:
@@ -775,9 +795,10 @@ class PipelineRunner:
         )
         if entry is None:
             raise KeyError(f"unknown model: {model_id}")
-        cand = next((c for c in MODEL_CANDIDATES if c["id"] == model_id), None)
-        if cand is None:
-            raise KeyError(f"model {model_id} not in MODEL_CANDIDATES")
+        cand = self._assert_known_model(
+            model_id,
+            missing_message=f"model {model_id} not in MODEL_CANDIDATES",
+        )
 
         # 重新拼 sourceText（同 _execute_rw）
         asr_node = state.nodes.get("asr")
@@ -848,13 +869,7 @@ class PipelineRunner:
         优化后**重跑质检并回写 drafts entry 的 qc/qc_rubric**（前端雷达图随之刷新）。
         """
         state = self._load(job_id)
-        if state.mock:
-            if not any(c["id"] == model_id for c in MODEL_CANDIDATES):
-                raise KeyError(f"unknown model: {model_id}")
-            await self._mock_regen_delay()
-            n = state.nodes.get("rw")
-            if n is not None:
-                self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
+        if await self._rw_mock_short_circuit(state, job_id, model_id):
             return
         n = state.nodes.get("rw")
         if n is None:
