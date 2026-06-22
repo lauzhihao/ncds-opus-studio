@@ -39,6 +39,7 @@ from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 from ncds_opus_factory.server.pipeline_agent_tasks import PipelineAgentTasksMixin
 from ncds_opus_factory.server.pipeline_engine_bridge import PipelineEngineBridgeMixin
 from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
+from ncds_opus_factory.server.pipeline_lines_tasks import PipelineLinesRun
 from ncds_opus_factory.server.pipeline_render_tasks import PipelineRenderRun
 from ncds_opus_factory.server.pipeline_rw_tasks import PipelineRwRun
 from ncds_opus_factory.server.pipeline_storyboard_tasks import PipelineStoryboardRun
@@ -1597,79 +1598,14 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         等渲染配置），写 02_rw/episode.json。
         """
         pipeline_id = self._load(job_id).pipeline_id
-        draft_path = self.video_jobs_dir / job_id / "02_rw" / "draft.md"
-        if not draft_path.is_file():
-            raise ValueError(
-                "02_rw/draft.md missing；先在 RW 抽屉里选模型（用此模型 · 下一步）"
-            )
-        draft = draft_path.read_text(encoding="utf-8").strip()
-        if not draft:
-            raise ValueError("02_rw/draft.md 为空")
-
-        def on_progress(text: str) -> None:
-            self._push_progress(job_id, "lines", text)
-
-        system_prompt, user_prompt = _build_lines_prompt(draft)
-        on_progress("调 opus 结构化为 beats…")
-        raw = await asyncio.to_thread(
-            rw_helpers._call_opus_for_rw, user_prompt, system_prompt, DEFAULT_OPUS_MODEL_ID
-        )
-
-        # 解析 JSON（容忍 ```json ... ``` 包裹）
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", cleaned)
-            if inner:
-                cleaned = inner.group(1).strip()
-        try:
-            parsed = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"opus 输出非法 JSON：{exc}；tail={cleaned[-300:]}") from exc
-
-        beats = parsed.get("beats") if isinstance(parsed, dict) else None
-        meta_in = parsed.get("meta") if isinstance(parsed, dict) else None
-        if not isinstance(beats, list) or not beats:
-            raise RuntimeError("结构化结果缺 beats[] 或为空")
-
-        # 规整 beats（只留约定字段；scene 留空串，待 storyboard 回填）
-        norm_beats: list[dict[str, Any]] = []
-        for b in beats:
-            if not isinstance(b, dict):
-                continue
-            zh = str(b.get("zh") or "").strip()
-            if not zh:
-                continue
-            norm_beats.append({
-                "zh": zh,
-                "en": str(b.get("en") or ""),
-                "scene": "",
-                "chapter": b.get("chapter") if isinstance(b.get("chapter"), int) else None,
-            })
-        if not norm_beats:
-            raise RuntimeError("beats 全部为空")
-
-        # 合并 015 模板骨架；scenes 留空等 storyboard 产出
-        episode = _load_template_episode(pipeline_id)
-        episode["beats"] = norm_beats
-        episode["scenes"] = {}
-        if isinstance(meta_in, dict):
-            meta = dict(episode.get("meta") or {})
-            if meta_in.get("title"):
-                meta["title"] = str(meta_in["title"])
-            if meta_in.get("subtitle"):
-                meta["subtitle"] = str(meta_in["subtitle"])
-            if isinstance(meta_in.get("tags"), list):
-                meta["tags"] = [str(t) for t in meta_in["tags"]]
-            episode["meta"] = meta
-
-        ep_path = self.video_jobs_dir / job_id / "02_rw" / "episode.json"
-        ep_path.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
-        on_progress(f"完成：{len(norm_beats)} 条 beats（scenes 待分镜产出）")
-
-        return {
-            "episode_relpath": "02_rw/episode.json",
-            "beats_count": len(norm_beats),
-        }
+        return await PipelineLinesRun(
+            runner=self,
+            job_id=job_id,
+            job_dir=self.video_jobs_dir / job_id,
+            pipeline_id=pipeline_id,
+            call_opus_for_rw=rw_helpers._call_opus_for_rw,
+            model_id=DEFAULT_OPUS_MODEL_ID,
+        ).run()
 
     # ------------------------------------------------------------
     # storyboard（分镜）节点：director agent 产出视觉层 scenes{}
@@ -1712,50 +1648,3 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
             job_dir=job_dir,
             render_run=render_cmd.run,
         ).run()
-
-
-def _build_lines_prompt(draft_md: str) -> tuple[str, str]:
-    """LINES 阶段：把 RW 定稿 markdown 文章结构化成逐句字幕 beats[]。
-
-    只产脚本层（meta + beats），**不产 scenes / 分镜**——画面切分与简笔画设计
-    交给下游独立的 storyboard（分镜）节点的 director agent。
-    """
-    system_prompt = (
-        "你是 paper-card-talk 短视频脚本结构化助手。把给定文章拆成短视频的逐句字幕"
-        "（beats）。只输出一个合法 JSON 对象，禁止代码块或任何额外文本。"
-        "不要产出任何画面 / 分镜 / 图像描述——那是后续分镜环节的事。"
-    )
-    user_prompt = "\n".join([
-        "把下面这篇文章结构化成 paper-card-talk 短视频的逐句字幕 JSON。",
-        "",
-        "【输出格式】只输出一个 JSON 对象，结构严格如下，不要代码块包裹、不要解释：",
-        "{",
-        '  "meta": { "title": "短标题（≤20字）", "subtitle": "", "tags": [] },',
-        '  "beats": [',
-        '    { "zh": "单句中文字幕", "en": "英文翻译（可空串）", "chapter": 整数或null }',
-        "  ]",
-        "}",
-        "",
-        "【beats 要求】",
-        "- 把文章正文切成单句字幕，每句 10-30 字，朗朗上口、可朗读；",
-        "- 全篇 30-80 条；不要把整段塞进一条；",
-        "- 每个章节的首条 beat 标 chapter 编号（1..N），其余 beat 的 chapter 写 null；",
-        "- 不要输出 scene 字段，也不要输出 scenes —— 画面切分交给下游分镜环节；",
-        "- 只能改写、压缩、重组文章信息，不得编造文章未出现的人物 / 数据 / 平台。",
-        "",
-        "== 文章 ==",
-        draft_md,
-        "== 文章结束 ==",
-    ])
-    return system_prompt, user_prompt
-
-
-def _load_template_episode(pipeline_id: str = "paper_card_talk_015") -> dict[str, Any]:
-    """读模板自带 episode.json 作为 LINES 结构化输出的骨架（保留 audio/visual/
-    playback/fonts/image 等渲染配置，只覆盖 meta/beats）。pipeline_id 参数保留
-    供未来多模板扩展，当前只有 015。"""
-    tpl = (
-        _template_dir("paper_card_talk_015")
-        / ".015-draft-assets" / "episode.json"
-    )
-    return json.loads(tpl.read_text(encoding="utf-8"))

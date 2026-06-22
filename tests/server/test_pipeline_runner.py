@@ -149,6 +149,43 @@ def test_rw_model_helpers_assert_known_model_and_mock_short_circuit(
     assert asyncio.run(runner._rw_mock_short_circuit(state, "j1", "missing")) is False
 
 
+def test_execute_lines_writes_episode_with_template_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    rw_dir = tmp_path / job.job_id / "02_rw"
+    rw_dir.mkdir(parents=True)
+    (rw_dir / "draft.md").write_text("# 草稿\n\n第一段。第二段。", encoding="utf-8")
+
+    raw = json.dumps({
+        "meta": {"title": "测试标题", "subtitle": "", "tags": ["x"]},
+        "beats": [
+            {"zh": "第一句字幕", "en": "", "chapter": 1},
+            {"zh": "第二句字幕", "en": "", "chapter": None},
+        ],
+    }, ensure_ascii=False)
+
+    def fake_call_opus(user_prompt: str, system_prompt: str, model_id: str) -> str:
+        assert "第一段" in user_prompt
+        assert "脚本结构化助手" in system_prompt
+        assert model_id == pr.DEFAULT_OPUS_MODEL_ID
+        return raw
+
+    monkeypatch.setattr(rw_helpers, "_call_opus_for_rw", fake_call_opus)
+
+    out = asyncio.run(runner._execute_lines(job.job_id))
+
+    assert out == {"episode_relpath": "02_rw/episode.json", "beats_count": 2}
+    episode = json.loads((rw_dir / "episode.json").read_text(encoding="utf-8"))
+    assert episode["meta"]["title"] == "测试标题"
+    assert [b["zh"] for b in episode["beats"]] == ["第一句字幕", "第二句字幕"]
+    assert all(b["scene"] == "" for b in episode["beats"])
+    assert episode["scenes"] == {}
+    assert "audio" in episode and "playback" in episode
+
+
 def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
     job = runner.create_job("paper_card_talk_015", "t", {})

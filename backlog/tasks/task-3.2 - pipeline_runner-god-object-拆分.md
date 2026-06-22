@@ -73,3 +73,6 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 2026-06-22：第十二刀拆底部 helper，新增 `server/pipeline_media_helpers.py`、`server/pipeline_asr_helpers.py`、`server/pipeline_rw_helpers.py`，把 TTS/ASR subprocess、ffmpeg 抽帧、生图、episode 读取、RW 候选模型调用、RW prompt/source/QC 从 `pipeline_runner.py` 移出；engine performer、mock 与相关测试同步改从 helper 模块取 seam，不再从 runner 拉业务 helper。
 - 行数变化：`pipeline_runner.py` 从 2420 行降到 1761 行；新模块 `pipeline_media_helpers.py` 178 行，`pipeline_asr_helpers.py` 113 行，`pipeline_rw_helpers.py` 329 行。
 - 验证：`py_compile` 通过；helper/runner/performer focused tests `93 passed`；pipeline/server focused tests `115 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 605 passed, 173 warnings。
+- 2026-06-22：第十三刀拆 lines 执行上下文，新增 `server/pipeline_lines_tasks.py` / `PipelineLinesRun`，把 legacy `_execute_lines` 的 draft 校验、opus 调用、JSON 解析、beats 规整、模板 episode 合并和写盘移出；engine performer 同步从 lines 模块复用 `_build_lines_prompt` / `_load_template_episode`，runner 不再承载 lines 业务 helper。
+- 行数变化：`pipeline_runner.py` 从 1761 行降到 1650 行；新模块 `pipeline_lines_tasks.py` 151 行。
+- 验证：`py_compile` 通过；lines focused tests `72 passed`；pipeline/server focused tests `116 passed`；全量 `.venv/bin/python3 -m pytest -q` 606 passed, 173 warnings。

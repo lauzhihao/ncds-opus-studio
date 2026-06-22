@@ -38,6 +38,10 @@ from ncds_opus_factory.server.pipeline_media_helpers import (
     _rebuild_tts_items_015,
     _run_tts_gen_015,
 )
+from ncds_opus_factory.server.pipeline_lines_tasks import (
+    _build_lines_prompt,
+    _load_template_episode,
+)
 from ncds_opus_factory.server.pipeline_rw_helpers import (
     MODEL_CANDIDATES,
     _ModelUnavailable,
@@ -46,10 +50,6 @@ from ncds_opus_factory.server.pipeline_rw_helpers import (
     _call_opus_for_rw,
     _invoke_rw_candidate,
     _rw_source_text,
-)
-from ncds_opus_factory.server.pipeline_runner import (
-    _build_lines_prompt,
-    _load_template_episode,
 )
 from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile
 
