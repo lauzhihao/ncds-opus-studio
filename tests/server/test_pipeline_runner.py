@@ -238,6 +238,70 @@ def test_execute_asr_collect_uses_extracted_run_context(
     assert [e.get("aweme_id") for e in patched] == ["aweme-ok", ""]
 
 
+def test_select_rw_model_copies_selected_draft(tmp_path: Path):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    rw_dir = tmp_path / job.job_id / "02_rw"
+    model_dir = rw_dir / "opus"
+    model_dir.mkdir(parents=True)
+    (model_dir / "draft.md").write_text("# 定稿\n\n正文", encoding="utf-8")
+
+    state = runner.get_job(job.job_id)
+    state.nodes["rw"].status = "done"
+    state.nodes["rw"].outputs = {
+        "drafts": [
+            {"model_id": "opus", "status": "success"},
+            {"model_id": "bad", "status": "failed"},
+        ],
+        "selected_model_id": None,
+    }
+    runner._save(state)
+
+    runner.select_rw_model(job.job_id, "opus")
+
+    assert (rw_dir / "draft.md").read_text(encoding="utf-8") == "# 定稿\n\n正文"
+    updated = runner.get_job(job.job_id).nodes["rw"].outputs
+    assert updated["selected_model_id"] == "opus"
+    with pytest.raises(ValueError, match="unknown model or failed model"):
+        runner.select_rw_model(job.job_id, "bad")
+
+
+def test_regen_scene_image_from_preview_updates_image_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    runner.write_episode(job.job_id, {
+        "image": {"size": "1024x1024", "quality": "high", "noTextHint": "no text"},
+        "beats": [{"scene": "s1"}],
+        "scenes": {"s1": {"prompt": "paper card scene"}},
+    })
+    state = runner.get_job(job.job_id)
+    state.nodes["image"].status = "done"
+    state.nodes["image"].outputs = {
+        "items": [{"scene_id": "s1", "image_relpath": "03_image/old.webp"}],
+    }
+    runner._save(state)
+    captured: dict[str, Any] = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        Path(kwargs["target"]).write_bytes(b"webp")
+
+    monkeypatch.setattr(media_helpers, "_generate_scene_image", fake_generate)
+
+    rel = asyncio.run(runner.regen_scene_image_from_preview(job.job_id, "s1"))
+
+    assert rel == "03_image/s1.webp"
+    assert captured["scene_id"] == "s1"
+    assert captured["prompt"] == "paper card scene no text"
+    assert captured["size"] == "1024x1024"
+    assert captured["quality"] == "high"
+    updated = runner.get_job(job.job_id).nodes["image"].outputs["items"][0]
+    assert updated["image_relpath"] == "03_image/s1.webp"
+
+
 def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
     job = runner.create_job("paper_card_talk_015", "t", {})

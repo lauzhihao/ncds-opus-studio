@@ -79,3 +79,6 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 2026-06-22：第十四刀拆 ASR 快采执行上下文，新增 `server/pipeline_asr_tasks.py` / `PipelineAsrCollectRun`，把 `_execute_asr_collect` 的 URL 归集、沈括 collect_one 快采循环、单条失败兜底、实时 `outputs.collected` patch 和 `TaskCancelled` 透传语义移出；runner 只读取 job inputs 并注入 cancel flag / cancellable thread runner。
 - 行数变化：`pipeline_runner.py` 从 1650 行降到 1595 行；新模块 `pipeline_asr_tasks.py` 94 行。
 - 验证：`py_compile` 通过；ASR/cancel focused tests `38 passed`；pipeline/server focused tests `117 passed`；全量 `.venv/bin/python3 -m pytest -q` 607 passed, 173 warnings。
+- 2026-06-22：第十五刀拆 RW/regen 用户操作，新增 `server/pipeline_rw_operations.py` / `PipelineRwOperationsMixin` 与 `server/pipeline_regen_operations.py` / `PipelineRegenOperationsMixin`，把 RW 单模型重写、rubric 优化、选稿、preview 生图重生、image/tts scene 级重生和 mock regen 短路从 runner 移出；`PipelineRunner` 继续暴露同名 public methods 供 routes 使用。
+- 行数变化：`pipeline_runner.py` 从 1595 行降到 1093 行；新模块 `pipeline_rw_operations.py` 212 行，`pipeline_regen_operations.py` 284 行。
+- 验证：`py_compile` 通过；operation focused tests `50 passed`；pipeline/server focused tests `119 passed`；全量 `.venv/bin/python3 -m pytest -q` 609 passed, 173 warnings。
