@@ -113,8 +113,8 @@ def build_router(vite_base: str | None = None) -> APIRouter:
             logger.warning("[dev-proxy] ws upstream connect failed: %s", e)
             try:
                 await ws.close(code=1011)
-            except Exception:
-                pass
+            except Exception as close_error:
+                logger.debug("[dev-proxy] ws close after connect failure failed: %s", close_error)
             return
 
         async def pump_c2s() -> None:
@@ -152,11 +152,11 @@ def build_router(vite_base: str | None = None) -> APIRouter:
         finally:
             try:
                 await upstream.close()
-            except Exception:
-                pass
+            except Exception as close_error:
+                logger.debug("[dev-proxy] upstream close failed: %s", close_error)
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except Exception as close_error:
+                logger.debug("[dev-proxy] client ws close failed: %s", close_error)
 
     return router

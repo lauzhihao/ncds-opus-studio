@@ -112,7 +112,7 @@ class VideoPipelineTests(unittest.TestCase):
 
             line = self.module.format_success_line("下载", media_path)
 
-            self.assertEqual(line, f"✅ 下载: {media_path.resolve()}")
+            self.assertEqual(line, f"[OK] 下载: {media_path.resolve()}")
             self.assertTrue(Path(line.split(": ", 1)[1]).is_absolute())
 
     def test_format_success_line_for_transcript_uses_absolute_path(self):
@@ -122,7 +122,7 @@ class VideoPipelineTests(unittest.TestCase):
 
             line = self.module.format_success_line("转写", transcript_path)
 
-            self.assertEqual(line, f"✅ 转写: {transcript_path.resolve()}")
+            self.assertEqual(line, f"[OK] 转写: {transcript_path.resolve()}")
             self.assertTrue(Path(line.split(": ", 1)[1]).is_absolute())
 
     def test_build_polished_transcript_output_path_targets_deliverables_directory(self):
@@ -201,7 +201,7 @@ class VideoPipelineTests(unittest.TestCase):
                 result = self.module.download_via_tikhub("https://v.douyin.com/demo/", "douyin", output_dir)
 
         self.assertIsNone(result)
-        self.assertIn("❌ TikHub 下载失败: stdout failure detail", stdout.getvalue())
+        self.assertIn("[FAIL] TikHub 下载失败: stdout failure detail", stdout.getvalue())
 
     def test_process_url_calls_asr_service_without_knowing_backend_details(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -293,12 +293,12 @@ class VideoPipelineTests(unittest.TestCase):
                 self.module.process_url("ignored", output_dir)
 
             output_lines = stdout.getvalue().splitlines()
-            success_lines = [line for line in output_lines if line.startswith("✅ ")]
+            success_lines = [line for line in output_lines if line.startswith("[OK] ")]
             self.assertEqual(
                 success_lines,
                 [
-                    f"✅ 下载: {video_path.resolve()}",
-                    f"✅ 转写: {transcript_path.resolve()}",
+                    f"[OK] 下载: {video_path.resolve()}",
+                    f"[OK] 转写: {transcript_path.resolve()}",
                 ],
             )
 

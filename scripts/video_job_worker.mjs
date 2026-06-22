@@ -827,17 +827,24 @@ async function syncTaskFromJob(job, options = {}) {
 }
 
 export function parsePipelineSuccessLine(text) {
-  if (text.startsWith('✅ 下载:')) {
-    const videoPath = text.replace(/^✅ 下载:\s*/, '').trim();
-    return videoPath ? { videoPath } : null;
+  const okPrefix = '(?:\\[OK\\]|\\u2705)';
+  const successMatch = text.match(new RegExp(`^${okPrefix}\\s*(下载|转写|清洗稿):\\s*(.*)$`, 'u'));
+  if (!successMatch) {
+    return null;
   }
-  if (text.startsWith('✅ 转写:')) {
-    const transcriptPath = text.replace(/^✅ 转写:\s*/, '').trim();
-    return transcriptPath ? { transcriptPath } : null;
+  const [, label, rawPath] = successMatch;
+  const filePath = rawPath.trim();
+  if (!filePath) {
+    return null;
   }
-  if (text.startsWith('✅ 清洗稿:')) {
-    const polishedTranscriptPath = text.replace(/^✅ 清洗稿:\s*/, '').trim();
-    return polishedTranscriptPath ? { polishedTranscriptPath } : null;
+  if (label === '下载') {
+    return { videoPath: filePath };
+  }
+  if (label === '转写') {
+    return { transcriptPath: filePath };
+  }
+  if (label === '清洗稿') {
+    return { polishedTranscriptPath: filePath };
   }
   return null;
 }
@@ -878,8 +885,9 @@ export function consumePipelineLine(item, line, mode) {
       patch: { currentStage: 'transcribe' },
     };
   }
-  if (/^✓\s+\d+\/\d+\s+片完成$/.test(text)) {
-    return { message: `分片进度: ${text.replace(/^✓\s*/, '')}`, patch: { currentStage: 'transcribe' } };
+  const chunkProgress = text.match(/^(?:\[OK\]|\u2713)\s+(\d+\/\d+\s+片完成)$/u);
+  if (chunkProgress) {
+    return { message: `分片进度: ${chunkProgress[1]}`, patch: { currentStage: 'transcribe' } };
   }
   if (text.includes('LLM 校对中')) {
     return { message: '转写后校对中...', patch: { currentStage: 'proofread' } };
@@ -892,7 +900,7 @@ export function consumePipelineLine(item, line, mode) {
     item.polishedTranscriptPath = pipelineSuccess.polishedTranscriptPath;
     return { message: `清洗稿已生成: ${item.polishedTranscriptPath}`, patch: { currentStage: 'polish_done' } };
   }
-  if (text.startsWith('⚠️')) {
+  if (/^(?:\[WARN\]|\u26a0\ufe0f?)/u.test(text)) {
     return { message: text, patch: { currentStage: 'warning' } };
   }
   return null;

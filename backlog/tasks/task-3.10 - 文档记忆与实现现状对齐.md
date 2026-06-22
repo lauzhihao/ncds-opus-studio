@@ -1,7 +1,7 @@
 ---
 id: task-3.10
 title: 文档记忆与实现现状对齐
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-22'
 labels:
@@ -68,11 +68,17 @@ PipelineRunner / TaskRunner / engine。
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `docs/README.md` 的进度、入口关系、测试基线描述不再引用过期的 382/389 或“asr/rw 改道下一步”。
-- [ ] #2 `docs/PRODUCTION-ENGINE-DESIGN.md` 区分当前实现、设计目标、未来项，并准确描述 `NOF_ENGINE_NODES` 默认与 asr legacy 分叉。
-- [ ] #3 `docs/FRONTEND-API.md` 准确描述 `/jobs`、`/tasks`、`/instances` 的当前职责和消费者。
-- [ ] #4 Feishu 相关 docstring / docs / tests 不再误导为直连 OpenAPI；`open.feishu.cn` 字面量冲突被清理或明确废弃且确认零活路径。
-- [ ] #5 `scripts/map_project.py` 与重新生成的 `.project_map` 反映当前实现事实；是否提交 `.project_map` 有明确说明。
-- [ ] #6 `app/README.md` 不再是默认 Flutter starter，能作为 app 接手入口。
-- [ ] #7 文档清理不改运行时行为；如只改 Markdown/docstring，可不跑全量测试，但需记录未跑原因。
+- [x] #1 `docs/README.md` 的进度、入口关系、测试基线描述不再引用过期的 382/389 或“asr/rw 改道下一步”。
+- [x] #2 `docs/PRODUCTION-ENGINE-DESIGN.md` 区分当前实现、设计目标、未来项，并准确描述 `NOF_ENGINE_NODES` 默认与 asr legacy 分叉。
+- [x] #3 `docs/FRONTEND-API.md` 准确描述 `/jobs`、`/tasks`、`/instances` 的当前职责和消费者。
+- [x] #4 Feishu 相关 docstring / docs / tests 不再误导为直连 OpenAPI；`open.feishu.cn` 字面量冲突被清理或明确废弃且确认零活路径。
+- [x] #5 `scripts/map_project.py` 反映当前实现事实；`.project_map` 由看门狗自动刷新，本次不手动生成、不主动提交。
+- [x] #6 `app/README.md` 不再是默认 Flutter starter，能作为 app 接手入口。
+- [x] #7 文档清理不改运行时行为；如只改 Markdown/docstring，可不跑全量测试，但需记录未跑原因。
 <!-- AC:END -->
+
+## 完成记录
+
+- 2026-06-22：已对齐 docs / app README / Feishu docstring / `scripts/map_project.py`。遵 owner 要求未手动调用 `scripts/map_project.py`，`.project_map` 交由看门狗自动刷新。
+- 验证：`node --test scripts/feishu_sdk_adapter.test.mjs`、`python3 -m py_compile scripts/map_project.py src/ncds_opus_factory/commands/asr.py src/ncds_opus_factory/commands/rw.py`、`git diff --check` 通过；关键词检查在当前事实文档与代码范围内无旧命中。
+- 未跑全量 `pytest`：本批只改 Markdown、docstring、map 生成摘要和 Feishu adapter 常量等低风险信息面；未改变任务执行路径。

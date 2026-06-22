@@ -171,9 +171,9 @@ if __name__ == "__main__":
         print(f"视频地址: {info['video_url']}")
         
         if download:
-            print("\n⬇️  下载中...")
+            print("\n[DL] 下载中...")
             path = download_video(info['video_url'])
-            print(f"✅ 下载完成: {path}")
+            print(f"[OK] 下载完成: {path}")
     except Exception as e:
-        print(f"\n❌ 错误: {e}")
+        print(f"\n[FAIL] 错误: {e}")
         sys.exit(1)

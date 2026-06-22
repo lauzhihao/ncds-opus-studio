@@ -78,5 +78,5 @@ Node: puppeteer-core / puppeteer-screen-recorder）安装在素材仓库里，
 ## 待优化
 
 - `pic_gen.py` 当前硬编码 `~/.codex/skills/gpt-image/scripts/gpt_image_gen.py` 路径；
-  应改为优先 `from ncds_opus_factory.commands.wst import IMAGE_GATEWAY`（或环境变量 override）。
+  应改为优先从 `ncds_opus_core.gpt_image` 定位包内脚本（或环境变量 override）。
 - `tts_gen.py` 的 DashScope 调用逻辑后续可抽到 `ncds_opus_factory.common.tts`，模板只保留批处理逻辑。

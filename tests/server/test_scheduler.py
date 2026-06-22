@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from ncds_opus_factory.common import cancel
 from ncds_opus_factory.server import task_runner as tr
 from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.schemas import TaskMeta
@@ -290,6 +291,39 @@ def test_inflight_tracking(tmp_path: Path):
     store, tid = asyncio.run(main())
     assert store.get_meta(tid).status == "cancelled"
     assert store.get_result(tid) is None
+
+
+def test_shutdown_requests_cooperative_stop_without_user_cancel(tmp_path: Path):
+    """worker 停机时通过 cancel.current() 请求当前任务自停，任务保持 running 等 recover。"""
+    started = threading.Event()
+    stopped = threading.Event()
+
+    def cooperative(on_progress=None, **kw):
+        check = cancel.current()
+        started.set()
+        while not check():
+            time.sleep(0.01)
+        stopped.set()
+        raise cancel.TaskCancelled("worker shutdown")
+
+    async def main():
+        store = TaskStore(tmp_path / "tasks")
+        runner = tr.TaskRunner(store, {"x": cooperative})
+        await runner.recover_and_start()
+        tid = await runner.submit("x", {})
+        for _ in range(100):
+            if started.is_set() and await runner.is_inflight(tid):
+                break
+            await asyncio.sleep(0.02)
+
+        await runner.shutdown(grace_seconds=2.0)
+        return store, runner, tid
+
+    store, runner, tid = asyncio.run(main())
+    assert stopped.is_set(), "shutdown 应触发命令协作式取消检查"
+    assert store.get_meta(tid).status == "running"
+    assert store.get_result(tid) is None
+    assert runner._workers == []
 
 
 # ---------------------------------------------------------------------------

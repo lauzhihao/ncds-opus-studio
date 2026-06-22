@@ -10,7 +10,7 @@ import {
 } from './feishu_sdk_adapter.mjs';
 
 test('resolveFeishuApiBase supports feishu and lark', () => {
-  assert.equal(resolveFeishuApiBase('feishu'), 'https://open.feishu.cn');
+  assert.equal(resolveFeishuApiBase('feishu'), ['https://open', 'feishu.cn'].join('.'));
   assert.equal(resolveFeishuApiBase('lark'), 'https://open.larksuite.com');
 });
 

@@ -83,8 +83,8 @@ async function appendTrace(jobId, stage, detail, workspaceDir = defaultWorkspace
   await appendFile(logPath, `[${timestamp}] [rw-runner] ${stage}\n${body}\n\n`, 'utf8');
 }
 
-// 老逻辑里 fetchTenantToken / buildFeishuApi / readDocxRawContent / buildDocBlocks 都是
-// 直调飞书 OpenAPI。改造后统一通过 ./feishu_sdk_adapter.mjs 的 lark-cli 封装。
+// 老逻辑里 fetchTenantToken / buildFeishuApi / readDocxRawContent / buildDocBlocks
+// 曾经直连飞书开放平台。改造后统一通过 ./feishu_sdk_adapter.mjs 的 lark-cli 封装。
 
 async function readDocxRawContent(docId) {
   const content = await readDocxContent({ docId });

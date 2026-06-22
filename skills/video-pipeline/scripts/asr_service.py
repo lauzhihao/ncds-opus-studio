@@ -472,16 +472,16 @@ def proofread_with_fallback(text: str, candidates: list[tuple[str, str]]) -> str
     errors = []
     for provider, model_name in candidates:
         try:
-            print(f"  📝 LLM 校对中 ({provider}/{model_name})...")
+            print(f"  [ASR] LLM 校对中 ({provider}/{model_name})...")
             result = call_model(provider, model_name, prompt, PROOFREAD_SYSTEM_PROMPT)
             if result:
                 return result
             raise RuntimeError("返回空文本")
         except (HTTPError, URLError, TimeoutError, RuntimeError, KeyError, IndexError, ValueError) as exc:
             errors.append(f"{provider}/{model_name}: {exc}")
-            print(f"  ⚠️  {provider}/{model_name} 校对失败，尝试降级: {exc}")
+            print(f"  [WARN] {provider}/{model_name} 校对失败，尝试降级: {exc}")
             continue
-    print("  ⚠️  所有校对模型均失败，使用原始转写文本")
+    print("  [WARN] 所有校对模型均失败，使用原始转写文本")
     if errors:
         print(f"  失败链路: {' | '.join(errors)}")
     return text
@@ -640,7 +640,7 @@ def transcribe_via_whisper(audio_path: Path, language: str = "Chinese") -> Path:
                 if is_proofread_result_usable(raw_text, proofread_text):
                     txt_path.write_text(proofread_text, encoding="utf-8")
                 else:
-                    print("  ⚠️  校对结果明显短于原文，保留原始转写文本")
+                    print("  [WARN] 校对结果明显短于原文，保留原始转写文本")
             return txt_path
         raise RuntimeError("转写完成但找不到输出文件")
 
@@ -661,11 +661,11 @@ def transcribe_via_whisper(audio_path: Path, language: str = "Chinese") -> Path:
             try:
                 idx, text = future.result()
                 results[idx] = text
-                print(f"  ✓ {done_count}/{len(chunks)} 片完成")
+                print(f"  [OK] {done_count}/{len(chunks)} 片完成")
             except Exception as exc:
                 chunk_path = futures[future]
                 failures.append(f"{chunk_path.name}: {exc}")
-                print(f"  ⚠️  分片转写异常: {chunk_path.name}: {exc}")
+                print(f"  [WARN] 分片转写异常: {chunk_path.name}: {exc}")
 
     missing_indexes = [index for index in range(len(chunks)) if index not in results]
     if failures or missing_indexes:
@@ -681,7 +681,7 @@ def transcribe_via_whisper(audio_path: Path, language: str = "Chinese") -> Path:
     if is_proofread_result_usable(full_text, proofread_text):
         full_text = proofread_text
     else:
-        print("  ⚠️  校对结果明显短于原文，保留原始合并文本")
+        print("  [WARN] 校对结果明显短于原文，保留原始合并文本")
 
     txt_path.write_text(full_text, encoding="utf-8")
     shutil.rmtree(chunk_dir, ignore_errors=True)

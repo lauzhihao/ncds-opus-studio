@@ -4,11 +4,12 @@
 产出 `.project_map`（项目根），供 agent 在进入会话时快速了解仓库结构。
 被 `scripts/map_project_watchdog.py` 周期性调用，文件变化时自动重生成。
 
-地图包含四块：
-1. Commands —— 5 个命令的入口模块路径
-2. Runtime —— scripts/*.mjs（Node runner/worker/adapter）和 pipelines/gpt_image 的 Python 入口
+地图包含五块：
+1. Commands —— primitive / agent 入口模块路径
+2. Runtime —— 当前 HTTP 入口关系、engine strangler、Node runner/worker/adapter
 3. Skills —— skills/*/SKILL.md 的 name + description
-4. Tree —— 折叠 node_modules/state/video-jobs/__pycache__ 等噪音目录后的目录树
+4. App —— Flutter 决策视角当前入口
+5. Tree —— 折叠 node_modules/state/video-jobs/__pycache__ 等噪音目录后的目录树
 """
 
 from __future__ import annotations
@@ -146,13 +147,16 @@ def generate_tree(dir_path: Path, prefix: str, extra: list[str]) -> list[str]:
 
 # ----- 摘要提取 -----
 
-# 5 个 primitive 命令。wst/tst/vid 真身已迁 core(factory 仅转发 shim);asr/rw 真身在 factory。
+# 主要 primitive 命令。core primitive 真身在 ncds_opus_core;asr/rw 真身在 factory。
 PRIMITIVES = [
-    ("/wst", "文生图(gpt-image-2)", "packages/core/src/ncds_opus_core/commands/wst.py", "factory 仅 shim"),
-    ("/tst", "图生图(gpt-image-2 edit)", "packages/core/src/ncds_opus_core/commands/tst.py", "factory 仅 shim"),
-    ("/vid", "视频生成(DashScope)", "packages/core/src/ncds_opus_core/commands/vid.py", "factory 仅 shim"),
+    ("/wst", "文生图(gpt-image-2)", "packages/core/src/ncds_opus_core/commands/wst.py", "core"),
+    ("/tst", "图生图(gpt-image-2 edit)", "packages/core/src/ncds_opus_core/commands/tst.py", "core"),
+    ("/vid", "视频生成(DashScope)", "packages/core/src/ncds_opus_core/commands/vid.py", "core"),
+    ("/tts", "批量 TTS(DashScope CosyVoice)", "packages/core/src/ncds_opus_core/commands/tts.py", "core"),
+    ("/render", "离线录屏 + ffmpeg 合成 MP4", "packages/core/src/ncds_opus_core/commands/render.py", "core"),
+    ("/render_015", "015 纸卡模板渲染", "packages/core/src/ncds_opus_core/commands/render_015.py", "core"),
     ("/asr", "多链路并行转写 + 爆款精华分析", "src/ncds_opus_factory/commands/asr.py", "factory 专属"),
-    ("/rw",  "deepseek 改写(原 gpt5.5+gemini 已裁为 deepseek 单候选)", "src/ncds_opus_factory/commands/rw.py", "factory 专属"),
+    ("/rw",  "文档内容改写 + 本地 manifest/lark-cli 文档冒泡", "src/ncds_opus_factory/commands/rw.py", "factory 专属"),
 ]
 
 # 6 个 agent(决策/编排层,经 nof <agent> 或 POST /tasks 调度)。
@@ -182,7 +186,11 @@ def extract_commands_summary() -> list[str]:
 
 def extract_runtime_summary() -> list[str]:
     """Node runner / worker / adapter + Python pipeline / gpt_image 网关。"""
-    lines: list[str] = []
+    lines: list[str] = [
+        "- HTTP surfaces: `/jobs` = web `/studio` 主路径(PipelineRunner facade); `/tasks` = Flutter app/外部任务主路径(TaskRunner + nof-worker); `/instances` = engine driver API(已存在,尚未替代前端主路径)",
+        "- Engine strangler: 默认未设 `NOF_ENGINE_NODES` 时 rw/lines/storyboard/tts/image/render 经 `/jobs` facade 走 engine; asr 固定 legacy `_execute_asr_collect`; `RECIPE_REGISTRY` 当前只有 `paper_card_talk_015`",
+        "- Three-process runtime: redis(队列) + nof-server(:8810 producer/SSE/serve) + nof-worker(唯一离线任务执行体)",
+    ]
 
     scripts_dir = PROJECT_ROOT / "scripts"
     if scripts_dir.is_dir():
@@ -210,7 +218,7 @@ def extract_runtime_summary() -> list[str]:
         labels = {
             "runner": "Runners (spawned by Python commands)",
             "worker": "Workers (long-running job processors)",
-            "adapter": "Adapters (SDK / CLI wrappers)",
+            "adapter": "Adapters (lark-cli compatibility wrappers)",
             "lib": "Shared libs",
             "tool": "Tooling",
         }
@@ -291,7 +299,8 @@ def extract_app_summary() -> list[str]:
     if not (app_dir / "pubspec.yaml").exists():
         return []
     lines = [
-        "- Flutter App (决策视角, iOS/Android), 入口 `app/lib/main.dart`, 直连 server :8810 走 `/tasks`",
+        "- Flutter App (决策视角, iOS/Android), 入口 `app/lib/main.dart`, 当前通过 server :8810 的 `/tasks`/`/commands`/`/artifacts` 工作",
+        "- `/instances` 后端 API 已存在,但 app 尚未切换; 主灯/灵动岛状态另走 relay,agent 卡片灯态由 `/tasks` 聚合",
         "- 新拉代码需补 2 个 gitignored 密钥: app/lib/core/net/relay_config.dart, app/ios/Shared/RelayConfig.swift (见 app/CLAUDE.md)",
     ]
     feat = app_dir / "lib" / "features"

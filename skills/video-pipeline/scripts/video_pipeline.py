@@ -448,17 +448,17 @@ def proofread_with_fallback(text: str, candidates: list[tuple[str, str]]) -> str
     errors = []
     for provider, model_name in candidates:
         try:
-            print(f"  📝 LLM 校对中 ({provider}/{model_name})...")
+            print(f"  [ASR] LLM 校对中 ({provider}/{model_name})...")
             result = call_model(provider, model_name, prompt, system)
             if result:
                 return result
             raise RuntimeError("返回空文本")
         except (HTTPError, URLError, TimeoutError, RuntimeError, KeyError, IndexError, ValueError) as e:
             errors.append(f"{provider}/{model_name}: {e}")
-            print(f"  ⚠️  {provider}/{model_name} 校对失败，尝试降级: {e}")
+            print(f"  [WARN] {provider}/{model_name} 校对失败，尝试降级: {e}")
             continue
 
-    print("  ⚠️  所有校对模型均失败，使用原始转写文本")
+    print("  [WARN] 所有校对模型均失败，使用原始转写文本")
     if errors:
         print(f"  失败链路: {' | '.join(errors)}")
     return text
@@ -500,7 +500,7 @@ def extract_url(text: str) -> str:
 
 
 def format_success_line(label: str, file_path: Path) -> str:
-    return f"✅ {label}: {file_path.resolve()}"
+    return f"[OK] {label}: {file_path.resolve()}"
 
 
 def build_download_target_path(output_dir: Path, platform: str, media_id: str, extension: str) -> Path:
@@ -623,7 +623,7 @@ def download_via_tikhub(url: str, platform: str, output_dir: Path) -> Path | Non
 
     video_id = extract_video_id_from_url(resolved)
     if not video_id:
-        print(f"  ⚠️  无法从 URL 提取视频 ID: {resolved[:80]}")
+        print(f"  [WARN] 无法从 URL 提取视频 ID: {resolved[:80]}")
         return None
 
     print(f"  TikHub 下载中... (video_id: {video_id})")
@@ -637,7 +637,7 @@ def download_via_tikhub(url: str, platform: str, output_dir: Path) -> Path | Non
         stderr_text = result.stderr.strip()
         stdout_text = result.stdout.strip()
         error_text = stderr_text or stdout_text
-        print(f"  ❌ TikHub 下载失败: {error_text[-400:] if error_text else '(empty subprocess output)'}")
+        print(f"  [FAIL] TikHub 下载失败: {error_text[-400:] if error_text else '(empty subprocess output)'}")
         return None
 
     # 找到下载的文件
@@ -651,7 +651,7 @@ def download_via_tikhub(url: str, platform: str, output_dir: Path) -> Path | Non
             downloaded.rename(target)
         return target
 
-    print("  ❌ TikHub 下载完成但找不到文件")
+    print("  [FAIL] TikHub 下载完成但找不到文件")
     return None
 
 
@@ -666,7 +666,7 @@ def download_video(url: str, platform: str, output_dir: Path) -> Path | None:
         existing = sorted(output_dir.glob(f"{platform}_*.mp4"))
         if existing:
             cached = existing[0]
-            print(f"  ✅ 复用已下载视频: {cached.name}")
+            print(f"  [OK] 复用已下载视频: {cached.name}")
             return cached
 
     if platform in TIKHUB_FIRST_PLATFORMS:
@@ -675,7 +675,7 @@ def download_video(url: str, platform: str, output_dir: Path) -> Path | None:
         result = download_via_tikhub(url, platform, output_dir)
         if result:
             return result
-        print("  ⚠️  TikHub 失败，尝试 yt-dlp...")
+        print("  [WARN] TikHub 失败，尝试 yt-dlp...")
 
     # 其他平台 / TikHub 失败后：yt-dlp
     output_template = str(build_download_target_path(output_dir, platform, "%(id)s", "%(ext)s"))
@@ -688,9 +688,9 @@ def download_video(url: str, platform: str, output_dir: Path) -> Path | None:
         stderr = result.stderr.strip()[-200:]
         # 非 TikHub 优先平台，yt-dlp 失败后尝试 TikHub fallback
         if platform not in TIKHUB_FIRST_PLATFORMS and platform == "douyin":
-            print(f"  ⚠️  yt-dlp 失败，尝试 TikHub fallback...")
+            print(f"  [WARN] yt-dlp 失败，尝试 TikHub fallback...")
             return download_via_tikhub(url, platform, output_dir)
-        print(f"  ❌ 下载失败: {stderr}")
+        print(f"  [FAIL] 下载失败: {stderr}")
         return None
 
     # 提取 title（--print title 输出在 stdout 第一行，在 [download] 之前）
@@ -717,7 +717,7 @@ def download_video(url: str, platform: str, output_dir: Path) -> Path | None:
     if candidates:
         return max(candidates, key=lambda f: f.stat().st_mtime)
 
-    print("  ❌ 下载完成但找不到文件")
+    print("  [FAIL] 下载完成但找不到文件")
     return None
 
 
@@ -740,7 +740,7 @@ def extract_audio(video_path: Path) -> Path | None:
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        print(f"  ❌ {label}失败: {result.stderr.strip()[-200:]}")
+        print(f"  [FAIL] {label}失败: {result.stderr.strip()[-200:]}")
         return None
 
     return audio_path
@@ -790,11 +790,11 @@ def write_result_json(raw_output_dir: Path, transcript_path: Path | None, model_
 def process_url(url: str, output_dir: Path, no_transcribe: bool = False, language: str = "Chinese") -> dict:
     url = extract_url(url)
     platform = detect_platform(url)
-    print(f"\n▶ {url}")
+    print(f"\n[URL] {url}")
     print(f"  平台: {platform}")
 
     if platform == "unknown":
-        print("  ⚠️  无法识别平台，尝试直接下载...")
+        print("  [WARN] 无法识别平台，尝试直接下载...")
 
     video_path = download_video(url, platform, output_dir)
     if not video_path:
@@ -836,7 +836,7 @@ def process_url(url: str, output_dir: Path, no_transcribe: bool = False, languag
         try:
             model_outputs = generate_model_outputs(txt_path)
         except Exception as exc:
-            print(f"  ⚠️  生成清洗/改写产物失败: {exc}")
+            print(f"  [WARN] 生成清洗/改写产物失败: {exc}")
 
         write_result_json(output_dir, txt_path, model_outputs)
         # 清理临时音频文件
@@ -859,7 +859,7 @@ def process_url(url: str, output_dir: Path, no_transcribe: bool = False, languag
             })
         return result
     else:
-        print(f"  ⚠️  音频保留: {audio_path.name}")
+        print(f"  [WARN] 音频保留: {audio_path.name}")
         error_message = "transcription finished without transcript output"
         if isinstance(transcription_result, AsrTranscriptionResult):
             error_message = transcription_result.errorMessage or error_message
@@ -878,7 +878,7 @@ def check_tools() -> bool:
     ok = True
     for name, path in [("yt-dlp", YT_DLP), ("ffmpeg", FFMPEG)]:
         if path is None or not os.path.isfile(path):
-            print(f"❌ {name} 未找到: {path}")
+            print(f"[FAIL] {name} 未找到: {path}")
             ok = False
     if not ok:
         return False
@@ -886,9 +886,9 @@ def check_tools() -> bool:
     tingwu_usable = asr_is_cloud_usable()
     whisper_usable = asr_is_whisper_usable()
     if not whisper_usable:
-        print("❌ 本地 ASR fallback 不可用")
+        print("[FAIL] 本地 ASR fallback 不可用")
     if not tingwu_usable:
-        print("❌ 云端 ASR backend 不可用")
+        print("[FAIL] 云端 ASR backend 不可用")
     if not whisper_usable and not tingwu_usable:
         return False
     return True
@@ -940,13 +940,13 @@ def main():
         results.append(result)
         if result.get("status") != "success":
             has_failure = True
-            print(f"  ❌ 处理失败: {result.get('stage', 'unknown')} | {result.get('error', 'unknown error')}")
+            print(f"  [FAIL] 处理失败: {result.get('stage', 'unknown')} | {result.get('error', 'unknown error')}")
 
     if has_failure:
-        print("\n❌ 存在失败项")
+        print("\n[FAIL] 存在失败项")
         sys.exit(1)
 
-    print("\n✅ 全部完成")
+    print("\n[OK] 全部完成")
 
 
 if __name__ == "__main__":

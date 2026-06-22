@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import signal
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,6 +27,26 @@ def test_worker_imports_and_main_exists():
     """worker 模块可 import，main 可调用，_amain 是 coroutine function。"""
     assert callable(worker.main)
     assert inspect.iscoroutinefunction(worker._amain)
+
+
+def test_worker_signal_handlers_set_stop_event(monkeypatch):
+    """SIGTERM/SIGINT handler 命中 stop_event，供 _amain 退出裸等待。"""
+    handlers: dict[signal.Signals, tuple[Any, tuple[Any, ...]]] = {}
+
+    class FakeLoop:
+        def add_signal_handler(self, sig, callback, *args):
+            handlers[sig] = (callback, args)
+
+    async def run():
+        stop_event = asyncio.Event()
+        monkeypatch.setattr(asyncio, "get_running_loop", lambda: FakeLoop())
+        installed = worker._install_signal_handlers(stop_event)
+        assert installed == [signal.SIGTERM, signal.SIGINT]
+        callback, args = handlers[signal.SIGTERM]
+        callback(*args)
+        assert stop_event.is_set()
+
+    asyncio.run(run())
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +70,7 @@ def test_worker_wires_loops(monkeypatch):
     mock_runner = MagicMock()
     mock_runner.on_terminal = None
     mock_runner.recover_and_start = AsyncMock(return_value=0)
+    mock_runner.shutdown = AsyncMock(return_value=None)
     mock_runner.list_commands = MagicMock(return_value=["shenkuo"])
 
     # --- monkeypatch 模块级名称（在 worker 模块命名空间内替换） ---
@@ -79,6 +101,7 @@ def test_worker_wires_loops(monkeypatch):
 
         with (
             patch("ncds_opus_factory.server.worker.get_default_queue", return_value=mock_rq),
+            patch("ncds_opus_factory.server.worker._install_signal_handlers", return_value=[]),
             patch("asyncio.Event", return_value=mock_event),
             patch("asyncio.create_task", side_effect=capturing_create_task),
         ):
@@ -92,6 +115,7 @@ def test_worker_wires_loops(monkeypatch):
     )
     # recover_and_start 必须被调
     mock_runner.recover_and_start.assert_awaited_once()
+    mock_runner.shutdown.assert_awaited_once()
 
     # 5 个 loop：_discard_sweeper, _round_reconciler, subscription_loop, retro_loop, planner_loop
     assert len(created_tasks) == 5, (

@@ -85,6 +85,12 @@ def test_polish_transcript_repolishes_when_article_missing(tmp_path: Path, monke
     assert calls["n"] == 2
 
 
+def test_asr_stage_label_accepts_ascii_and_legacy_transcribe_progress():
+    assert pr._asr_stage_label("[OK] 转写: /tmp/job/raw/demo.txt") == "语音转写"
+    assert pr._asr_stage_label("\u2705 转写: /tmp/job/raw/demo.txt") == "语音转写"
+    assert pr._asr_stage_label("[DL] 下载中...") == "下载视频"
+
+
 # --- 鬼谷子选题：job inputs 的 domain 透传到 guiguzi（task-2.5 调用方线程化）------ #
 def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """job inputs 带 domain（前端 doCreate 写入）时，analyze/generate 两个 bg 都把它透传给鬼谷子。"""

@@ -87,22 +87,37 @@ test('cleanupExpiredJobs selects only terminal entries older than retention wind
 
 test('parsePipelineSuccessLine returns videoPath for download success lines', () => {
   assert.deepEqual(
-    parsePipelineSuccessLine('✅ 下载: /tmp/job/raw/podcast_demo.m4a'),
+    parsePipelineSuccessLine('[OK] 下载: /tmp/job/raw/podcast_demo.m4a'),
     { videoPath: '/tmp/job/raw/podcast_demo.m4a' },
   );
 });
 
 test('parsePipelineSuccessLine returns transcriptPath for transcription success lines', () => {
   assert.deepEqual(
-    parsePipelineSuccessLine('✅ 转写: /tmp/job/raw/podcast_demo.txt'),
+    parsePipelineSuccessLine('[OK] 转写: /tmp/job/raw/podcast_demo.txt'),
     { transcriptPath: '/tmp/job/raw/podcast_demo.txt' },
   );
 });
 
 test('parsePipelineSuccessLine returns polishedTranscriptPath for polished success lines', () => {
   assert.deepEqual(
-    parsePipelineSuccessLine('✅ 清洗稿: /tmp/job/deliverables/podcast_demo.polished.txt'),
+    parsePipelineSuccessLine('[OK] 清洗稿: /tmp/job/deliverables/podcast_demo.polished.txt'),
     { polishedTranscriptPath: '/tmp/job/deliverables/podcast_demo.polished.txt' },
+  );
+});
+
+test('parsePipelineSuccessLine remains compatible with legacy success prefixes', () => {
+  assert.deepEqual(
+    parsePipelineSuccessLine('\u2705 下载: /tmp/job/raw/legacy.m4a'),
+    { videoPath: '/tmp/job/raw/legacy.m4a' },
+  );
+  assert.deepEqual(
+    parsePipelineSuccessLine('\u2705 转写: /tmp/job/raw/legacy.txt'),
+    { transcriptPath: '/tmp/job/raw/legacy.txt' },
+  );
+  assert.deepEqual(
+    parsePipelineSuccessLine('\u2705 清洗稿: /tmp/job/deliverables/legacy.polished.txt'),
+    { polishedTranscriptPath: '/tmp/job/deliverables/legacy.polished.txt' },
   );
 });
 
@@ -111,25 +126,25 @@ test('parsePipelineSuccessLine returns null for unrelated lines', () => {
 });
 
 test('parsePipelineSuccessLine treats rewrite success lines as non-final progress lines', () => {
-  assert.equal(parsePipelineSuccessLine('✅ 复写稿: /tmp/job/deliverables/rewrite.md'), null);
-  assert.equal(parsePipelineSuccessLine('✅ 润色(opus): /tmp/job/deliverables/polished.md'), null);
-  assert.equal(parsePipelineSuccessLine('✅ 改写(opus): /tmp/job/deliverables/rewrite.md'), null);
-  assert.equal(parsePipelineSuccessLine('✅ 润色: /tmp/job/deliverables/polished.md'), null);
-  assert.equal(parsePipelineSuccessLine('✅ 改写: /tmp/job/deliverables/rewrite.md'), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 复写稿: /tmp/job/deliverables/rewrite.md'), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 润色(opus): /tmp/job/deliverables/polished.md'), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 改写(opus): /tmp/job/deliverables/rewrite.md'), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 润色: /tmp/job/deliverables/polished.md'), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 改写: /tmp/job/deliverables/rewrite.md'), null);
 });
 
 test('parsePipelineSuccessLine returns null for empty success paths', () => {
-  assert.equal(parsePipelineSuccessLine('✅ 下载:'), null);
-  assert.equal(parsePipelineSuccessLine('✅ 下载:   '), null);
-  assert.equal(parsePipelineSuccessLine('✅ 转写:'), null);
-  assert.equal(parsePipelineSuccessLine('✅ 转写:   '), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 下载:'), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 下载:   '), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 转写:'), null);
+  assert.equal(parsePipelineSuccessLine('[OK] 转写:   '), null);
 });
 
 test('consumePipelineLine applies parsed success lines to worker state and progress', () => {
   const item = { input: 'demo', mode: 'fast', rawLines: [] };
 
   assert.deepEqual(
-    consumePipelineLine(item, '✅ 下载: /tmp/job/raw/podcast_demo.m4a', 'fast'),
+    consumePipelineLine(item, '[OK] 下载: /tmp/job/raw/podcast_demo.m4a', 'fast'),
     {
       message: '下载完成: /tmp/job/raw/podcast_demo.m4a',
       patch: { currentStage: 'download_done' },
@@ -138,7 +153,7 @@ test('consumePipelineLine applies parsed success lines to worker state and progr
   assert.equal(item.videoPath, '/tmp/job/raw/podcast_demo.m4a');
 
   assert.deepEqual(
-    consumePipelineLine(item, '✅ 转写: /tmp/job/raw/podcast_demo.txt', 'fast'),
+    consumePipelineLine(item, '[OK] 转写: /tmp/job/raw/podcast_demo.txt', 'fast'),
     {
       message: '转写完成: /tmp/job/raw/podcast_demo.txt',
       patch: { currentStage: 'transcribe_done' },
@@ -147,7 +162,7 @@ test('consumePipelineLine applies parsed success lines to worker state and progr
   assert.equal(item.transcriptPath, '/tmp/job/raw/podcast_demo.txt');
 
   assert.deepEqual(
-    consumePipelineLine(item, '✅ 清洗稿: /tmp/job/deliverables/podcast_demo.polished.txt', 'fast'),
+    consumePipelineLine(item, '[OK] 清洗稿: /tmp/job/deliverables/podcast_demo.polished.txt', 'fast'),
     {
       message: '清洗稿已生成: /tmp/job/deliverables/podcast_demo.polished.txt',
       patch: { currentStage: 'polish_done' },
@@ -159,12 +174,34 @@ test('consumePipelineLine applies parsed success lines to worker state and progr
 test('consumePipelineLine ignores non-contract success labels for path fields', () => {
   const item = { input: 'demo', mode: 'fast', rawLines: [] };
 
-  assert.equal(consumePipelineLine(item, '✅ 下载完成: /tmp/job/raw/podcast_demo.m4a', 'fast'), null);
-  assert.equal(consumePipelineLine(item, '✅ 转写完成: /tmp/job/raw/podcast_demo.txt', 'fast'), null);
-  assert.equal(consumePipelineLine(item, '✅ 视频: /tmp/job/raw/podcast_demo.m4a', 'fast'), null);
+  assert.equal(consumePipelineLine(item, '[OK] 下载完成: /tmp/job/raw/podcast_demo.m4a', 'fast'), null);
+  assert.equal(consumePipelineLine(item, '[OK] 转写完成: /tmp/job/raw/podcast_demo.txt', 'fast'), null);
+  assert.equal(consumePipelineLine(item, '[OK] 视频: /tmp/job/raw/podcast_demo.m4a', 'fast'), null);
 
   assert.equal(item.videoPath, undefined);
   assert.equal(item.transcriptPath, undefined);
+});
+
+test('consumePipelineLine recognizes ASCII and legacy progress markers', () => {
+  const asciiItem = { input: 'demo', mode: 'fast', rawLines: [] };
+  assert.deepEqual(
+    consumePipelineLine(asciiItem, '[OK] 1/3 片完成', 'fast'),
+    { message: '分片进度: 1/3 片完成', patch: { currentStage: 'transcribe' } },
+  );
+  assert.deepEqual(
+    consumePipelineLine(asciiItem, '[WARN] cloud fallback', 'fast'),
+    { message: '[WARN] cloud fallback', patch: { currentStage: 'warning' } },
+  );
+
+  const legacyItem = { input: 'demo', mode: 'fast', rawLines: [] };
+  assert.deepEqual(
+    consumePipelineLine(legacyItem, '\u2713 2/3 片完成', 'fast'),
+    { message: '分片进度: 2/3 片完成', patch: { currentStage: 'transcribe' } },
+  );
+  assert.deepEqual(
+    consumePipelineLine(legacyItem, '\u26a0\ufe0f cloud fallback', 'fast'),
+    { message: '\u26a0\ufe0f cloud fallback', patch: { currentStage: 'warning' } },
+  );
 });
 
 test('buildPublicPermissionData creates organization-readable settings', () => {
@@ -455,7 +492,7 @@ test('mergePipelineResult stays backward compatible with string transcript paylo
   assert.deepEqual(item.rewriteVariants, []);
 
   const fallbackItem = { input: 'demo', mode: 'fast', rawLines: [] };
-  consumePipelineLine(fallbackItem, '✅ 转写: /tmp/job/raw/fallback.txt', 'fast');
+  consumePipelineLine(fallbackItem, '[OK] 转写: /tmp/job/raw/fallback.txt', 'fast');
   assert.equal(fallbackItem.transcriptPath, '/tmp/job/raw/fallback.txt');
 });
 

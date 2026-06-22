@@ -36,11 +36,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_core.templates import template_dir as _template_dir
+from ncds_opus_core.gpt_image.paths import GPT_IMAGE_OUTPUT_ROOT
 from ncds_opus_core.pipelines import PIPELINE_REGISTRY, get_pipeline
 from ncds_opus_core.common import cancel as _cancel
 from ncds_opus_factory.server import storyboard_director
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_OPUS_MODEL_ID = "claude-opus-4-8"
+ASR_PROC_TIMEOUT_SEC = int(os.getenv("NOF_ASR_PROC_TIMEOUT", "3600"))
+ASR_POLISH_TIMEOUT_SEC = int(os.getenv("NOF_ASR_POLISH_TIMEOUT", "600"))
+TTS_PROC_TIMEOUT_SEC = int(os.getenv("NOF_TTS_PROC_TIMEOUT", "3600"))
+RW_LLM_TIMEOUT_SEC = int(os.getenv("NOF_RW_LLM_TIMEOUT", "900"))
+IMAGE_GEN_TIMEOUT_SEC = int(os.getenv("NOF_PIPELINE_IMAGE_GEN_TIMEOUT", "600"))
 
 
 # ---------------------------------------------------------------------------
@@ -141,12 +149,12 @@ class PipelineRunner:
         # S1：events.jsonl 事件落盘计数器。key=job_id，value=已发出的最后 seq。
         # server 重启后首次 _emit 时按文件末行 seq 恢复，保证跨重启单调不回退。
         self._event_seq: dict[str, int] = {}
-        # 本分支默认「全节点走生产引擎」（必走新版本）。NOF_ENGINE_NODES 可覆盖：
-        #   未设                       → 全 7 个可执行节点走引擎 run_step（默认，pct015_* performer）
+        # 本分支默认「除 asr 外的可执行节点走生产引擎」。NOF_ENGINE_NODES 可覆盖：
+        #   未设                       → rw/lines/storyboard/tts/image/render 走引擎 run_step
         #   "none"/"off"/"legacy"/"" → 全走旧 _execute_*（临时回旧画布调试用）
         #   逗号列表(如 lines,render)   → 只这些节点走引擎，其余走旧
-        # 注：asr/rw 走引擎会丢 running 时的实时子进度（slice-1 未做步内增量），产物不受影响。
-        _all = {"asr", "rw", "lines", "storyboard", "tts", "image", "render"}
+        # 注：asr 执行处仍固定走 legacy,因为它依赖步内 collected 增量与 done 后 enrich。
+        _all = {"rw", "lines", "storyboard", "tts", "image", "render"}
         _env = os.getenv("NOF_ENGINE_NODES")
         if _env is None:
             self._engine_nodes: set[str] = set(_all)
@@ -1288,8 +1296,8 @@ class PipelineRunner:
     async def _execute_real(self, job_id: str, node_name: str) -> None:
         """真实执行：按 node_name 分发到对应实现。
 
-        已接入：tts, image
-        未接入：asr, rw, render → 显式 raise NotImplementedError；不再 fallback mock。
+        默认 rw/lines/storyboard/tts/image/render 经 engine strangler 执行；
+        asr 固定走 legacy 采集路径。NOF_ENGINE_NODES=legacy 可全量回旧实现。
         """
         # 4h：重跑前清残留 flag（防幽灵边界 DOA）。节点(重)启动前清掉任何残留 flag，
         # 确保 fresh run 不被旧 flag 秒取消。submit_node 已防双跑，故这里只在真正新启动时执行。
@@ -2252,7 +2260,7 @@ class PipelineRunner:
         system_prompt, user_prompt = _build_lines_prompt(draft)
         on_progress("调 opus 结构化为 beats…")
         raw = await asyncio.to_thread(
-            _call_opus_for_rw, user_prompt, system_prompt, "claude-opus-4-8"
+            _call_opus_for_rw, user_prompt, system_prompt, DEFAULT_OPUS_MODEL_ID
         )
 
         # 解析 JSON（容忍 ```json ... ``` 包裹）
@@ -2353,7 +2361,7 @@ class PipelineRunner:
         )
         on_progress(f"调 director agent 分镜（{len(beats_in)} beats）…")
         raw = await asyncio.to_thread(
-            _call_opus_for_rw, user_prompt, system_prompt, "claude-opus-4-8"
+            _call_opus_for_rw, user_prompt, system_prompt, DEFAULT_OPUS_MODEL_ID
         )
 
         scene_by_beat, scenes = storyboard_director.parse_director_output(raw, beats_raw)
@@ -2507,7 +2515,7 @@ def _run_tts_gen_015(
             if len(tail) > 20:
                 tail.pop(0)
     proc.stdout.close()
-    code = proc.wait(timeout=3600)
+    code = proc.wait(timeout=TTS_PROC_TIMEOUT_SEC)
     if code != 0:
         snippet = "\n".join(tail).strip()
         raise RuntimeError(f"tts_gen.py exited {code}\n--- last output ---\n{snippet}")
@@ -2520,7 +2528,7 @@ def _asr_stage_label(line: str) -> str | None:
     s = line or ""
     if not s:
         return None
-    if re.search(r"✅\s*转写|转写完成|whisper|转写", s, re.IGNORECASE):
+    if re.search(r"\[OK\]\s*转写|\u2705\s*转写|转写完成|whisper|转写", s, re.IGNORECASE):
         return "语音转写"
     if re.search(r"提取音频|extract.*audio|ffmpeg.*audio", s, re.IGNORECASE):
         return "提取音频"
@@ -2562,7 +2570,7 @@ def _run_video_pipeline(
             if len(tail) > 20:
                 tail.pop(0)
     proc.stdout.close()
-    code = proc.wait(timeout=3600)
+    code = proc.wait(timeout=ASR_PROC_TIMEOUT_SEC)
     if code != 0:
         snippet = "\n".join(tail).strip()
         raise RuntimeError(f"video_pipeline.py exited {code}\n--- last output ---\n{snippet}")
@@ -2577,7 +2585,7 @@ def _polish_transcript_with_opus(
     """调本机 opus launcher（Claude Opus 4.8）把语音转写原稿整理成 markdown 文章。
 
     透传到 claude CLI，参数参考远程 video_rewrite_runner.runClaudeCli：
-      claude -p <prompt> --output-format json --model claude-opus-4-8
+      claude -p <prompt> --output-format json --model <DEFAULT_OPUS_MODEL_ID>
              --permission-mode bypassPermissions --tools '' --no-session-persistence
 
     Claude CLI 的 JSON 输出末行形如 {"type":"result","is_error":false,"result":"<markdown>"}。
@@ -2620,7 +2628,7 @@ def _polish_transcript_with_opus(
         launcher, "launch", "--no-resume", "--",
         "-p", prompt,
         "--output-format", "json",
-        "--model", "claude-opus-4-8",
+        "--model", DEFAULT_OPUS_MODEL_ID,
         "--effort", "max",
         "--permission-mode", "bypassPermissions",
         "--tools", "",
@@ -2630,7 +2638,7 @@ def _polish_transcript_with_opus(
         args,
         capture_output=True,
         text=True,
-        timeout=600,
+        timeout=ASR_POLISH_TIMEOUT_SEC,
         stdin=subprocess.DEVNULL,  # 防止父进程残留 stdin 流入 claude CLI
     )
     if proc.returncode != 0:
@@ -2673,12 +2681,10 @@ def _polish_transcript_with_opus(
 #   - gemini  : `~/.gemini/g.sh` —— 本机未安装则直接标"模型不可用"
 #   - deepseek: HTTP POST 到 deepseek API —— 需 DEEPSEEK_API_KEY，未设则标"模型不可用"
 # label 仅作展示兜底（前端 MODEL_LABELS 优先）；runner/model 是真实调用，保持不动。
-# rw 候选模型。原为 4 模型并行（opus/gpt5-codex/gemini/deepseek），codex 订阅失效后曾裁成
-# deepseek 单候选；现按需求恢复 opus + deepseek 双模型并行出稿。runner 派发见 _invoke_rw_candidate。
-# label 与前端 MODEL_LABELS（opus=改写方案 A / deepseek=改写方案 D）对齐；下游全部循环本表，
-# 增删候选即生效（前端 tab、质检、增量写盘、重写/优化均数据驱动）。
+# rw 候选模型。下游全部循环本表，增删候选即生效（前端 tab、质检、增量写盘、重写/优化
+# 均数据驱动）。runner 派发见 _invoke_rw_candidate，label 仅作服务端展示兜底。
 MODEL_CANDIDATES: list[dict[str, str]] = [
-    {"id": "opus",         "label": "改写方案 A",  "runner": "opus",         "model": "claude-opus-4-8"},
+    {"id": "opus",         "label": "改写方案 A",  "runner": "opus",         "model": DEFAULT_OPUS_MODEL_ID},
     {"id": "deepseek",     "label": "改写方案 B",  "runner": "deepseek",     "model": "deepseek-v4-pro"},
     {"id": "agy",          "label": "改写方案 C",  "runner": "agy",          "model": "gemini-3.5-flash"},
     {"id": "codex",        "label": "改写方案 D",  "runner": "scodex",       "model": "gpt-5.5-codex"},
@@ -2787,7 +2793,7 @@ def _call_opus_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> st
         args,
         capture_output=True,
         text=True,
-        timeout=900,
+        timeout=RW_LLM_TIMEOUT_SEC,
         stdin=subprocess.DEVNULL,
     )
     if proc.returncode != 0:
@@ -2836,7 +2842,7 @@ def _call_scodex_for_rw(prompt: str, model_id: str) -> str:
         args,
         capture_output=True,
         text=True,
-        timeout=900,
+        timeout=RW_LLM_TIMEOUT_SEC,
         stdin=subprocess.DEVNULL,
     )
     if proc.returncode != 0:
@@ -2989,7 +2995,11 @@ def _purge_ai_taste_rw(text: str, report: dict[str, Any], on_progress: Callable[
         f"== 原稿 ==\n{text}\n== 原稿结束 =="
     )
     try:
-        return (_call_opus_for_rw(user, "你是中文口播稿润色专家，擅长把 AI 味句式改成自然口语。", "claude-opus-4-8") or "").strip()
+        return (_call_opus_for_rw(
+            user,
+            "你是中文口播稿润色专家，擅长把 AI 味句式改成自然口语。",
+            DEFAULT_OPUS_MODEL_ID,
+        ) or "").strip()
     except Exception as exc:  # noqa: BLE001 — 消 AI 味失败不致命，保留上一版
         on_progress(f"  消 AI 味调用失败: {exc}")
         return ""
@@ -3170,7 +3180,7 @@ def _generate_scene_image(
     if not gen_script.is_file():
         raise RuntimeError(f"gpt_image_gen.py not found at {gen_script}")
 
-    gen_out_dir = Path("/tmp") / "gpt-image" / f"job-{job_id}-{scene_id}"
+    gen_out_dir = GPT_IMAGE_OUTPUT_ROOT / f"job-{job_id}-{scene_id}"
     shutil.rmtree(gen_out_dir, ignore_errors=True)
     gen_out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3182,7 +3192,7 @@ def _generate_scene_image(
         "--overwrite",
         "--prompt", prompt,
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=IMAGE_GEN_TIMEOUT_SEC)
     if res.returncode != 0:
         tail = (res.stderr or res.stdout or "").strip()[-500:]
         raise RuntimeError(f"gpt-image gen failed: {tail}")
@@ -3212,5 +3222,3 @@ def _read_episode(job_dir: Path) -> dict[str, Any] | None:
         return json.loads(ep_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-
-

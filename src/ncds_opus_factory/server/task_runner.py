@@ -80,13 +80,17 @@ _DEFAULT_DAILY_QUOTA: dict[str, int] = {
 # 闸1 在柳永(脚本验收),闸2 在终验;吴道子/伯牙接入后加进来
 _UNGATED_ROUND_CMDS = {"guiguzi"}
 
-# 真实任务 id 形态（task_store._new_task_id）；种子数据（t_demo_*/t_mock_*）
-# 不匹配——启动恢复绝不能把演示任务拉起来真跑
-_REAL_TASK_ID_RE = re.compile(r"^t_\d{12,}_[0-9a-f]{6,}$")
+# 真实任务 id 形态（task_store._new_task_id 当前为 <cmd>_<ms><hex8>；兼容旧
+# t_<ms>_<hex>）。种子数据（t_demo_*/t_mock_*）不匹配，启动恢复绝不能把演示任务拉起来真跑。
+_RECOVERABLE_TASK_ID_RE = re.compile(
+    r"^(?:[A-Za-z][A-Za-z0-9_-]*_\d{12,}[0-9a-f]{8}|t_\d{12,}_[0-9a-f]{6,})$"
+)
+_SEED_TASK_PREFIXES = ("t_demo_", "t_mock_")
 
 # 重启恢复期限：积压超过此时长的 pending/running 直接判 failed（可重发），
 # 而不是悄悄重跑一个用户早就不要的任务
 RECOVER_MAX_AGE_HOURS = float(os.environ.get("NOF_RECOVER_MAX_AGE_HOURS", "48"))
+WORKER_SHUTDOWN_GRACE_SEC = float(os.environ.get("NOF_WORKER_SHUTDOWN_GRACE_SEC", "20"))
 
 
 def _env_overrides(name: str, base: dict[str, int]) -> dict[str, int]:
@@ -128,6 +132,7 @@ class TaskRunner:
         self._rq = redis_queue or get_default_queue()
         self._workers: list[asyncio.Task] = []
         self._started = False
+        self._shutdown_requested = False
         # 终态钩子(round 事件接线,§4.2):app startup 注入 rounds_gate.handle_terminal,
         # 不在此 import——避免 server 子模块循环依赖
         self.on_terminal: Callable[..., Any] | None = None
@@ -259,6 +264,7 @@ class TaskRunner:
         if self._started:
             return 0
         self._started = True
+        self._shutdown_requested = False
 
         # 第一步：DEL 所有 cmd 的旧 Redis List + 清 inflight Set（必须在 disk-scan 重投之前）。
         # 磁盘是真相源，重启以磁盘 pending 全量重建队列，Redis 旧队列作废。
@@ -297,7 +303,10 @@ class TaskRunner:
                 if meta.status not in ("pending", "running"):
                     continue
                 # 种子/演示任务（t_demo_*/t_mock_*）不参与恢复——绝不能重启时真跑起来
-                if not _REAL_TASK_ID_RE.match(meta.task_id):
+                if (
+                    meta.task_id.startswith(_SEED_TASK_PREFIXES)
+                    or not _RECOVERABLE_TASK_ID_RE.match(meta.task_id)
+                ):
                     continue
                 created = datetime.fromisoformat(meta.created_at)
                 if created < cutoff:
@@ -328,6 +337,34 @@ class TaskRunner:
         )
         return len(backlog)
 
+    async def shutdown(self, grace_seconds: float = WORKER_SHUTDOWN_GRACE_SEC) -> None:
+        """请求 worker 优雅停机，并等待当前任务通过 cancel checker 协作式自停。
+
+        不把任务标成 ``cancelled``：这是进程停机，不是用户撤销。若任务在停机期间中止，
+        meta 会保持 ``running``，下次 ``recover_and_start()`` 把孤儿 running 复位后重投。
+        """
+        self._shutdown_requested = True
+        if self._workers:
+            done, pending = await asyncio.wait(self._workers, timeout=max(0.0, grace_seconds))
+            if pending:
+                logger.warning(
+                    "[TaskRunner] shutdown grace %.1fs expired; cancelling %d worker tasks",
+                    grace_seconds, len(pending),
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+            for task in done:
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:  # noqa: BLE001
+                    logger.exception("[TaskRunner] worker exited with error during shutdown")
+        self._workers.clear()
+        self._started = False
+        await self._rq.aclose()
+
     async def _worker(self, cmd: str) -> None:
         """从 Redis List BRPOP 取任务执行。
 
@@ -335,7 +372,7 @@ class TaskRunner:
         每次 brpop 等待期间 event loop 可以处理其他协程）。
         ConnectionError 由 brpop 内部退避重连，此处只需 continue。
         """
-        while True:
+        while not self._shutdown_requested:
             task_id = await self._rq.brpop(cmd, timeout=5)
             if task_id is None:
                 # 超时或退避期间返回 None，继续轮询
@@ -397,7 +434,7 @@ class TaskRunner:
                 run_fn,
                 params,
                 on_progress,
-                lambda: self._is_cancelled(task_id),
+                lambda: self._is_cancelled(task_id) or self._shutdown_requested,
             )
             # 执行中被取消:工作线程无法强杀,跑完后结果作废,保持 cancelled
             if self._is_cancelled(task_id):
@@ -430,6 +467,18 @@ class TaskRunner:
                 self.store.append_progress(task_id, "服务停机,任务将在重启后自动恢复")
             except Exception:  # noqa: BLE001
                 pass
+            raise
+        except cancel.TaskCancelled:
+            if self._is_cancelled(task_id):
+                logger.info("[TaskRunner] task %s stopped after user cancel", task_id)
+                return
+            if self._shutdown_requested:
+                try:
+                    self.store.append_progress(task_id, "服务停机,任务将在重启后自动恢复")
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.info("[TaskRunner] task %s (%s) stopped for worker shutdown", task_id, cmd)
+                return
             raise
         except BaseException as exc:  # noqa: BLE001 - 任何异常都需要记录
             if self._is_cancelled(task_id):

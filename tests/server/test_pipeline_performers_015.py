@@ -679,10 +679,11 @@ def _seed_asr_items(jd: Path, items_data: list[dict]) -> list[dict[str, Any]]:
 
 
 def test_run_rw_step_opus_deepseek_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """MODEL_CANDIDATES = opus + deepseek 双模型并行：两个都成功 →
-    success/candidate count 均为 2、各自 draft.md 写盘、drafts 按 MODEL_CANDIDATES 顺序（opus 在前）。"""
+    """MODEL_CANDIDATES 全部成功 →
+    success/candidate count 跟随候选表、各自 draft.md 写盘、drafts 按 MODEL_CANDIDATES 顺序。"""
     jd = tmp_path / "job1"
     asr_items = _seed_asr_items(jd, [{"content": "测试素材文章。"}])
+    expected_ids = [c["id"] for c in perf.MODEL_CANDIDATES]
 
     async def stub_invoke(cand, user_prompt, system_prompt, on_progress, on_status=None):
         # 每个候选回各自可辨识的稿，验证 model_dir 隔离写盘。
@@ -694,13 +695,13 @@ def test_run_rw_step_opus_deepseek_success(tmp_path: Path, monkeypatch: pytest.M
 
     out = perf.run_rw_step(_noop, job_dir=str(jd), asr_items=asr_items)
 
-    assert out["success_count"] == 2
-    assert out["candidate_count"] == 2
-    # drafts 顺序锁定 MODEL_CANDIDATES（opus 在前），前端默认 tab 落 opus。
-    assert [d["model_id"] for d in out["drafts"]] == ["opus", "deepseek"]
+    assert out["success_count"] == len(expected_ids)
+    assert out["candidate_count"] == len(expected_ids)
+    # drafts 顺序锁定 MODEL_CANDIDATES，前端默认 tab 落第一个候选。
+    assert [d["model_id"] for d in out["drafts"]] == expected_ids
 
     drafts = {d["model_id"]: d for d in out["drafts"]}
-    for mid in ("opus", "deepseek"):
+    for mid in expected_ids:
         assert drafts[mid]["status"] == "success"
         assert drafts[mid]["draft_relpath"] == f"02_rw/{mid}/draft.md"
         path = jd / "02_rw" / mid / "draft.md"

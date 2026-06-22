@@ -13,11 +13,9 @@ import subprocess
 import sys
 from typing import Any, Dict, List
 
-from ncds_opus_core.common.paths import repo_root
+from ncds_opus_core.gpt_image.paths import GPT_IMAGE_OUTPUT_ROOT
 
-_REPO_ROOT = repo_root()
-_OUTPUT_DIR = os.environ.get("NOF_GPT_IMAGE_OUTPUT_DIR")
-DEFAULT_OUTPUT_ROOT = Path(_OUTPUT_DIR).resolve() if _OUTPUT_DIR else (_REPO_ROOT / "state" / "gpt-image")
+DEFAULT_OUTPUT_ROOT = GPT_IMAGE_OUTPUT_ROOT
 CLEANUP_MAX_AGE_DAYS = 14
 
 

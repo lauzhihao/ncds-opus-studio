@@ -20,8 +20,10 @@ state.py 各建一套指同一磁盘 + 各连同一 Redis。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+import signal
 from pathlib import Path
 
 # launchd（S4）跑 worker 时不继承 shell env：必须在 import 任何读 os.environ 的模块之前
@@ -43,37 +45,88 @@ from ncds_opus_factory.server.subscriptions import subscription_loop, subscripti
 logger = logging.getLogger(__name__)
 
 
+def _install_signal_handlers(stop_event: asyncio.Event) -> list[signal.Signals]:
+    """把 SIGTERM/SIGINT 接到 stop_event。返回成功注册到 event loop 的信号列表。"""
+    loop = asyncio.get_running_loop()
+    installed: list[signal.Signals] = []
+
+    def request_stop(sig: signal.Signals) -> None:
+        if stop_event.is_set():
+            return
+        logger.info("[nof-worker] received %s, shutting down", sig.name)
+        stop_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, request_stop, sig)
+            installed.append(sig)
+        except (NotImplementedError, RuntimeError):
+            # 非 Unix event loop 兜底；macOS/Linux launchd/systemd 走上面的 add_signal_handler。
+            signal.signal(sig, lambda _n, _f, s=sig: loop.call_soon_threadsafe(request_stop, s))
+    return installed
+
+
+def _remove_signal_handlers(signals: list[signal.Signals]) -> None:
+    loop = asyncio.get_running_loop()
+    for sig in signals:
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            loop.remove_signal_handler(sig)
+
+
+async def _cancel_background_tasks(tasks: list[asyncio.Task]) -> None:
+    if not tasks:
+        return
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _amain() -> None:
+    stop_event = asyncio.Event()
+    installed_signals = _install_signal_handlers(stop_event)
+    background_tasks: list[asyncio.Task] = []
+
     # 连 Redis 探活(决策 D：不静默吞任务)。startup ping 失败=fail-fast 退出，
     # 让 launchd/操作者立刻看到(运行期 Redis blip 由 BRPOP 指数退避兜，不在这退)。
-    ok = await get_default_queue().ping()
-    if not ok:
-        raise RuntimeError("[nof-worker] Redis ping failed; exiting (not silently dropping tasks)")
-    logger.info("[nof-worker] ready. redis OK state_dir=%s commands=%s",
-                STATE_DIR, RUNNER.list_commands())
+    try:
+        ok = await get_default_queue().ping()
+        if not ok:
+            raise RuntimeError("[nof-worker] Redis ping failed; exiting (not silently dropping tasks)")
+        logger.info("[nof-worker] ready. redis OK state_dir=%s commands=%s",
+                    STATE_DIR, RUNNER.list_commands())
 
-    # 先挂 on_terminal 钩子再 recover(别漏积压任务的终态事件)，与 app.py startup 一致。
-    RUNNER.on_terminal = rounds_gate.handle_terminal
-    # DEL 旧 List + disk-scan 全量重投 + 起 per-cmd BRPOP consumer
-    recovered = await RUNNER.recover_and_start()
-    if recovered:
-        logger.info("[nof-worker] restart recovered: %d backlog tasks re-enqueued", recovered)
+        # 先挂 on_terminal 钩子再 recover(别漏积压任务的终态事件)，与 app.py startup 一致。
+        RUNNER.on_terminal = rounds_gate.handle_terminal
+        # DEL 旧 List + disk-scan 全量重投 + 起 per-cmd BRPOP consumer
+        recovered = await RUNNER.recover_and_start()
+        if recovered:
+            logger.info("[nof-worker] restart recovered: %d backlog tasks re-enqueued", recovered)
 
-    asyncio.create_task(_discard_sweeper())
-    asyncio.create_task(_round_reconciler())
-    # 订阅传感器(NOF_SUBSCRIPTIONS=0 停用;无订阅文件时空转)
-    if os.environ.get("NOF_SUBSCRIPTIONS", "1") != "0":
-        asyncio.create_task(subscription_loop(RUNNER, STORE, subscriptions_path(STATE_DIR)))
-    # 复盘触发器(P4,§8.3):每晚低峰投递 retro 段。NOF_RETRO=0 停用;样本不足时空转
-    if os.environ.get("NOF_RETRO", "1") != "0":
-        from ncds_opus_factory.server.retro_trigger import retro_loop
-        asyncio.create_task(retro_loop(RUNNER, STORE))
-    # 排产策略(P5,§8.4):信号事件→深采→选题补货。NOF_PLANNER=0 停用;冷启动空转
-    if os.environ.get("NOF_PLANNER", "1") != "0":
-        from ncds_opus_factory.server.planner import planner_loop
-        asyncio.create_task(planner_loop(RUNNER, STORE))
+        background_tasks.append(asyncio.create_task(_discard_sweeper(), name="discard-sweeper"))
+        background_tasks.append(asyncio.create_task(_round_reconciler(), name="round-reconciler"))
+        # 订阅传感器(NOF_SUBSCRIPTIONS=0 停用;无订阅文件时空转)
+        if os.environ.get("NOF_SUBSCRIPTIONS", "1") != "0":
+            background_tasks.append(asyncio.create_task(
+                subscription_loop(RUNNER, STORE, subscriptions_path(STATE_DIR)),
+                name="subscription-loop",
+            ))
+        # 复盘触发器(P4,§8.3):每晚低峰投递 retro 段。NOF_RETRO=0 停用;样本不足时空转
+        if os.environ.get("NOF_RETRO", "1") != "0":
+            from ncds_opus_factory.server.retro_trigger import retro_loop
+            background_tasks.append(asyncio.create_task(retro_loop(RUNNER, STORE), name="retro-loop"))
+        # 排产策略(P5,§8.4):信号事件→深采→选题补货。NOF_PLANNER=0 停用;冷启动空转
+        if os.environ.get("NOF_PLANNER", "1") != "0":
+            from ncds_opus_factory.server.planner import planner_loop
+            background_tasks.append(asyncio.create_task(planner_loop(RUNNER, STORE), name="planner-loop"))
 
-    await asyncio.Event().wait()  # 持续运行，直到进程被终止
+        await stop_event.wait()
+    finally:
+        _remove_signal_handlers(installed_signals)
+        logger.info("[nof-worker] stopping background loops")
+        await _cancel_background_tasks(background_tasks)
+        logger.info("[nof-worker] stopping task runner")
+        await RUNNER.shutdown()
+        logger.info("[nof-worker] stopped")
 
 
 def main() -> None:

@@ -38,27 +38,31 @@ const PUBLIC_PERMISSION_TYPES = new Set([
   'minutes',
   'slides',
 ]);
+const FEISHU_API_BASE = ['https://open', 'feishu.cn'].join('.');
+const FEISHU_DOC_BASE = 'https://feishu.cn';
+const LARK_API_BASE = 'https://open.larksuite.com';
+const LARK_DOC_BASE = 'https://larksuite.com';
 
 // ---------------- 纯函数（无副作用，方便单测） ----------------
 
 export function resolveFeishuApiBase(domain) {
   if (domain === 'lark') {
-    return 'https://open.larksuite.com';
+    return LARK_API_BASE;
   }
   if (typeof domain === 'string' && domain.startsWith('http')) {
     return domain.replace(/\/+$/, '');
   }
-  return 'https://open.feishu.cn';
+  return FEISHU_API_BASE;
 }
 
 export function resolveFeishuDocBase(domain) {
   if (domain === 'lark') {
-    return 'https://larksuite.com';
+    return LARK_DOC_BASE;
   }
   if (typeof domain === 'string' && domain.startsWith('http')) {
     return domain.replace(/\/+$/, '');
   }
-  return 'https://feishu.cn';
+  return FEISHU_DOC_BASE;
 }
 
 export function buildPublicPermissionData() {

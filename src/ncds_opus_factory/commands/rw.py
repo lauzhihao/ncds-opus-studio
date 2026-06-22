@@ -1,9 +1,9 @@
-"""/rw —— 给一份 /asr 输出的精华文档，做 gpt-5.5 + gemini 双模型改写。
+"""/rw —— 给一份 /asr 输出的精华文档做内容改写。
 
 Python 薄包装：spawn `scripts/rewrite_command_runner.mjs`。
-
-注意：当前 scripts/ 下的 .mjs 还在用 feishu_sdk_adapter.mjs 直调飞书 OpenAPI。
-按本项目约束，最终要重写为 lark-cli 子进程调用。详见 docs/FEISHU-REFACTOR.md。
+runner 通过 `feishu_sdk_adapter.mjs` 委托 `lark-cli` 读取 / 写入飞书文档，
+本地在 `video-jobs/{job_id}/deliverables/manifest.json` 暴露候选稿索引。
+不直连飞书 OpenAPI。详见 docs/FEISHU-REFACTOR.md。
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def run(
 
 
 def _cli(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="nof rw", description="gpt-5.5 + gemini 双模型改写")
+    parser = argparse.ArgumentParser(prog="nof rw", description="文档内容改写")
     parser.add_argument("--docx-url", required=True)
     parser.add_argument("--requirements", default="", help="附加改写要求")
     parser.add_argument("--target-profile", default="douyin")

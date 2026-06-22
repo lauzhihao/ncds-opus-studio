@@ -1,207 +1,156 @@
 # 前端集成指南 · ncds-opus-studio HTTP API
 
-给前端 agent：在手机 / iPad 上控制内容工厂（5 个中国风 agent + 操盘手 + 底层命令），
-任务在 server 跑，端上只负责 **下指令 + 看进度 + 审看产物**。
+给前端 / app 接手者：端点签名的真源是 `GET /openapi.json` 和 `/docs`（Swagger UI）。本文只补 OpenAPI 表达不了的当前资源边界、SSE 信封、artifact 约定和实际消费者。
 
-> **端点签名的真源 = `GET /openapi.json` 和 `/docs`（Swagger UI）**，由 FastAPI 自动生成、
-> 永远和代码同步。本文档只补 OpenAPI 表达不了的部分：动态 params、SSE 信封、artifact 渲染、
-> 标准流程、各 agent 脾气。**不要去读 server 的 Python 推这些**。
+## 1. 当前入口关系（2026-06-22）
 
----
+| 入口 | 当前消费者 | 运行时 | 状态 |
+|---|---|---|---|
+| `/jobs/*` + `/pipelines` + `/preview/*` | `web/` 的 `/studio` React 画布 | `PipelineRunner` facade；多数节点经 engine performer 执行，`asr` 固定 legacy | **web 主路径** |
+| `/tasks/*` + `/commands` + `/artifacts/*` | `app/` Flutter 决策视角，也可给外部调用方提交 agent / primitive 任务 | `TaskRunner` 入队；`nof-worker` 唯一执行 | **app 主路径** |
+| `/instances/*` | 后端测试、内部迁移、未来 web/app 统一入口 | `InstanceStore` + `InstanceRunner` + recipe | 已存在，但**尚未替代前端主路径** |
 
-## 1. 起 server
+不要把 `/instances` 写成已经接管 web/app 的入口；当前它是 engine driver API。web 仍以 `job_id` 为 UI 句柄，app 仍以 `task_id` 为 UI 句柄。
+
+## 2. 起 server
+
+运行方式以 [docs/README.md](README.md) 的 runbook 为准。开发期常用：
 
 ```bash
-# 安装（一次）
-pip install -e .            # 装 fastapi/uvicorn/sse-starlette/pydantic/python-dotenv 等
-
-# 启动（默认 0.0.0.0:8810）
-nof-server
-# 或
-NOF_SERVER_PORT=8810 PYTHONPATH=src python3 -m ncds_opus_factory.server.app
+.venv/bin/uvicorn ncds_opus_factory.server.app:app --host 0.0.0.0 --port 8810 --reload --reload-dir src
 ```
 
-- **CORS 全开**（`allow_origins=["*"]`）→ 前端 dev server 可直接跨域调，无需代理。
-- 常用 env：`NOF_SERVER_HOST` / `NOF_SERVER_PORT` / `NOF_STATE_DIR`（任务存储）/
-  `NOF_VIDEO_JOBS_DIR` / `NOF_ARTIFACTS_ROOT`（产物根，默认仓库根）。
-- **`.env` 坑**：server 启动时从仓库根加载 `.env`（含 `DASHSCOPE_API_KEY` 等）。
-  **纯 UI 联调不需要真 key** —— `GET /commands`、schema、`POST /tasks` 返回 201、SSE 这些
-  契约在没 key 时全部成立；只有**真跑一条 agent 到底**（boya/shenkuo/wudaozi/tts 触 DashScope，
-  liuyong/guiguzi 触 scodex，wolong 触 opus）才需要 `.env` + 对应 CLI 在 PATH。
-- `/studio` 是仓库自带的 SPA 挂载点（prod 读 `web/dist`，`NOF_DEV=1` 反代 vite）；
-  你做的前端可以独立部署，也可以替换它。
+- `/studio` 是仓库自带 SPA 挂载点：prod 读 `web/dist`，`NOF_DEV=1` 反代 vite。
+- nof-server 在 S3 后只负责 HTTP/SSE/入队/serve；`/tasks` 的离线执行在 `nof-worker`。
+- 常用 env：`NOF_SERVER_HOST` / `NOF_SERVER_PORT` / `NOF_STATE_DIR` / `NOF_VIDEO_JOBS_DIR` / `NOF_ARTIFACTS_ROOT`。
 
----
+## 3. `/jobs`：web 内容画布主路径
 
-## 2. 资源模型：command（能做什么） vs task（做了一次）
+`/studio` 当前通过 `web/src/api/client.ts` 调 `/jobs`。它是作品/内容视角：一个 job 对应一条 015 画布，节点状态、画布位置、episode、预览和本地文件都围绕 `job_id`。
 
-两者是**不同资源**，URL 严格分离：
+常用端点：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/pipelines` | 可创建的 pipeline catalog |
+| `POST` | `/jobs` | 创建作品，body `{pipeline_id, title?, inputs}` |
+| `GET` | `/jobs` | 作品列表 |
+| `GET` | `/jobs/{job_id}` | 作品详情，含节点状态与画布数据 |
+| `POST` | `/jobs/{job_id}/nodes/{node}/run` | 跑单个节点，会 reset 自身与下游 |
+| `POST` | `/jobs/{job_id}/nodes/{node}/cancel` | 取消正在跑的节点 |
+| `GET` | `/jobs/{job_id}/events` | web 画布 SSE |
+| `GET` / `PUT` | `/jobs/{job_id}/episode` | 读写 `02_rw/episode.json` |
+| `GET` / `PUT` | `/jobs/{job_id}/files/{relpath}` | 读写 `video-jobs/{job_id}/` 下文本/媒体文件 |
+| `GET` | `/preview/{job_id}` | 015 预览 iframe |
+
+当前 strangler 行为：`NOF_ENGINE_NODES` 未设置时，`rw/lines/storyboard/tts/image/render` 经 facade 走 engine；`asr` 因需要步内增量与后台 enrich，仍走 legacy `_execute_asr_collect`。
+
+`GET /jobs/{job_id}/events` 推的是画布节点事件；客户端断线后应重新 `GET /jobs/{job_id}` 对齐全量状态。
+
+## 4. `/tasks`：app 决策视角主路径
+
+Flutter app 的 `FactoryClient` 当前围绕 `/tasks` 工作：拉 agent 收件箱、提交任务、看详情、收 SSE、提交审核决定。`/tasks` 不是 `/instances` 的兼容读层；它仍由 `TaskRunner` / `nof-worker` 驱动。
 
 | 资源 | 端点 | 说明 |
 |---|---|---|
-| 命令清单 | `GET /commands` | catalog，渲染"选哪个 agent" |
-| 命令表单 | `GET /commands/{cmd}/schema` | 该命令要填什么 → 渲染输入表单 |
-| 建任务 | `POST /tasks` | body `{cmd, params}` → **201 + `Location: /tasks/{id}`** |
-| 任务列表 | `GET /tasks` | 所有实例（最新在前） |
-| 任务详情 | `GET /tasks/{task_id}` | 含 `result` + `artifacts` + `review` |
-| 任务进度 | `GET /tasks/{task_id}/events` | **SSE** |
-| 提交决策 | `POST /tasks/{task_id}/review` | body `{decision, note?}` → 同意/拒绝 + 备注 |
-| 读产物 | `GET /artifacts/files/{relpath}` | md/mp3/mp4/png/json，**支持 Range** |
-| 列目录 | `GET /artifacts/dir/{relpath}` | 浏览采集目录 / 分镜实例 / 待验收清单 |
+| 命令清单 | `GET /commands` | catalog，渲染 agent / primitive 入口 |
+| 命令表单 | `GET /commands/{cmd}/schema` | 动态字段说明 |
+| 建任务 | `POST /tasks` | body `{cmd, params}`，成功 `201` + `Location: /tasks/{id}` |
+| 任务列表 | `GET /tasks` | app 收件箱，全量任务 meta |
+| 任务详情 | `GET /tasks/{task_id}` | meta + result + artifacts + review |
+| 任务进度 | `GET /tasks/{task_id}/events` | SSE，回放历史后 tail 新事件 |
+| 提交决策 | `POST /tasks/{task_id}/review` | body `{decision, note?, note_origin?}` |
+| 撤销决策 | `DELETE /tasks/{task_id}/review` | 幂等撤销 |
+| 取消/恢复 | `POST /tasks/{task_id}/cancel` / `restore` | 操作离线任务状态 |
 
-> 旧端点 `POST /tasks/{cmd}`、`GET /tasks/{cmd}/schema` 已废弃（405/404），别用。
-
----
-
-## 3. 标准流程（一次任务的生命周期）
-
-```
-GET /commands                         → 列出 agent，按 group 分组（agent / primitive）
-GET /commands/{cmd}/schema            → 拿字段，渲染表单
-POST /tasks {cmd, params}             → 201，从 Location 或 body.task_id 拿 id
-GET /tasks/{id}/events  (SSE)         → 实时进度，直到收到 [DONE]
-GET /tasks/{id}                       → 终态详情，读 artifacts 渲染产物
-```
-
-最小示例：
+最小流程：
 
 ```js
-// 1) 选题表单字段
-const schema = await (await fetch(`${API}/commands/liuyong/schema`)).json();
-// schema.fields = [{name:'topic', label:'选题', type:'string', required:true, ...}, ...]
+const schema = await (await fetch('/commands/liuyong/schema')).json();
 
-// 2) 建任务
-const r = await fetch(`${API}/tasks`, {
+const r = await fetch('/tasks', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ cmd: 'liuyong', params: { topic: '同事阴阳你怎么办' } }),
 });
-const { task_id } = await r.json();   // r.status === 201
+const { task_id } = await r.json();
 
-// 3) 订阅进度
-const es = new EventSource(`${API}/tasks/${task_id}/events`);
+const es = new EventSource(`/tasks/${task_id}/events`);
 es.onmessage = (e) => {
-  if (e.data === '[DONE]') { es.close(); loadDetail(task_id); return; }
-  const ev = JSON.parse(e.data);      // TaskEvent
+  if (e.data === '[DONE]') {
+    es.close();
+    return;
+  }
+  const ev = JSON.parse(e.data);
   if (ev.type === 'progress') appendLog(ev.text);
-  if (ev.type === 'error')    showError(ev.error);
 };
 ```
 
----
+## 5. `/instances`：engine driver API
 
-## 4. SSE 信封（OpenAPI 不描述流式格式）
+`/instances` 暴露生产引擎原语，供迁移和测试使用：
 
-`GET /tasks/{id}/events`：**先回放历史事件，再 tail 新增，终态后发 `[DONE]`**。
-每条 SSE 消息的 `data:` 要么是一个 `[DONE]` 字面串，要么是一个 **TaskEvent** JSON：
-
-```jsonc
-{ "type": "progress", "ts": 1733740800123, "text": "质检[gpt5]: pass - ..." }
-{ "type": "done",     "ts": 1733740900456, "result": { /* run 返回值，同 GET /tasks/{id}.result */ } }
-{ "type": "error",    "ts": 1733740900456, "error": "RuntimeError: ..." }
-```
-
-- `type ∈ progress | done | error`；`ts` 是毫秒。
-- 收到 `[DONE]` 即关闭 EventSource，再 `GET /tasks/{id}` 取终态（含 `artifacts`）。
-- **不要轮询死等**：liuyong / wolong 是分钟级任务，靠 SSE 看进度。
-
----
-
-## 5. params 是动态的（关键）
-
-`POST /tasks` 的 `params` 在 OpenAPI 里只是 `object`（free-form），**真正的字段说明书在
-`GET /commands/{cmd}/schema`，运行时取**。字段结构：
-
-```jsonc
-{
-  "cmd": "liuyong",
-  "label": "柳永 · 编剧+质检",
-  "group": "agent",
-  "summary": "...",
-  "fields": [
-    { "name": "topic", "label": "选题", "type": "string", "required": true, "help": "一句话想法" },
-    { "name": "user_requirements", "label": "附加创作要求", "type": "text", "required": false }
-  ]
-}
-```
-
-`type` 词表（决定渲染哪种控件）：
-
-| type | 控件 |
-|---|---|
-| `string` | 单行输入 |
-| `text` | 多行文本域 |
-| `int` / `float` | 数字输入 |
-| `bool` | 开关 |
-| `string[]` | 多值（逗号分隔或多输入框） |
-| `enum` | 下拉（选项在字段的 `enum` 数组里） |
-
-字段可带 `default` / `enum` / `help`。前端按 schema 动态渲染，**不要硬编码各命令的字段**。
-
----
-
-## 6. artifact 渲染约定（终态产物）
-
-`GET /tasks/{id}` 完成态返回 `artifacts: [{ label, kind, url, path }]`。按 `kind` 决定怎么渲染：
-
-| kind | 含义 | 渲染建议 |
+| 方法 | 路径 | 用途 |
 |---|---|---|
-| `script` | 脚本 `.md` | Markdown 阅读器（可编辑后 `PUT /jobs/{job}/files/...` 回写） |
-| `audio` | `.mp3` 等 | `<audio>`，url 支持 Range 可拖动 |
-| `video` | `.mp4` 等 | `<video>`，同上 |
-| `image` | `.png/.jpg` | `<img>` |
-| `data` | `.json` | 折叠 JSON / 质检面板 |
-| `dir` | 目录 | `GET` 该 url（`/artifacts/dir/...`）拿 `entries`，做文件浏览 |
-| `text`/`file` | 其它 | 纯文本 / 下载 |
+| `GET` / `POST` | `/instances` | 列实例 / 创建实例 |
+| `GET` | `/instances/{iid}` | 读 InstanceState |
+| `GET` | `/instances/{iid}/runnable` | 查询当前可跑 step |
+| `POST` | `/instances/{iid}/steps/{sid}/run` | 同步跑一步 |
+| `POST` | `/instances/{iid}/steps/{sid}/approve` | `awaiting_review` 出口 |
+| `POST` | `/instances/{iid}/steps/{sid}/reset` | 重置该步与传递下游 |
+| `POST` | `/instances/{iid}/finalize` | 根据步骤终态结算实例 |
+| `GET` | `/instances/{iid}/events?level=meta,step` | 分层 SSE |
 
-`url` 已是可直接 GET 的相对路径（`/artifacts/files/...` 或 `/artifacts/dir/...`）。
-目录列表项：`{ name, is_dir, size, kind, url }`。
+当前 `RECIPE_REGISTRY` 只注册 `paper_card_talk_015`。`figure_talk` 仍是未来 recipe / cold chain，不要在前端当成可选 engine recipe。
 
----
+## 6. SSE 信封
 
-## 7. 各 agent 脾气（建 UI 时要知道）
+`/tasks/{id}/events` 事件：
 
-| cmd | group | 关键 params | 耗时 | 产物 | 注意 |
-|---|---|---|---|---|---|
-| `guiguzi` | agent | `benchmark_path`(必填) | 秒~十秒 | 选题库 topics.json | benchmark 来自沈括采集 |
-| `liuyong` | agent | `topic`(必填) | **分钟级** | 脚本 .md + 质检 .qc.json | 内含打回重写循环，靠 SSE |
-| `wudaozi` | agent | `script_path` 或 `script_text` | 十秒级 | storyboard.json / beats.js | **mp4 要再发一个 `render` 任务**，wudaozi 本身不出片 |
-| `boya` | agent | `job_dir`(必填) | 十秒级 | master.mp3 + audio_plan.json | job 目录需先有 audio/ 或 beats |
-| `shenkuo` | agent | `author` 或 `aweme` | 分钟级 | 采集目录(mp4/转写/抠图) | 触 TikHub，需 token |
-| `wolong` | agent | `count` | **分钟级，重** | 待验收清单目录 | 拉起 opus 自主编排，最重 |
+```jsonc
+{ "type": "progress", "ts": 1733740800123, "text": "质检: pass - ..." }
+{ "type": "done", "ts": 1733740900456, "result": {} }
+{ "type": "error", "ts": 1733740900456, "error": "RuntimeError: ..." }
+```
 
-底层命令（`wst/tst/vid/asr/rw/tts/render/render_015`）= primitive，前端可放进"高级"区。
+`/jobs/{id}/events` 是画布节点事件，包含 node status / outputs patch 等 web 专用结构。`/instances/{id}/events` 按 `level=meta,step,detail` 过滤；当前路由已存在，但前端主路径尚未依赖它。
 
-**一个常见组合（成片）**：`liuyong`(脚本) → `wudaozi`(分镜) → `render`(出 mp4) → `boya`(配音混音)。
-端上是多个任务串起来，不是一个调用。
+所有 SSE 收到 `[DONE]` 后关闭连接，再 GET 对应详情接口重同步。
 
----
+## 7. params 与 artifact
 
-## 8. 决策（同意 / 拒绝 + 备注）
+`POST /tasks` 的 `params` 是 free-form；字段说明从 `GET /commands/{cmd}/schema` 动态取，不要硬编码。
 
-移动端「点同意/拒绝」走一个独立端点，与任务执行解耦 —— 它不改任务状态、不触发重跑，
-只把一条人工决策落到 `state/tasks/{id}/review.json`。
+artifact 统一按 URL 渲染：
+
+| kind | 渲染建议 |
+|---|---|
+| `script` / `text` | Markdown / 纯文本 |
+| `audio` | `<audio>` |
+| `video` | `<video>` |
+| `image` | `<img>` |
+| `data` | JSON 面板 |
+| `dir` | 调 `GET /artifacts/dir/{relpath}` 展开 |
+
+`/artifacts/files/{relpath}` 覆盖 `state/` 与 `video-jobs/` 白名单根；`/jobs/{job_id}/files/{relpath}` 只服务 web 画布的 `video-jobs/{job_id}/`。
+
+## 8. 决策
+
+app 的同意/拒绝走 `/tasks/{id}/review`，只落人工决策，不自动改任务状态、不触发重跑。
 
 ```js
-// 点「同意」并附一句语音/打字备注
-await fetch(`${API}/tasks/${id}/review`, {
+await fetch(`/tasks/${id}/review`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ decision: 'approved', note: '配音再快点' }),
 });
-// → 200 { decision, note, reviewed_at }
 ```
 
-- `decision ∈ approved | rejected`；`note` 可选（适合塞语音转写 / 修改意见，可当下一轮任务的 params 喂回去）。
-- **幂等覆盖**：再次 POST 即改判，最后一次为准。
-- `GET /tasks/{id}` 终态详情多一个 `review` 字段（未决为 `null`）。
-- `GET /tasks` 列表里每条 meta 多一个 `decision`（`approved`/`rejected`/`null`），
-  做「待我验收」收件箱时一次拉到，不用逐条查详情。
-- 任务不存在 → 404。
+`decision` 取 `approved | rejected`；再次 POST 会覆盖最后决策。`note_origin=machine` 表示模板生成意见，不冒充人工训练样本。
 
 ## 9. 错误与状态码
 
-- 任务 `status ∈ pending | running | completed | failed`（见 TaskMeta / 详情）。
 - `POST /tasks` 未知 cmd → 404；建成功 → 201。
-- 产物路由：不存在 404；非白名单根（只 `state/` 和 `video-jobs/`）或越界 → 403；目录当文件取 → 400。
-- 任务执行失败：`GET /tasks/{id}` 的 `status="failed"` + `error` 文本；SSE 也会发 `error` 事件。
+- `/instances` 状态机冲突 → 409；坏 recipe / body → 400；实例或 step 不存在 → 404。
+- 产物路由：不存在 404；越界或非白名单根 → 403；目录当文件取 → 400。
+- 任务失败：详情接口返回 `status="failed"` + `error`；SSE 也会发 error 事件。

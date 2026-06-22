@@ -16,10 +16,11 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from ncds_opus_core.gpt_image.paths import GPT_IMAGE_OUTPUT_ROOT
 
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_TIMEOUT_SECONDS = 180
-DEFAULT_OUTPUT_ROOT = Path("/tmp/gpt-image")
+DEFAULT_OUTPUT_ROOT = GPT_IMAGE_OUTPUT_ROOT
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "

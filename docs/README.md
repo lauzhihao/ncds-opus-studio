@@ -45,15 +45,19 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 ```
 日志 `state/map_watchdog.{out,err}.log`、PID/锁 `state/map_project_watchdog.{pid,lock}`（均 gitignored）。若 `.project_map` 比 `src/` 源文件旧 → 看门狗没在跑。
 
-## 当前方向与进度（2026-06-13）
+## 当前方向与进度（2026-06-22）
 **权威设计 = [PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)**：把 web（作品/内容视角）与 app
 （agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（取代早先的"core/studio/factory 三包对等拆分"）。
 
-进度：**P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）；
-**E0 引擎骨架 + E1-a driver API + E1-b1 /instances 路由 + E1-b2 全 7 步 step-performer（lines/storyboard/tts/image/render/asr/rw 真实包装 + 引擎驱动真实 015 链端到端出 mp4 验证）已落地**
-（`src/ncds_opus_factory/server/engine/` 全套 driver 原语 + `routes/instances.py` + `pipeline_performers_015.py` + 多轮评审加固，382 passed）；
-**E1-b2 #2 全局 recipe 绑定 + #3 绞杀者已落地**（`NOF_ENGINE_NODES` 命中节点执行改走引擎、UI 不变，389 passed）；
-**下一步**=引擎补步内增量 outputs（让 asr/rw 也能改道不丢实时进度）+ 全切换前端直走 /instances（见设计 §10）。
+当前实现事实：
+- **P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）。
+- **生产引擎后端已存在**：`src/ncds_opus_factory/server/engine/`、`routes/instances.py`、`pipeline_performers_015.py` 已落地；`RECIPE_REGISTRY` 当前只注册 `paper_card_talk_015`。
+- **web 当前主路径仍是 `/jobs/*`**：`/studio` React 画布调用 `/jobs`、`/pipelines`、`/preview`；`PipelineRunner` 作为 facade 保存 `JobState`，命中节点再转到 engine performer。默认未设 `NOF_ENGINE_NODES` 时，`rw/lines/storyboard/tts/image/render` 走 engine；`asr` 因步内增量与后台 enrich 仍固定走 legacy。
+- **app 当前主路径仍是 `/tasks`**：Flutter 决策视角通过 `TaskRunner` / `nof-worker` 消费任务，还没有切到 `/instances`。
+- **`/instances` 是可用的后端 driver API**，目前主要由测试与内部迁移使用，尚未替代 web/app 前端主路径。
+- 测试基线不要沿用历史文档里的 passed 数字；执行任务当天以 `pytest --collect-only` / `pytest` 的真实结果为准。
+
+下一步按 backlog task-3 系列收敛：先处理文档记忆与运行时事实对齐（task-3.10），再按 owner 决策推进运行时收口、god-object 拆分与单一真源。
 ⚠️ 护城河：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
 
 ## 活文档（current）
@@ -61,7 +65,7 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 |---|---|
 | **[PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)** | **权威设计**：目标架构、核心抽象、步骤生命周期/介入点、多配方、E0–E5 迁移分期 |
 | [WOLONG-DESIGN.md](WOLONG-DESIGN.md) | 卧龙子系统实装（调度/闸门/离线学习）——在新架构里=app driver + 自治神经层的规格 |
-| [FRONTEND-API.md](FRONTEND-API.md) | 对外 HTTP API 契约（E1 起新增 `/instances` 路由，会随之演进） |
+| [FRONTEND-API.md](FRONTEND-API.md) | 对外 HTTP API 契约：当前 `/jobs`=web 主路径、`/tasks`=app 主路径、`/instances`=engine 后端 driver API |
 | [FEISHU-REFACTOR.md](FEISHU-REFACTOR.md) | 飞书 IO → lark-cli 边界的改造记录（设计原则：命令不直调飞书） |
 
 ## [archive/](archive/) —— 历史/已作废，**不要当现状读**

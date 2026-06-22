@@ -1,11 +1,9 @@
 """/asr —— 多链路并行转写 + 爆款精华分析。
 
 Python 薄包装：spawn `scripts/asr_command_runner.mjs`，由 Node runner 调度
-yt-dlp / Whisper / Tingwu / DashScope，最终把精华文档写到飞书。
-
-注意：当前 scripts/ 下的 .mjs 还在用 feishu_sdk_adapter.mjs 直调飞书 OpenAPI。
-按本项目约束，这一层最终要重写为 lark-cli 子进程调用。详见
-docs/FEISHU-REFACTOR.md。
+yt-dlp / Whisper / Tingwu / DashScope，落本地产物并按调用方 payload 冒泡通知。
+所有飞书 IO 都经 `scripts/feishu_sdk_adapter.mjs` 委托 `lark-cli` 子进程完成，
+不直连飞书 OpenAPI。详见 docs/FEISHU-REFACTOR.md。
 """
 
 from __future__ import annotations

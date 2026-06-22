@@ -320,6 +320,7 @@ class TestGuiguziAnalyzeDomain:
 
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_opus", fake_call)
         monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_deepseek", fake_call)
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_agy", fake_call)
 
         guiguzi.analyze(self._ITEMS)
 
