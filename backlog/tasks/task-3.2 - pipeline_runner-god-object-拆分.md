@@ -54,3 +54,5 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 验证：`py_compile shenkuo.py` 通过；沈括 focused tests `23 passed`；pipeline/cancel focused tests `48 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
 - 2026-06-22：第五刀处理 C5 的 `PipelineRunner._execute_rw` 超长函数，新增 `_RwRun` 多模型运行上下文，把模型级状态推送、draft 增量写盘、单模型 run/QC、draft 排序汇总从 `_execute_rw` 拆出；`_execute_rw` 从约 120 行降到 45 行，public 行为和增量推送契约保持不变。
 - 验证：`py_compile pipeline_runner.py` 通过；RW focused tests `64 passed`；pipeline/server focused tests `70 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
+- 2026-06-22：第六刀处理 C5 的 `PipelineRunner._execute_image` 超长函数，新增 `_ImageRun` 图片批量生成上下文，把 scene 出场序去重、容器图生成、简笔画生成、计数汇总从 `_execute_image` 拆出；`_execute_image` 从约 140 行降到 15 行，保留原有幂等、部分失败和进度文本语义。
+- 验证：`py_compile pipeline_runner.py` 通过；新增 runner image tests，image focused tests `36 passed`；pipeline/server focused tests `73 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 601 passed, 173 warnings。

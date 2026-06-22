@@ -1481,135 +1481,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         ep = self.get_episode(job_id)
         if ep is None:
             raise ValueError("episode.json not found; run rw first (or manually seed it)")
-
-        beats = ep.get("beats") or []
-        scenes_def = ep.get("scenes") or {}
-        image_cfg = ep.get("image") or {}
-
-        # 出场顺序去重
-        seen: set[str] = set()
-        scene_order: list[str] = []
-        for b in beats:
-            sid = b.get("scene")
-            if sid and sid not in seen:
-                seen.add(sid)
-                scene_order.append(sid)
-
-        eligible = [sid for sid in scene_order if not sid.startswith("ch")]
-        if not eligible:
-            raise ValueError("no image-eligible scenes (all are chapter cards or no scenes)")
-
-        size = image_cfg.get("size") or "1536x1024"
-        quality = image_cfg.get("quality") or "auto"
-        no_text_hint = image_cfg.get("noTextHint") or ""
-        # 简笔画：白底黑剪影方图，圣经前置 + 通用零文字负面后置；渲染层用
-        # mix-blend-mode:multiply 抠掉白底，所以出图链路与容器图完全一样（不需透明）。
-        sketch_size = image_cfg.get("sketchSize") or "1024x1024"
-        sketch_prefix = str(image_cfg.get("sketchStylePrefix") or "").strip()
-
-        out_dir = job_dir / "03_image"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        def on_progress(text: str) -> None:
-            self._push_progress(job_id, "image", text)
-
-        on_progress(f"image 开始：{len(eligible)} 个场景 · {size} {quality}")
-
-        items: list[dict[str, Any]] = []
-        ok = sk = fail = 0
-        sketch_ok = sketch_fail = 0
-        n_scenes = len(scene_order)
-        for i, sid in enumerate(scene_order, start=1):
-            sc = scenes_def.get(sid) or {}
-            prompt = str(sc.get("prompt") or "").strip()
-            if sid.startswith("ch"):
-                items.append({"scene_id": sid, "prompt": prompt, "image_relpath": None,
-                              "skipped_reason": "chapter card", "sketches": []})
-                continue
-            if not prompt:
-                items.append({"scene_id": sid, "prompt": "", "image_relpath": None,
-                              "skipped_reason": "empty prompt", "sketches": []})
-                fail += 1
-                continue
-
-            # —— 容器图（背景底图） ——
-            target = out_dir / f"{sid}.webp"
-            container_rel: str | None = None
-            container_err: str | None = None
-            if target.is_file():
-                container_rel = f"03_image/{sid}.webp"
-                sk += 1
-                on_progress(f"[{i}/{n_scenes}] {sid} 容器图已存在，跳过")
-            else:
-                full_prompt = f"{prompt} {no_text_hint}".strip() if no_text_hint else prompt
-                on_progress(f"[{i}/{n_scenes}] {sid} 容器图生成中…")
-                try:
-                    await asyncio.to_thread(
-                        _generate_scene_image,
-                        scene_id=sid, prompt=full_prompt, size=size,
-                        quality=quality, target=target, job_id=job_id,
-                    )
-                    container_rel = f"03_image/{sid}.webp"
-                    ok += 1
-                except Exception as exc:
-                    logger.warning("[pipeline] image scene %s failed: %s", sid, exc)
-                    on_progress(f"[{i}/{n_scenes}] {sid} 容器图失败: {exc}")
-                    container_err = str(exc)
-                    fail += 1
-
-            # —— 简笔画层（白底黑剪影，逐幅出；容器失败也照出，渲染层各管各的） ——
-            sketches_def = sc.get("sketches") or []
-            sketch_items: list[dict[str, Any]] = []
-            for n, skd in enumerate(sketches_def, start=1):
-                sp = str((skd or {}).get("prompt") or "").strip()
-                if not sp:
-                    continue
-                srel = f"03_image/{sid}-sk{n}.webp"
-                stgt = out_dir / f"{sid}-sk{n}.webp"
-                if stgt.is_file():
-                    sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
-                    continue
-                sfull = " ".join(p for p in (sketch_prefix, sp, no_text_hint) if p)
-                on_progress(f"[{i}/{n_scenes}] {sid} 简笔画 {n}/{len(sketches_def)} 生成中…")
-                try:
-                    await asyncio.to_thread(
-                        _generate_scene_image,
-                        scene_id=f"{sid}-sk{n}", prompt=sfull, size=sketch_size,
-                        quality=quality, target=stgt, job_id=job_id,
-                    )
-                    sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
-                    sketch_ok += 1
-                except Exception as exc:
-                    logger.warning("[pipeline] sketch %s-sk%d failed: %s", sid, n, exc)
-                    on_progress(f"[{i}/{n_scenes}] {sid} 简笔画 {n} 失败: {exc}")
-                    sketch_items.append({"index": n, "prompt": sp, "image_relpath": None,
-                                         "error": str(exc)})
-                    sketch_fail += 1
-
-            item: dict[str, Any] = {"scene_id": sid, "prompt": prompt,
-                                    "image_relpath": container_rel, "sketches": sketch_items}
-            if container_err:
-                item["error"] = container_err
-            items.append(item)
-
-        if ok == 0 and fail > 0:
-            raise RuntimeError(f"all {fail} scene image generations failed")
-
-        on_progress(
-            f"image 完成：容器 ok={ok} skipped={sk} failed={fail} · "
-            f"简笔画 ok={sketch_ok} failed={sketch_fail}"
-        )
-
-        return {
-            "items": items,
-            "pictures_dir": str(out_dir),
-            "pictures_count": ok + sk,
-            "ok": ok,
-            "skipped": sk,
-            "failed": fail,
-            "sketch_ok": sketch_ok,
-            "sketch_failed": sketch_fail,
-        }
+        return await _ImageRun(runner=self, job_id=job_id, job_dir=job_dir, episode=ep).run()
 
     async def _execute_asr_collect(self, job_id: str) -> dict[str, Any]:
         """沈括采集（统一走 collect_one 快采趟）：对 inputs.urls 每条作品解析 aweme_id →
@@ -1947,6 +1819,169 @@ def _rebuild_tts_items_015(episode: dict[str, Any]) -> list[dict[str, Any]]:
             "audio_end": b.get("audioEnd"),
         })
     return items
+
+
+@dataclass
+class _ImageRun:
+    """`_execute_image` 的一次图片批量生成运行上下文。"""
+
+    runner: Any
+    job_id: str
+    job_dir: Path
+    episode: dict[str, Any]
+    scene_order: list[str] = field(init=False)
+    eligible: list[str] = field(init=False)
+    scenes_def: dict[str, Any] = field(init=False)
+    image_cfg: dict[str, Any] = field(init=False)
+    size: str = field(init=False)
+    quality: str = field(init=False)
+    no_text_hint: str = field(init=False)
+    sketch_size: str = field(init=False)
+    sketch_prefix: str = field(init=False)
+    out_dir: Path = field(init=False)
+    items: list[dict[str, Any]] = field(default_factory=list)
+    ok: int = 0
+    skipped: int = 0
+    failed: int = 0
+    sketch_ok: int = 0
+    sketch_failed: int = 0
+
+    def __post_init__(self) -> None:
+        beats = self.episode.get("beats") or []
+        self.scenes_def = self.episode.get("scenes") or {}
+        self.image_cfg = self.episode.get("image") or {}
+
+        # 出场顺序去重
+        seen: set[str] = set()
+        self.scene_order = []
+        for b in beats:
+            sid = b.get("scene")
+            if sid and sid not in seen:
+                seen.add(sid)
+                self.scene_order.append(sid)
+
+        self.eligible = [sid for sid in self.scene_order if not sid.startswith("ch")]
+        if not self.eligible:
+            raise ValueError("no image-eligible scenes (all are chapter cards or no scenes)")
+
+        self.size = self.image_cfg.get("size") or "1536x1024"
+        self.quality = self.image_cfg.get("quality") or "auto"
+        self.no_text_hint = self.image_cfg.get("noTextHint") or ""
+        # 简笔画：白底黑剪影方图，圣经前置 + 通用零文字负面后置；渲染层用
+        # mix-blend-mode:multiply 抠掉白底，所以出图链路与容器图完全一样（不需透明）。
+        self.sketch_size = self.image_cfg.get("sketchSize") or "1024x1024"
+        self.sketch_prefix = str(self.image_cfg.get("sketchStylePrefix") or "").strip()
+
+        self.out_dir = self.job_dir / "03_image"
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def n_scenes(self) -> int:
+        return len(self.scene_order)
+
+    def on_progress(self, text: str) -> None:
+        self.runner._push_progress(self.job_id, "image", text)
+
+    async def run(self) -> dict[str, Any]:
+        self.on_progress(f"image 开始：{len(self.eligible)} 个场景 · {self.size} {self.quality}")
+        for i, sid in enumerate(self.scene_order, start=1):
+            await self.process_scene(i, sid)
+
+        if self.ok == 0 and self.failed > 0:
+            raise RuntimeError(f"all {self.failed} scene image generations failed")
+
+        self.on_progress(
+            f"image 完成：容器 ok={self.ok} skipped={self.skipped} failed={self.failed} · "
+            f"简笔画 ok={self.sketch_ok} failed={self.sketch_failed}"
+        )
+        return {
+            "items": self.items,
+            "pictures_dir": str(self.out_dir),
+            "pictures_count": self.ok + self.skipped,
+            "ok": self.ok,
+            "skipped": self.skipped,
+            "failed": self.failed,
+            "sketch_ok": self.sketch_ok,
+            "sketch_failed": self.sketch_failed,
+        }
+
+    async def process_scene(self, i: int, sid: str) -> None:
+        sc = self.scenes_def.get(sid) or {}
+        prompt = str(sc.get("prompt") or "").strip()
+        if sid.startswith("ch"):
+            self.items.append({"scene_id": sid, "prompt": prompt, "image_relpath": None,
+                               "skipped_reason": "chapter card", "sketches": []})
+            return
+        if not prompt:
+            self.items.append({"scene_id": sid, "prompt": "", "image_relpath": None,
+                               "skipped_reason": "empty prompt", "sketches": []})
+            self.failed += 1
+            return
+
+        # 容器图（背景底图）
+        container_rel, container_err = await self.generate_container(i, sid, prompt)
+        # 简笔画层（白底黑剪影，逐幅出；容器失败也照出，渲染层各管各的）
+        sketch_items = await self.generate_sketches(i, sid, sc.get("sketches") or [])
+
+        item: dict[str, Any] = {"scene_id": sid, "prompt": prompt,
+                                "image_relpath": container_rel, "sketches": sketch_items}
+        if container_err:
+            item["error"] = container_err
+        self.items.append(item)
+
+    async def generate_container(self, i: int, sid: str, prompt: str) -> tuple[str | None, str | None]:
+        target = self.out_dir / f"{sid}.webp"
+        if target.is_file():
+            self.skipped += 1
+            self.on_progress(f"[{i}/{self.n_scenes}] {sid} 容器图已存在，跳过")
+            return f"03_image/{sid}.webp", None
+
+        full_prompt = f"{prompt} {self.no_text_hint}".strip() if self.no_text_hint else prompt
+        self.on_progress(f"[{i}/{self.n_scenes}] {sid} 容器图生成中…")
+        try:
+            await asyncio.to_thread(
+                _generate_scene_image,
+                scene_id=sid, prompt=full_prompt, size=self.size,
+                quality=self.quality, target=target, job_id=self.job_id,
+            )
+            self.ok += 1
+            return f"03_image/{sid}.webp", None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[pipeline] image scene %s failed: %s", sid, exc)
+            self.on_progress(f"[{i}/{self.n_scenes}] {sid} 容器图失败: {exc}")
+            self.failed += 1
+            return None, str(exc)
+
+    async def generate_sketches(
+        self, i: int, sid: str, sketches_def: list[Any],
+    ) -> list[dict[str, Any]]:
+        sketch_items: list[dict[str, Any]] = []
+        for n, skd in enumerate(sketches_def, start=1):
+            sp = str((skd or {}).get("prompt") or "").strip()
+            if not sp:
+                continue
+            srel = f"03_image/{sid}-sk{n}.webp"
+            stgt = self.out_dir / f"{sid}-sk{n}.webp"
+            if stgt.is_file():
+                sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
+                continue
+            sfull = " ".join(p for p in (self.sketch_prefix, sp, self.no_text_hint) if p)
+            self.on_progress(f"[{i}/{self.n_scenes}] {sid} 简笔画 {n}/{len(sketches_def)} 生成中…")
+            try:
+                await asyncio.to_thread(
+                    _generate_scene_image,
+                    scene_id=f"{sid}-sk{n}", prompt=sfull, size=self.sketch_size,
+                    quality=self.quality, target=stgt, job_id=self.job_id,
+                )
+                sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
+                self.sketch_ok += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[pipeline] sketch %s-sk%d failed: %s", sid, n, exc)
+                self.on_progress(f"[{i}/{self.n_scenes}] {sid} 简笔画 {n} 失败: {exc}")
+                sketch_items.append({"index": n, "prompt": sp, "image_relpath": None,
+                                     "error": str(exc)})
+                self.sketch_failed += 1
+        return sketch_items
 
 
 def _terminate_proc_group(proc: "subprocess.Popen[str]") -> None:

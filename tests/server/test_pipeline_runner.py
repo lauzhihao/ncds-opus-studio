@@ -146,6 +146,73 @@ def test_rw_model_helpers_assert_known_model_and_mock_short_circuit(
     assert asyncio.run(runner._rw_mock_short_circuit(state, "j1", "missing")) is False
 
 
+def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    runner.write_episode(job.job_id, {
+        "beats": [{"scene": "ch1"}, {"scene": "s1"}, {"scene": "s2"}],
+        "scenes": {
+            "ch1": {"prompt": "章节卡"},
+            "s1": {"prompt": "场景一", "sketches": [{"prompt": "简笔画1"}]},
+            "s2": {"prompt": ""},
+        },
+        "image": {"size": "1536x1024", "quality": "auto", "sketchStylePrefix": "白底黑剪影"},
+    })
+    calls: list[str] = []
+
+    def fake_generate(*, scene_id, prompt, size, quality, target, job_id):
+        calls.append(scene_id)
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(b"webp")
+
+    monkeypatch.setattr(pr, "_generate_scene_image", fake_generate)
+    out = asyncio.run(runner._execute_image(job.job_id))
+
+    assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 1)
+    assert out["sketch_ok"] == 1
+    assert "ch1" not in calls
+    assert "s1" in calls and "s1-sk1" in calls
+    assert (tmp_path / job.job_id / "03_image" / "s1.webp").is_file()
+    assert (tmp_path / job.job_id / "03_image" / "s1-sk1.webp").is_file()
+
+
+def test_execute_image_idempotent_skip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    img_dir = tmp_path / job.job_id / "03_image"
+    img_dir.mkdir(parents=True)
+    (img_dir / "s1.webp").write_bytes(b"existing")
+    runner.write_episode(job.job_id, {
+        "beats": [{"scene": "s1"}],
+        "scenes": {"s1": {"prompt": "场景一"}},
+        "image": {},
+    })
+    monkeypatch.setattr(
+        pr, "_generate_scene_image",
+        lambda **_kwargs: pytest.fail("不应重生已存在的容器图"),
+    )
+
+    out = asyncio.run(runner._execute_image(job.job_id))
+    assert (out["ok"], out["skipped"], out["failed"]) == (0, 1, 0)
+
+
+def test_execute_image_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    runner.write_episode(job.job_id, {
+        "beats": [{"scene": "s1"}],
+        "scenes": {"s1": {"prompt": "唯一场景"}},
+        "image": {},
+    })
+    monkeypatch.setattr(
+        pr, "_generate_scene_image",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="all .* scene image generations failed"):
+        asyncio.run(runner._execute_image(job.job_id))
+
+
 # --- 鬼谷子选题：job inputs 的 domain 透传到 guiguzi（task-2.5 调用方线程化）------ #
 def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """job inputs 带 domain（前端 doCreate 写入）时，analyze/generate 两个 bg 都把它透传给鬼谷子。"""
