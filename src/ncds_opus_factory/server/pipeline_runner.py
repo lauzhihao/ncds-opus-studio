@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ncds_opus_core.templates import template_dir as _template_dir
+
 from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 from ncds_opus_factory.server.pipeline_agent_tasks import PipelineAgentTasksMixin
@@ -64,7 +65,7 @@ class PipelineRunner(
         self._engine: Any = None
         self._event_seq: dict[str, int] = {}
 
-        _all = {"rw", "lines", "storyboard", "tts", "image", "render"}
+        _all = {"lines", "storyboard", "tts", "image", "render"}
         _env = os.getenv("NOF_ENGINE_NODES")
         if _env is None:
             self._engine_nodes: set[str] = set(_all)
@@ -119,7 +120,7 @@ class PipelineRunner(
         ).run()
 
     async def _execute_rw(self, job_id: str) -> dict[str, Any]:
-        """Legacy fallback: multi-model RW execution."""
+        """Legacy RW path: multi-model execution with per-model progress patches."""
         state = self._load(job_id)
         asr_node = state.nodes.get("asr")
         if asr_node is None or asr_node.status != "done":

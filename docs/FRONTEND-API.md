@@ -43,7 +43,7 @@
 | `GET` / `PUT` | `/jobs/{job_id}/files/{relpath}` | 读写 `video-jobs/{job_id}/` 下文本/媒体文件 |
 | `GET` | `/preview/{job_id}` | 015 预览 iframe |
 
-当前 strangler 行为：`NOF_ENGINE_NODES` 未设置时，`rw/lines/storyboard/tts/image/render` 经 facade 走 engine；`asr` 因需要步内增量与后台 enrich，仍走 legacy `_execute_asr_collect`。
+当前 strangler 行为：`NOF_ENGINE_NODES` 未设置时，`lines/storyboard/tts/image/render` 经 facade 走 engine；`asr` 因需要步内增量与后台 enrich，仍走 legacy `_execute_asr_collect`；`rw` 因需要逐模型实时 `model_progress/drafts`，仍走 legacy `_execute_rw`。
 
 `GET /jobs/{job_id}/events` 推的是画布节点事件；客户端断线后应重新 `GET /jobs/{job_id}` 对齐全量状态。
 

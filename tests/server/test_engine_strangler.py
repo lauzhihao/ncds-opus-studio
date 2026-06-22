@@ -74,6 +74,28 @@ def test_flagged_node_routes_through_engine(tmp_path: Path):
     assert job.nodes["render"].outputs == {"engine_ran": "render"}
 
 
+def test_rw_stays_legacy_even_when_engine_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # rw 需要逐模型 model_progress/drafts 增量推送，暂时固定走 legacy 路径。
+    runner = PipelineRunner(tmp_path / "video-jobs")
+    engine = _FakeEngine(run_status="done")
+    runner.attach_engine(engine)
+    runner._engine_nodes = {"rw"}
+    jid = _job(runner)
+    called = {"rw": False}
+
+    async def _stub_rw(job_id):
+        called["rw"] = True
+        return {"via": "legacy_rw"}
+
+    monkeypatch.setattr(runner, "_execute_rw", _stub_rw)
+    import asyncio
+    asyncio.run(runner._execute_real(jid, "rw"))
+
+    assert called["rw"] is True
+    assert engine.calls == []
+    assert runner.get_job(jid).nodes["rw"].outputs == {"via": "legacy_rw"}
+
+
 def test_engine_iid_persisted_for_reuse(tmp_path: Path):
     # engine_iid 落进 JobState（持久化），重启后能复用同一实例、不留孤儿
     runner = PipelineRunner(tmp_path / "video-jobs")

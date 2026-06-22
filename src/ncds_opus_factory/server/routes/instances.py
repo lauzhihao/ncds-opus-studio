@@ -3,10 +3,12 @@
 当前入口事实地图（task-3.1，2026-06-22）：
 
 - web `/studio` 当前活路径仍是 `/jobs/*` + `/pipelines` + `/preview/*`；
-  `PipelineRunner` 保存 `JobState`，默认把 rw/lines/storyboard/tts/image/render 经 facade
+  `PipelineRunner` 保存 `JobState`，默认把 lines/storyboard/tts/image/render 经 facade
   间接委托给 `InstanceRunner.run_step()`。web 前端并没有直接调用本 `/instances` 路由。
 - web 的 asr 节点仍固定走 `PipelineRunner._execute_asr_collect` legacy 采集路径，因为它依赖
   步内增量 outputs（collected/item_progress）与 done 后后台 enrich。
+- web 的 rw 节点仍固定走 `PipelineRunner._execute_rw` legacy 改写路径，因为柳永抽屉依赖逐模型
+  实时 `model_progress/drafts` patch。
 - app 当前活路径仍是 `/tasks/*` + `/commands` + `/artifacts/*`；
   `TaskRunner` 入队，`nof-worker` 唯一执行。app 前端尚未迁到 `/instances`。
 - `/instances` 是已落地的 engine driver API，当前主要服务后端测试、内部迁移和未来 web/app

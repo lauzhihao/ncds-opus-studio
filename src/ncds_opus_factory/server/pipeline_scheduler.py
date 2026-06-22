@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ncds_opus_core.common import cancel as _cancel
 from ncds_opus_core.pipelines import get_pipeline
+
 from ncds_opus_factory.server.pipeline_models import NodeState
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ class PipelineSchedulerMixin:
 
     _CANCEL_WATCHER_INTERVAL_SEC: float = 0.5
     _CANCEL_GRACE_SEC: float = 15.0
+    _LEGACY_ONLY_NODES: set[str] = {"asr", "rw"}
 
     def _cancel_flag(self, job_id: str, node_name: str) -> Path:
         return self.video_jobs_dir / job_id / "cancel" / f"{node_name}.flag"
@@ -257,7 +260,11 @@ class PipelineSchedulerMixin:
         self._save(state)
         self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
-        if self._engine is not None and node_name in self._engine_nodes and node_name != "asr":
+        if (
+            self._engine is not None
+            and node_name in self._engine_nodes
+            and node_name not in self._LEGACY_ONLY_NODES
+        ):
             outputs = await self._execute_via_engine(job_id, node_name)
         elif node_name == "tts":
             outputs = await self._execute_tts(job_id)

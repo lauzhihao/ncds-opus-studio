@@ -10,8 +10,8 @@
 本节描述**现在代码实际怎么跑**；下面各节保留的是目标设计和迁移路线。
 
 - web 内容生产主路径仍是 `/jobs/*` → `PipelineRunner` facade → engine nodes。`JobState` / `video-jobs/` 仍是 web UI 契约真相源。
-- `NOF_ENGINE_NODES` 未设置时，`PipelineRunner` 会把可执行节点集合初始化为全量；但实际分发处仍有 `node_name != "asr"` guard，所以默认是 `rw/lines/storyboard/tts/image/render` 走 engine，`asr` 固定走 legacy `_execute_asr_collect`。
-- `NOF_ENGINE_NODES=""|"none"|"off"|"legacy"` 会让 web 画布全走旧 `_execute_*` 路径；逗号列表只让列出的非 `asr` 节点走 engine。
+- `NOF_ENGINE_NODES` 未设置时，`PipelineRunner` 会把可执行节点集合初始化为 engine-safe 节点；实际默认是 `lines/storyboard/tts/image/render` 走 engine，`asr` 固定走 legacy `_execute_asr_collect`，`rw` 固定走 legacy `_execute_rw`。
+- `NOF_ENGINE_NODES=""|"none"|"off"|"legacy"` 会让 web 画布全走旧 `_execute_*` 路径；逗号列表只让列出的非 `asr`/`rw` 节点走 engine。
 - Flutter app 决策视角当前仍走 `/tasks` → `TaskRunner` / `nof-worker`；尚未切到 `/instances`。
 - `/instances` 后端 driver API 与测试已存在，但不是 web/app 前端主路径。
 - `RECIPE_REGISTRY` 当前只注册 `paper_card_talk_015`；`figure_talk` 仍是未来 recipe / cold chain，不是当前主路径。
@@ -343,9 +343,9 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 **E1-b2 #3 绞杀者（strangler）已落地，但不是前端直连 `/instances`**：`PipelineRunner` 经
 `attach_engine(INSTANCE_RUNNER)` 注入引擎；`NOF_ENGINE_NODES` 控制哪些节点从 `_execute_*` 改走
 `InstanceRunner.run_step`（经合并 registry 派发到 `pct015_*` performer + 引擎状态机）。
-当前默认行为是：未设置 `NOF_ENGINE_NODES` 时初始化为全节点集合，`rw/lines/storyboard/tts/image/render`
-经 facade 走 engine；`asr` 因执行处分支 `node_name != "asr"` 固定走 legacy。设置
-`NOF_ENGINE_NODES=""|"none"|"off"|"legacy"` 可全量回旧路径；设置逗号列表时只让列出的非 `asr` 节点走 engine。
+当前默认行为是：未设置 `NOF_ENGINE_NODES` 时初始化为 engine-safe 节点集合，`lines/storyboard/tts/image/render`
+经 facade 走 engine；`asr` 与 `rw` 因执行处分支固定走 legacy。设置
+`NOF_ENGINE_NODES=""|"none"|"off"|"legacy"` 可全量回旧路径；设置逗号列表时只让列出的非 `asr`/`rw` 节点走 engine。
 **UI/`/jobs` 契约不变**——JobState 仍是 facade 真相源，每 job 复用一个引擎实例（iid 持久化在
 `pipeline_state.json`，重启不留孤儿）；content_edit 步（lines/storyboard）跑出 awaiting_review 后由
 facade 自动定稿；performer 的 on_progress 经 `run_step(on_progress=)` 回桥到 facade SSE（避免
@@ -355,7 +355,7 @@ storyboard/image/render running 态进度冻结）。
 
 **E1-b2 仍待补**（路径 C 高风险段，下一步）：
 - asr 若要改道引擎，需先给引擎补**步内增量 outputs**（asr `item_progress` / collected 渐进推送）并覆盖 done 后后台 enrich，否则会丢实时采集进度与补音轨/抠图行为。
-- rw 当前默认已经经 facade 走 engine；若要恢复逐模型实时面板，需要补引擎步内增量 outputs（rw `model_progress` / 增量 drafts）或按 task-3.3 决策临时回 legacy。
+- rw 当前按 task-3.3 固定走 legacy，以保留逐模型实时面板；若未来要再次改道引擎，需要先补引擎步内增量 outputs（rw `model_progress` / 增量 drafts）。
 - 全切换：前端直走 `/instances`（退役 /jobs facade）+ 贵步骤后台派发 + 旧 `job_id`/`task_id` → `instance_id` 兼容适配层（§6）。
 - 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
 - 保留：SSE 满队列丢事件（与现 PipelineRunner 同款取舍，客户端 GET 全量重同步）。

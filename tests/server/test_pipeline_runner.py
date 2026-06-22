@@ -490,12 +490,16 @@ def test_execute_rw_uses_extracted_run_context(tmp_path: Path, monkeypatch: pyte
         {"id": "deepseek", "label": "改写方案 B", "runner": "fake", "model": "fake-b"},
     ]
     monkeypatch.setattr(rw_helpers, "MODEL_CANDIDATES", candidates)
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(runner, "_emit", lambda _job_id, event: emitted.append(event))
 
     async def stub_invoke(cand, user_prompt, system_prompt, on_progress, on_status=None):
         assert "素材正文足够用于改写" in user_prompt
         if on_status is not None:
             on_status(cand["id"], "running")
             on_status(cand["id"], "done")
+        if cand["id"] == "deepseek":
+            await asyncio.sleep(0.01)
         on_progress(f"stub {cand['id']} done")
         return f"```markdown\n# 改写稿 {cand['id']}\n\n正文。\n```"
 
@@ -518,11 +522,22 @@ def test_execute_rw_uses_extracted_run_context(tmp_path: Path, monkeypatch: pyte
     patched_drafts = runner.get_job(job.job_id).nodes["rw"].outputs["drafts"]
     assert [d["model_id"] for d in patched_drafts] == ["opus", "deepseek"]
 
+    rw_states = [e["state"] for e in emitted if e.get("type") == "node_status" and e.get("node") == "rw"]
+    assert any((s.get("outputs") or {}).get("model_progress") for s in rw_states)
+    draft_patches = [
+        (s.get("outputs") or {}).get("drafts")
+        for s in rw_states
+        if (s.get("outputs") or {}).get("drafts")
+    ]
+    assert any([d["model_id"] for d in drafts] == ["opus"] for drafts in draft_patches)
+    assert any([d["model_id"] for d in drafts] == ["opus", "deepseek"] for drafts in draft_patches)
+
 
 # --- 鬼谷子选题：job inputs 的 domain 透传到 guiguzi（task-2.5 调用方线程化）------ #
 def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """job inputs 带 domain（前端 doCreate 写入）时，analyze/generate 两个 bg 都把它透传给鬼谷子。"""
     import asyncio
+
     from ncds_opus_factory.commands import guiguzi as gz
 
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
@@ -553,6 +568,7 @@ def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pyt
 def test_guiguzi_no_domain_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """job inputs 无 domain 时透传 None，鬼谷子回退通用 prompt（不预设赛道）。"""
     import asyncio
+
     from ncds_opus_factory.commands import guiguzi as gz
 
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)

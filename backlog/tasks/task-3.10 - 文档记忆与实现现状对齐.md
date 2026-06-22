@@ -23,7 +23,7 @@ PipelineRunner / TaskRunner / engine。
 当前实现事实快照：
 
 1. web 内容生产主路径仍是 `/jobs/*` -> `PipelineRunner` facade -> engine nodes。rw/lines/storyboard/tts/
-   image/render 等大多已通过 engine 执行；asr 仍被 `node_name != "asr"` 强制走 legacy。
+   image/render 等大多已通过 engine 执行；asr/rw 仍固定走 legacy。
 2. Flutter app 当前主路径仍是 `/tasks` -> `TaskRunner` / `nof-worker`，尚未切到 `/instances`。
 3. `/instances` backend driver API 与测试已存在，但不是 web/app 前端主路径。
 4. `RECIPE_REGISTRY` 当前只有 `paper_card_talk_015`；`figure_talk` 仍属于 future / cold chain，不应写成已注册主路径。
