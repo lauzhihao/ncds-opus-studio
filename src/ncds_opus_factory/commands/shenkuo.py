@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -87,53 +88,60 @@ def top_comments_from_items(items: list[dict], top_n: int) -> list[dict]:
     ]
 
 
-# --------------------------------------------------------------------------- #
-# 采集单条作品(幂等:每步看产物存在跳过)
-#
-# 并行编排(能并行的不串行):
-#   评论 只依赖 aweme_id —— 与下载同时起跑
-#   下载完成后 转写→清洗 / 声音(ffmpeg+Demucs) / 截帧→抠图 三线并行
-# 各支线只写 entry 里互不重叠的键;进度回调用锁串行化,防 events.jsonl 行交错。
-# --------------------------------------------------------------------------- #
-def collect_one(
-    aweme_id: str, author_dir: Path, meta: dict | None = None,
-    max_frames: int = 8, engine: str = "threshold", top_comments: int = 20,
-    platform: str = "douyin", on_progress: ProgressFn = _noop,
-    do_audio: bool = True, do_frames: bool = True,
-    author_domain: str | None = None,
-) -> dict[str, Any]:
-    meta = meta or {}
-    entry: dict[str, Any] = {
-        "aweme_id": aweme_id, "desc": meta.get("desc", ""), "digg": meta.get("digg", 0),
-        "status": {},
-    }
-    # 产物统一落作品仓库 state/works/{platform}/{aweme_id}/ —— 按平台+作品id 寻址，
-    # 任何对标号/任何入口采过同一作品都命中,不再重复采集(author_dir 只留索引)。
-    wdir = works_repo.work_dir(platform, aweme_id)
-    video = wdir / "video.mp4"
-    para = wdir / "asr.paraformer.json"
-    txt = wdir / "asr.txt"
-    clean = wdir / "asr.clean.txt"
-    cover = wdir / "cover.jpg"
-    comments_path = wdir / "comments.json"
-    audio_dir = wdir / "audio"
-    frames_dir = wdir / "frames"
-    cut_dir = wdir / "cutouts"
+@dataclass(frozen=True)
+class _CollectPaths:
+    wdir: Path
+    video: Path
+    para: Path
+    txt: Path
+    clean: Path
+    cover: Path
+    comments_path: Path
+    audio_dir: Path
+    frames_dir: Path
+    cut_dir: Path
 
+
+def _collect_paths(platform: str, aweme_id: str) -> _CollectPaths:
+    # 产物统一落作品仓库 state/works/{platform}/{aweme_id}/ —— 按平台+作品id 寻址。
+    wdir = works_repo.work_dir(platform, aweme_id)
+    return _CollectPaths(
+        wdir=wdir,
+        video=wdir / "video.mp4",
+        para=wdir / "asr.paraformer.json",
+        txt=wdir / "asr.txt",
+        clean=wdir / "asr.clean.txt",
+        cover=wdir / "cover.jpg",
+        comments_path=wdir / "comments.json",
+        audio_dir=wdir / "audio",
+        frames_dir=wdir / "frames",
+        cut_dir=wdir / "cutouts",
+    )
+
+
+def _adopt_collect_legacy(aweme_id: str, author_dir: Path, paths: _CollectPaths) -> None:
     # 历史产物原地兼容(不迁移):旧 author_dir 下产物若在、新仓库位缺,建相对软链指过去。
     # 软链后各支线 exists() 即命中、就地复用旧文件,不搬字节、不重跑下载/转写/截帧。
     _adopt_legacy(aweme_id, author_dir, {
-        author_dir / f"{aweme_id}.mp4": video,
-        author_dir / f"{aweme_id}.paraformer.json": para,
-        author_dir / f"{aweme_id}.txt": txt,
-        author_dir / f"{aweme_id}.clean.txt": clean,
-        author_dir / f"{aweme_id}.cover.jpg": cover,
-        author_dir / f"{aweme_id}.comments.json": comments_path,
-        author_dir / aweme_id / "audio": audio_dir,
-        author_dir / aweme_id / "frames": frames_dir,
-        COLLECTED / aweme_id: cut_dir,
+        author_dir / f"{aweme_id}.mp4": paths.video,
+        author_dir / f"{aweme_id}.paraformer.json": paths.para,
+        author_dir / f"{aweme_id}.txt": paths.txt,
+        author_dir / f"{aweme_id}.clean.txt": paths.clean,
+        author_dir / f"{aweme_id}.cover.jpg": paths.cover,
+        author_dir / f"{aweme_id}.comments.json": paths.comments_path,
+        author_dir / aweme_id / "audio": paths.audio_dir,
+        author_dir / aweme_id / "frames": paths.frames_dir,
+        COLLECTED / aweme_id: paths.cut_dir,
     })
 
+
+def _new_collect_entry(aweme_id: str, meta: dict[str, Any], paths: _CollectPaths) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "aweme_id": aweme_id,
+        "desc": meta.get("desc", ""),
+        "digg": meta.get("digg", 0),
+        "status": {},
+    }
     # 展示元数据(沈括详情页直接渲染:作者/话题/四项数据)
     if meta.get("author"):
         entry["author"] = meta["author"]
@@ -145,173 +153,26 @@ def collect_one(
     if stats:
         entry["stats"] = stats
     # 封面图:落盘成 cover.jpg,App 走 /artifacts/files/ 取
-    if meta.get("cover_url") and not cover.exists():
-        tikhub_client.download_cover(meta["cover_url"], cover)
-    if cover.exists():
-        entry["cover"] = _rel(cover)
+    if meta.get("cover_url") and not paths.cover.exists():
+        tikhub_client.download_cover(meta["cover_url"], paths.cover)
+    if paths.cover.exists():
+        entry["cover"] = _rel(paths.cover)
+    return entry
 
-    _lock = threading.Lock()
 
-    def report(msg: str) -> None:
-        with _lock:
-            on_progress(msg)
-
-    # 协作式取消:在主线程取 checker(thread-local 不传子线程),闭包给各支线。
-    # 支线在步骤边界 guard();Demucs 子进程内部按秒轮询可被 SIGTERM。
-    _check = cancel.current()
-
-    def guard() -> None:
-        cancel.checkpoint(_check)
-
-    def branch_download() -> bool:
-        if video.exists() and video.stat().st_size > 0:
-            report(f"[{aweme_id}] mp4 已存在,跳过下载")
-            entry["status"]["download"] = "cached"
-        else:
-            # yt-dlp 匿名优先(免费)，失败回退 TikHub(付费)；两条都没出片才算 failed。
-            try:
-                capabilities.fetch_and_download(aweme_id, video, on_progress=report, check=_check)
-                report(f"[{aweme_id}] 下载完成")
-                entry["status"]["download"] = "ok"
-            except cancel.TaskCancelled:
-                raise
-            except Exception as e:  # noqa: BLE001 — 单条下载失败不拖垮整批,降级跳过下游
-                report(f"[{aweme_id}] 下载失败: {type(e).__name__}: {e}")
-                entry["status"]["download"] = "failed"
-                return False
-        entry["video"] = _rel(video)
-        return True
-
-    def branch_transcribe() -> None:
-        guard()
-        if para.exists():
-            report(f"[{aweme_id}] 转写已存在,跳过")
-            entry["status"]["transcribe"] = "cached"
-        else:
-            try:
-                result, text = capabilities.transcribe(video, report)
-                if result is not None:
-                    para.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-                    txt.write_text(text, encoding="utf-8")
-                    entry["status"]["transcribe"] = "ok"
-                else:
-                    entry["status"]["transcribe"] = "failed"
-            except cancel.TaskCancelled:
-                raise
-            except Exception as e:  # noqa: BLE001 — 单条转写失败不拖垮整批
-                report(f"[{aweme_id}] 转写异常: {type(e).__name__}: {e}")
-                entry["status"]["transcribe"] = f"error:{type(e).__name__}"
-        if para.exists():
-            entry["paraformer"] = _rel(para)
-        if txt.exists():
-            entry["txt"] = _rel(txt)
-            raw_text = txt.read_text(encoding="utf-8").strip()
-            guard()
-            # 清洗(qwen 优先,本地兜底);原文留 asr.txt,清洗版存 asr.clean.txt
-            if not clean.exists() and raw_text:
-                cleaned = capabilities.clean_transcript(raw_text, report)
-                if cleaned:
-                    clean.write_text(cleaned, encoding="utf-8")
-            # text 同时供前端「提取文案」展示与下游 rw 改写源（_rw_source_text 优先读它），
-            # 故不再截到 3000（会让 rw 只看到前 3000 字就开写）；留 2 万作极端长稿的安全上限。
-            if clean.exists():
-                entry["text"] = clean.read_text(encoding="utf-8").strip()[:_TEXT_CAP]
-                entry["text_raw"] = _rel(txt)
-            else:
-                entry["text"] = raw_text[:_TEXT_CAP]
-
-    def branch_audio() -> None:
-        guard()
-        try:
-            audio = capabilities.separate_audio(video, audio_dir, report, check=_check)
-            if audio:
-                entry["audio"] = {k: _rel(v) for k, v in audio.items()}
-                entry["status"]["audio"] = "ok"
-        except cancel.TaskCancelled:
-            raise
-        except Exception as e:  # noqa: BLE001 — 声音素材失败不拖垮整批
-            report(f"声音素材异常: {type(e).__name__}: {e}")
-            entry["status"]["audio"] = f"error:{type(e).__name__}"
-
-    def branch_frames() -> None:
-        guard()
-        frames = sorted(frames_dir.glob("frame_*.jpg")) if frames_dir.exists() else []
-        if frames:
-            report(f"[{aweme_id}] 截帧已存在 {len(frames)} 张")
-        else:
-            frames = capabilities.extract_frames(video, frames_dir, max_frames)
-            report(f"[{aweme_id}] 截帧 {len(frames)} 张")
-        entry["frames"] = [_rel(f) for f in frames]
-        cutouts = sorted(cut_dir.glob("*.png")) if cut_dir.exists() else []
-        if cutouts:
-            report(f"[{aweme_id}] 抠图已存在 {len(cutouts)} 张")
-        elif frames:
-            guard()
-            try:
-                cutouts = capabilities.cutout(frames, cut_dir, engine=engine)
-                report(f"[{aweme_id}] 抠图 {len(cutouts)} 张(舞台区/{engine})")
-                entry["status"]["cutout"] = "ok"
-            except cancel.TaskCancelled:
-                raise
-            except Exception as e:  # noqa: BLE001
-                report(f"[{aweme_id}] 抠图异常: {type(e).__name__}: {e}")
-                entry["status"]["cutout"] = f"error:{type(e).__name__}"
-        entry["cutouts"] = [_rel(c) for c in cutouts]
-
-    def branch_comments() -> None:
-        guard()
-        if comments_path.exists():
-            report(f"[{aweme_id}] 评论已存在,跳过")
-            entry["status"]["comments"] = "cached"
-        else:
-            try:
-                rows = tikhub_client.fetch_top_comments(aweme_id, top_n=top_comments, on_progress=report)
-                comments_path.write_text(json.dumps(
-                    {"aweme_id": aweme_id, "generated_at": int(time.time()), "top_n": top_comments, "items": rows},
-                    ensure_ascii=False, indent=2), encoding="utf-8")
-                report(f"[{aweme_id}] top {len(rows)} 评论已落盘")
-                entry["status"]["comments"] = "ok"
-            except cancel.TaskCancelled:
-                raise
-            except Exception as e:  # noqa: BLE001 — 单条评论失败不拖垮整批
-                report(f"[{aweme_id}] 评论采集异常: {type(e).__name__}: {e}")
-                entry["status"]["comments"] = f"error:{type(e).__name__}"
-        if comments_path.exists():
-            entry["comments"] = _rel(comments_path)
-            # 高赞评论嵌进 entry(>10 赞阈值,按赞数排好),App 直接渲染
-            try:
-                items = json.loads(comments_path.read_text(encoding="utf-8")).get("items", [])
-                top = top_comments_from_items(items, top_comments)
-                if top:
-                    entry["top_comments"] = top
-            except Exception:  # noqa: BLE001 — 评论嵌入失败不影响 entry 主体
-                pass
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        f_comments = ex.submit(branch_comments) if top_comments > 0 else None
-        if branch_download():
-            # web 画布分两趟:首趟快采(do_audio/do_frames=False)出文案/评论让下游 rw 先走,
-            # 音轨分离(Demucs)/抠图重活由后台第二趟补 —— collect_one 幂等,已采支线自动跳过。
-            futures = [ex.submit(branch_transcribe)]
-            if do_audio:
-                futures.append(ex.submit(branch_audio))
-            if do_frames:
-                futures.append(ex.submit(branch_frames))
-            for f in futures:
-                f.result()
-        if f_comments is not None:
-            f_comments.result()
-
+def _merge_collect_manifest(
+    entry: dict[str, Any], paths: _CollectPaths, *,
+    platform: str, aweme_id: str, author_domain: str | None,
+) -> None:
     # 写作品级 manifest:沈括只占 products/status 分区,不碰 works.py 的 card 分区。
     # 这是 works.py / 引擎读"已采作品全产物"的统一入口(下次同作品据此短路)。
-    # domain 继承逻辑：已有非空 domain 保留（补全，不抢占）；作者传了才写，空值不注入。
     manifest_patch: dict[str, Any] = {
         "products": {
             "video": entry.get("video"),
             "asr": {
-                "paraformer": _rel(para) if para.exists() else None,
-                "txt": _rel(txt) if txt.exists() else None,
-                "clean": _rel(clean) if clean.exists() else None,
+                "paraformer": _rel(paths.para) if paths.para.exists() else None,
+                "txt": _rel(paths.txt) if paths.txt.exists() else None,
+                "clean": _rel(paths.clean) if paths.clean.exists() else None,
                 "text": entry.get("text"),
             },
             "cover": entry.get("cover"),
@@ -329,6 +190,219 @@ def collect_one(
         if not existing_domain:
             manifest_patch["domain"] = author_domain.strip()
     works_repo.merge(platform, aweme_id, **manifest_patch)
+
+
+@dataclass
+class _CollectRun:
+    aweme_id: str
+    entry: dict[str, Any]
+    paths: _CollectPaths
+    max_frames: int
+    engine: str
+    top_comments: int
+    on_progress: ProgressFn
+    check: Any
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def report(self, msg: str) -> None:
+        with self._lock:
+            self.on_progress(msg)
+
+    def guard(self) -> None:
+        cancel.checkpoint(self.check)
+
+    def branch_download(self) -> bool:
+        p = self.paths
+        if p.video.exists() and p.video.stat().st_size > 0:
+            self.report(f"[{self.aweme_id}] mp4 已存在,跳过下载")
+            self.entry["status"]["download"] = "cached"
+        else:
+            # yt-dlp 匿名优先(免费)，失败回退 TikHub(付费)；两条都没出片才算 failed。
+            try:
+                capabilities.fetch_and_download(
+                    self.aweme_id, p.video, on_progress=self.report, check=self.check,
+                )
+                self.report(f"[{self.aweme_id}] 下载完成")
+                self.entry["status"]["download"] = "ok"
+            except cancel.TaskCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001 — 单条下载失败不拖垮整批,降级跳过下游
+                self.report(f"[{self.aweme_id}] 下载失败: {type(e).__name__}: {e}")
+                self.entry["status"]["download"] = "failed"
+                return False
+        self.entry["video"] = _rel(p.video)
+        return True
+
+    def branch_transcribe(self) -> None:
+        p = self.paths
+        self.guard()
+        if p.para.exists():
+            self.report(f"[{self.aweme_id}] 转写已存在,跳过")
+            self.entry["status"]["transcribe"] = "cached"
+        else:
+            try:
+                result, text = capabilities.transcribe(p.video, self.report)
+                if result is not None:
+                    p.para.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                    p.txt.write_text(text, encoding="utf-8")
+                    self.entry["status"]["transcribe"] = "ok"
+                else:
+                    self.entry["status"]["transcribe"] = "failed"
+            except cancel.TaskCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001 — 单条转写失败不拖垮整批
+                self.report(f"[{self.aweme_id}] 转写异常: {type(e).__name__}: {e}")
+                self.entry["status"]["transcribe"] = f"error:{type(e).__name__}"
+        if p.para.exists():
+            self.entry["paraformer"] = _rel(p.para)
+        if p.txt.exists():
+            self.entry["txt"] = _rel(p.txt)
+            raw_text = p.txt.read_text(encoding="utf-8").strip()
+            self.guard()
+            # 清洗(qwen 优先,本地兜底);原文留 asr.txt,清洗版存 asr.clean.txt
+            if not p.clean.exists() and raw_text:
+                cleaned = capabilities.clean_transcript(raw_text, self.report)
+                if cleaned:
+                    p.clean.write_text(cleaned, encoding="utf-8")
+            # text 同时供前端「提取文案」展示与下游 rw 改写源（_rw_source_text 优先读它），
+            # 故不再截到 3000（会让 rw 只看到前 3000 字就开写）；留 2 万作极端长稿的安全上限。
+            if p.clean.exists():
+                self.entry["text"] = p.clean.read_text(encoding="utf-8").strip()[:_TEXT_CAP]
+                self.entry["text_raw"] = _rel(p.txt)
+            else:
+                self.entry["text"] = raw_text[:_TEXT_CAP]
+
+    def branch_audio(self) -> None:
+        p = self.paths
+        self.guard()
+        try:
+            audio = capabilities.separate_audio(p.video, p.audio_dir, self.report, check=self.check)
+            if audio:
+                self.entry["audio"] = {k: _rel(v) for k, v in audio.items()}
+                self.entry["status"]["audio"] = "ok"
+        except cancel.TaskCancelled:
+            raise
+        except Exception as e:  # noqa: BLE001 — 声音素材失败不拖垮整批
+            self.report(f"声音素材异常: {type(e).__name__}: {e}")
+            self.entry["status"]["audio"] = f"error:{type(e).__name__}"
+
+    def branch_frames(self) -> None:
+        p = self.paths
+        self.guard()
+        frames = sorted(p.frames_dir.glob("frame_*.jpg")) if p.frames_dir.exists() else []
+        if frames:
+            self.report(f"[{self.aweme_id}] 截帧已存在 {len(frames)} 张")
+        else:
+            frames = capabilities.extract_frames(p.video, p.frames_dir, self.max_frames)
+            self.report(f"[{self.aweme_id}] 截帧 {len(frames)} 张")
+        self.entry["frames"] = [_rel(f) for f in frames]
+        cutouts = sorted(p.cut_dir.glob("*.png")) if p.cut_dir.exists() else []
+        if cutouts:
+            self.report(f"[{self.aweme_id}] 抠图已存在 {len(cutouts)} 张")
+        elif frames:
+            self.guard()
+            try:
+                cutouts = capabilities.cutout(frames, p.cut_dir, engine=self.engine)
+                self.report(f"[{self.aweme_id}] 抠图 {len(cutouts)} 张(舞台区/{self.engine})")
+                self.entry["status"]["cutout"] = "ok"
+            except cancel.TaskCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001
+                self.report(f"[{self.aweme_id}] 抠图异常: {type(e).__name__}: {e}")
+                self.entry["status"]["cutout"] = f"error:{type(e).__name__}"
+        self.entry["cutouts"] = [_rel(c) for c in cutouts]
+
+    def branch_comments(self) -> None:
+        p = self.paths
+        self.guard()
+        if p.comments_path.exists():
+            self.report(f"[{self.aweme_id}] 评论已存在,跳过")
+            self.entry["status"]["comments"] = "cached"
+        else:
+            try:
+                rows = tikhub_client.fetch_top_comments(
+                    self.aweme_id, top_n=self.top_comments, on_progress=self.report,
+                )
+                p.comments_path.write_text(json.dumps(
+                    {
+                        "aweme_id": self.aweme_id,
+                        "generated_at": int(time.time()),
+                        "top_n": self.top_comments,
+                        "items": rows,
+                    },
+                    ensure_ascii=False, indent=2,
+                ), encoding="utf-8")
+                self.report(f"[{self.aweme_id}] top {len(rows)} 评论已落盘")
+                self.entry["status"]["comments"] = "ok"
+            except cancel.TaskCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001 — 单条评论失败不拖垮整批
+                self.report(f"[{self.aweme_id}] 评论采集异常: {type(e).__name__}: {e}")
+                self.entry["status"]["comments"] = f"error:{type(e).__name__}"
+        if p.comments_path.exists():
+            self.entry["comments"] = _rel(p.comments_path)
+            # 高赞评论嵌进 entry(>10 赞阈值,按赞数排好),App 直接渲染
+            try:
+                items = json.loads(p.comments_path.read_text(encoding="utf-8")).get("items", [])
+                top = top_comments_from_items(items, self.top_comments)
+                if top:
+                    self.entry["top_comments"] = top
+            except Exception:  # noqa: BLE001 — 评论嵌入失败不影响 entry 主体
+                pass
+
+
+# --------------------------------------------------------------------------- #
+# 采集单条作品(幂等:每步看产物存在跳过)
+#
+# 并行编排(能并行的不串行):
+#   评论 只依赖 aweme_id —— 与下载同时起跑
+#   下载完成后 转写→清洗 / 声音(ffmpeg+Demucs) / 截帧→抠图 三线并行
+# 各支线只写 entry 里互不重叠的键;进度回调用锁串行化,防 events.jsonl 行交错。
+# --------------------------------------------------------------------------- #
+def collect_one(
+    aweme_id: str, author_dir: Path, meta: dict | None = None,
+    max_frames: int = 8, engine: str = "threshold", top_comments: int = 20,
+    platform: str = "douyin", on_progress: ProgressFn = _noop,
+    do_audio: bool = True, do_frames: bool = True,
+    author_domain: str | None = None,
+) -> dict[str, Any]:
+    meta = meta or {}
+    paths = _collect_paths(platform, aweme_id)
+
+    _adopt_collect_legacy(aweme_id, author_dir, paths)
+    entry = _new_collect_entry(aweme_id, meta, paths)
+    # 协作式取消:在主线程取 checker(thread-local 不传子线程),闭包给各支线。
+    # 支线在步骤边界 guard();Demucs 子进程内部按秒轮询可被 SIGTERM。
+    run_ctx = _CollectRun(
+        aweme_id=aweme_id,
+        entry=entry,
+        paths=paths,
+        max_frames=max_frames,
+        engine=engine,
+        top_comments=top_comments,
+        on_progress=on_progress,
+        check=cancel.current(),
+    )
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_comments = ex.submit(run_ctx.branch_comments) if top_comments > 0 else None
+        if run_ctx.branch_download():
+            # web 画布分两趟:首趟快采(do_audio/do_frames=False)出文案/评论让下游 rw 先走,
+            # 音轨分离(Demucs)/抠图重活由后台第二趟补 —— collect_one 幂等,已采支线自动跳过。
+            futures = [ex.submit(run_ctx.branch_transcribe)]
+            if do_audio:
+                futures.append(ex.submit(run_ctx.branch_audio))
+            if do_frames:
+                futures.append(ex.submit(run_ctx.branch_frames))
+            for f in futures:
+                f.result()
+        if f_comments is not None:
+            f_comments.result()
+
+    # domain 继承逻辑：已有非空 domain 保留（补全，不抢占）；作者传了才写，空值不注入。
+    _merge_collect_manifest(
+        entry, paths, platform=platform, aweme_id=aweme_id, author_domain=author_domain,
+    )
     return entry
 
 

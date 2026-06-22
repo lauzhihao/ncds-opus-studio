@@ -50,3 +50,5 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 2026-06-22：第三刀新增 `server/pipeline_engine_bridge.py` / `PipelineEngineBridgeMixin`，把 `attach_engine` / `_execute_via_engine` / `_engine_step_inputs` 从 `pipeline_runner.py` 拆出；`PipelineRunner` 继承 bridge + agent mixins，engine strangler 的 public 行为保持不变。
 - 行数变化：`pipeline_runner.py` 从 2779 行降到 2707 行；新模块 `pipeline_engine_bridge.py` 88 行。
 - 验证：`py_compile pipeline_runner.py pipeline_engine_bridge.py` 通过；focused tests `70 passed`；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
+- 2026-06-22：第四刀处理 C5 的 `commands/shenkuo.collect_one` 超长函数，新增 `_CollectPaths` / `_CollectRun` / manifest helper，把路径规划、legacy 采纳、五条采集分支、manifest 写回拆出；`collect_one` 从约 235 行降到 47 行，public API 与并发编排顺序保持不变。
+- 验证：`py_compile shenkuo.py` 通过；沈括 focused tests `23 passed`；pipeline/cancel focused tests `48 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
