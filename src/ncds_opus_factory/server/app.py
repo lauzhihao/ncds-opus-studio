@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import logging
 import os
-
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # 在 import 任何读 os.environ 的模块之前先加载 .env —— 比如 commands/tts.py 顶层就要
@@ -69,10 +70,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _startup_log() -> None:
+    # S3 步6（切换点）：8810 已瘦身为纯 producer + serve。
+    # 不再在此做 recover_and_start / 起 loop / 挂 on_terminal——
+    # 所有 worker 职责（任务执行、订阅/retro/planner/discard loop）已移入 nof-worker 进程。
+    # 8810 只负责：HTTP 路由 / SSE 文件 tail / POST 入队（lpush）/ GET serve 状态。
+    logger.info(
+        "[nof-server] ready. state_dir=%s commands=%s",
+        STATE_DIR,
+        RUNNER.list_commands(),
+    )
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await _startup_log()
+    yield
+
+
 app = FastAPI(
     title="ncds-opus-studio HTTP server",
     description="5+ commands (wst/tst/vid/asr/rw/tts/render) exposed as async tasks + SSE",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -140,19 +160,6 @@ async def health_check() -> dict:
         "state_dir": str(STATE_DIR),
         "commands": RUNNER.list_commands(),
     }
-
-
-@app.on_event("startup")
-async def _startup_log() -> None:
-    # S3 步6（切换点）：8810 已瘦身为纯 producer + serve。
-    # 不再在此做 recover_and_start / 起 loop / 挂 on_terminal——
-    # 所有 worker 职责（任务执行、订阅/retro/planner/discard loop）已移入 nof-worker 进程。
-    # 8810 只负责：HTTP 路由 / SSE 文件 tail / POST 入队（lpush）/ GET serve 状态。
-    logger.info(
-        "[nof-server] ready. state_dir=%s commands=%s",
-        STATE_DIR,
-        RUNNER.list_commands(),
-    )
 
 
 def cli_main() -> None:

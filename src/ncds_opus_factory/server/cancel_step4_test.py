@@ -78,8 +78,8 @@ def test_terminate_proc_group_kills_process(tmp_path: Path) -> None:
     proc = subprocess.Popen(
         ["sleep", "30"],
         start_new_session=True,  # 独立 pgid，和生产代码一致
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     assert proc.poll() is None, "进程启动后应该还在跑"
 
@@ -99,8 +99,8 @@ def test_terminate_proc_group_handles_already_dead(tmp_path: Path) -> None:
     proc = subprocess.Popen(
         ["echo", "hi"],
         start_new_session=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     proc.wait(timeout=5)  # 让进程自然结束
     assert proc.poll() is not None
@@ -586,11 +586,12 @@ def test_terminate_proc_group_kills_grandchild(tmp_path: Path) -> None:
         ["sh", "-c", "sleep 30 & echo $!; wait"],
         start_new_session=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
         text=True,
     )
     assert proc.stdout is not None
     grandchild_pid = int(proc.stdout.readline().strip())
+    proc.stdout.close()
     os.kill(grandchild_pid, 0)  # 不抛 = 孙进程活着
 
     media_helpers._terminate_proc_group(proc)

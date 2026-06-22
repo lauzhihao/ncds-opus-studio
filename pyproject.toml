@@ -89,4 +89,9 @@ members = ["packages/*"]
 
 [dependency-groups]
 # 仅测试用：queue_test / task_runner_test 用 fakeredis 跑，免 CI 依赖真 redis-server
-dev = ["fakeredis>=2", "ruff>=0.15", "mypy>=2.1"]
+dev = [
+    "fakeredis>=2",
+    "ruff>=0.15",
+    "mypy>=2.1",
+    "httpx2>=2.4.0",
+]
