@@ -247,6 +247,50 @@ def test_execute_storyboard_fills_scenes(tmp_path: Path, monkeypatch: pytest.Mon
     assert [b["scene"] for b in got["beats"]] == ["s1", "s1", "s2"]
 
 
+def test_execute_rw_uses_extracted_run_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    state = runner.get_job(job.job_id)
+    state.nodes["asr"].status = "done"
+    state.nodes["asr"].outputs = {
+        "items": [{"index": 1, "title": "标题", "text": "素材正文足够用于改写。"}],
+    }
+    runner._save(state)
+
+    candidates = [
+        {"id": "opus", "label": "改写方案 A", "runner": "fake", "model": "fake-a"},
+        {"id": "deepseek", "label": "改写方案 B", "runner": "fake", "model": "fake-b"},
+    ]
+    monkeypatch.setattr(pr, "MODEL_CANDIDATES", candidates)
+
+    async def stub_invoke(cand, user_prompt, system_prompt, on_progress, on_status=None):
+        assert "素材正文足够用于改写" in user_prompt
+        if on_status is not None:
+            on_status(cand["id"], "running")
+            on_status(cand["id"], "done")
+        on_progress(f"stub {cand['id']} done")
+        return f"```markdown\n# 改写稿 {cand['id']}\n\n正文。\n```"
+
+    monkeypatch.setattr(pr, "_invoke_rw_candidate", stub_invoke)
+    monkeypatch.setattr(pr, "_apply_rw_qc", lambda *a, **k: {"qc": {"verdict": "pass"}})
+
+    out = asyncio.run(runner._execute_rw(job.job_id))
+
+    assert out["success_count"] == 2
+    assert out["candidate_count"] == 2
+    assert [d["model_id"] for d in out["drafts"]] == ["opus", "deepseek"]
+    assert all(d["qc"]["verdict"] == "pass" for d in out["drafts"])
+
+    for mid in ("opus", "deepseek"):
+        draft_path = tmp_path / job.job_id / "02_rw" / mid / "draft.md"
+        text = draft_path.read_text(encoding="utf-8")
+        assert "```" not in text
+        assert f"改写稿 {mid}" in text
+
+    patched_drafts = runner.get_job(job.job_id).nodes["rw"].outputs["drafts"]
+    assert [d["model_id"] for d in patched_drafts] == ["opus", "deepseek"]
+
+
 # --- 鬼谷子选题：job inputs 的 domain 透传到 guiguzi（task-2.5 调用方线程化）------ #
 def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """job inputs 带 domain（前端 doCreate 写入）时，analyze/generate 两个 bg 都把它透传给鬼谷子。"""

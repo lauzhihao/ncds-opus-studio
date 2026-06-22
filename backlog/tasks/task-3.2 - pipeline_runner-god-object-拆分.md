@@ -64,3 +64,6 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 2026-06-22：第九刀继续文件尺寸实降，新增 `server/pipeline_storyboard_tasks.py` / `PipelineStoryboardRun`，把第七刀已成型的 storyboard 运行上下文从 `pipeline_runner.py` 移出；`PipelineRunner._execute_storyboard` 通过依赖注入传入 `_call_opus_for_rw` 与 model id，避免反向 import 环且保留测试 monkeypatch 语义。
 - 行数变化：`pipeline_runner.py` 从 2635 行降到 2575 行；新模块 `pipeline_storyboard_tasks.py` 81 行。
 - 验证：`py_compile pipeline_runner.py pipeline_storyboard_tasks.py` 通过；storyboard focused tests `59 passed`；pipeline/server focused tests `96 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 602 passed, 173 warnings。
+- 2026-06-22：第十刀继续文件尺寸实降，新增 `server/pipeline_rw_tasks.py` / `PipelineRwRun`，把第五刀已成型的 RW 多模型运行上下文从 `pipeline_runner.py` 移出；`PipelineRunner._execute_rw` 通过依赖注入传入 `MODEL_CANDIDATES`、`_ModelUnavailable`、`_invoke_rw_candidate` 与 `_apply_rw_qc`，避免反向 import 环且保留测试 monkeypatch 语义。
+- 行数变化：`pipeline_runner.py` 从 2575 行降到 2468 行；新模块 `pipeline_rw_tasks.py` 130 行。
+- 验证：`py_compile pipeline_runner.py pipeline_rw_tasks.py test_pipeline_runner.py` 通过；新增 runner RW 注入/写盘回归；RW focused tests `69 passed`；pipeline/server focused tests `103 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 603 passed, 173 warnings。
