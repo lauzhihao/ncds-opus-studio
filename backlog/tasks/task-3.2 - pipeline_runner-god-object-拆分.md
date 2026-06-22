@@ -52,3 +52,5 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 - 验证：`py_compile pipeline_runner.py pipeline_engine_bridge.py` 通过；focused tests `70 passed`；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
 - 2026-06-22：第四刀处理 C5 的 `commands/shenkuo.collect_one` 超长函数，新增 `_CollectPaths` / `_CollectRun` / manifest helper，把路径规划、legacy 采纳、五条采集分支、manifest 写回拆出；`collect_one` 从约 235 行降到 47 行，public API 与并发编排顺序保持不变。
 - 验证：`py_compile shenkuo.py` 通过；沈括 focused tests `23 passed`；pipeline/cancel focused tests `48 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
+- 2026-06-22：第五刀处理 C5 的 `PipelineRunner._execute_rw` 超长函数，新增 `_RwRun` 多模型运行上下文，把模型级状态推送、draft 增量写盘、单模型 run/QC、draft 排序汇总从 `_execute_rw` 拆出；`_execute_rw` 从约 120 行降到 45 行，public 行为和增量推送契约保持不变。
+- 验证：`py_compile pipeline_runner.py` 通过；RW focused tests `64 passed`；pipeline/server focused tests `70 passed`；`git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
