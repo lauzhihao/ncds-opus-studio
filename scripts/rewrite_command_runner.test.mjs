@@ -52,9 +52,9 @@ test('buildSuccessMessage lists uploaded drafts and skips failures', () => {
       { modelId: 'fallback', modelLabel: 'Fallback', error: 'upload failed' },
     ],
   });
-  assert.equal(message.includes('源文档: https://feishu.cn/docx/highlight'), true);
-  assert.equal(message.includes('GPT-5.5: https://feishu.cn/docx/g5'), true);
-  assert.equal(message.includes('Gemini Local: https://feishu.cn/docx/gem'), true);
+  assert.equal(message.includes('- https://feishu.cn/docx/highlight'), true);
+  assert.equal(message.includes('- https://feishu.cn/docx/g5'), true);
+  assert.equal(message.includes('- https://feishu.cn/docx/gem'), true);
   assert.equal(message.includes('Fallback 上传失败: upload failed'), true);
   assert.equal(message.includes('[RW_demo]'), true);
 });

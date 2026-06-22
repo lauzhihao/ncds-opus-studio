@@ -172,8 +172,8 @@ export async function runRewriteCommand(rawPayload, deps = {}) {
   // 中间汇报 1：已读取源文档，开始双模型改写
   try {
     const startMessage = userRequirements
-      ? `[${payload.jobId}] /rw 已读取源文档（${sourceText.length} 字），开始 GPT-5.5 + Local Gemini 双模型改写...\n用户附加要求：${userRequirements}`
-      : `[${payload.jobId}] /rw 已读取源文档（${sourceText.length} 字），开始 GPT-5.5 + Local Gemini 双模型改写...`;
+      ? `[${payload.jobId}] /rw 已读取源文档（${sourceText.length} 字），开始双模型改写...\n用户附加要求：${userRequirements}`
+      : `[${payload.jobId}] /rw 已读取源文档（${sourceText.length} 字），开始双模型改写...`;
     await sendFeishuText(payload,startMessage);
     await appendTrace(payload.jobId, 'rewrite_start_notice_sent', { textPreview: startMessage.slice(0, 200) });
   } catch (error) {

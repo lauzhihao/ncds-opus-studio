@@ -331,9 +331,9 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 - 评审加固：补回 storyboard `groups_count`（与 web `StoryboardOutputs` 契约对齐）；e2e 闸门断言改 load-bearing（断真正 fire 的 content_edit 步 == recipe 声明集，删任一 intervention 即变红）。
 
 **E1-b2 全部 7 步 performer 已真实包装**（lines/storyboard/tts/image/render/asr/rw；当期全量测试通过）：
-- `run_*_step`（`pipeline_performers_015.py`）：忠实复刻 `_execute_*` 编排，复用模块级 helper（tts_gen / generate_scene_image / rebuild_tts_items / render_015.run / run_video_pipeline / polish_transcript / invoke_rw_candidate / MODEL_CANDIDATES），外部副作用经 seam（`_run_tts_gen`/`_gen_scene_image`/`_render_run`/`_run_video_pipeline_fn`/`_polish_transcript`/`_invoke_rw`）注桩。job_dir/urls/asr_items/profile 经 step_inputs 传入、保留 video-jobs 布局；pipeline_runner 未动（编排暂双份，/jobs 退役时去重）。
-- **模型差异**：web 的 mid-run 增量进度（`_push_outputs_patch` item_progress / model_progress / 增量 drafts）暂不复刻——引擎当前只在步末设 outputs，信息经 on_progress 文本透出；引擎加增量 outputs 后再补。asr 跨 job 下载缓存、rw 4 模型 async 并发（同步 performer 内 `asyncio.run` 跑原 `gather`）忠实保留。
-- 单测：每步覆盖正常 + 失败/边界（image 异常/全失败、render picture_dir 转发、asr polish-fallback/缓存命中+MISS 迁移/stamp 变更/单条失败/全失败、rw 部分成功/全失败/profile/code-fence）。经 3 轮 fidelity+coverage 对抗审查加固。
+- `run_*_step`（`pipeline_performers_015.py`）：忠实复刻 `_execute_*` 编排，复用模块级 helper（shenkuo.collect_one / tts_gen / generate_scene_image / rebuild_tts_items / render_015.run / invoke_rw_candidate / MODEL_CANDIDATES），外部副作用经 seam（`_collect_one`/`_run_tts_gen`/`_gen_scene_image`/`_render_run`/`_invoke_rw`）注桩。job_dir/urls/asr_items/profile 经 step_inputs 传入、保留 video-jobs 布局；pipeline_runner 未动（编排暂双份，/jobs 退役时去重）。
+- **模型差异**：web 的 mid-run 增量进度（`_push_outputs_patch` item_progress / model_progress / 增量 drafts）暂不复刻——引擎当前只在步末设 outputs，信息经 on_progress 文本透出；引擎加增量 outputs 后再补。asr 已改为与 legacy fast collect 同源的 `collect_one` 口径；rw 4 模型 async 并发（同步 performer 内 `asyncio.run` 跑原 `gather`）忠实保留。
+- 单测：每步覆盖正常 + 失败/边界（image 异常/全失败、render picture_dir 转发、asr collect_one 快采/元数据兜底/单条失败/全失败/取消透传、rw 部分成功/全失败/profile/code-fence）。经 3 轮 fidelity+coverage 对抗审查加固。
 
 **E1-b2 全局 015 recipe 绑定已落地**：`recipes.py` 的 PAPER_CARD_TALK_015 各执行步 cmd 已从 bare command
 重绑到 `pct015_*` orchestration performer；`server/state.py` 的 `INSTANCE_RUNNER` registry =

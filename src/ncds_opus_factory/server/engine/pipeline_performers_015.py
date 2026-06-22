@@ -7,8 +7,8 @@
 slice-1 范围（最小后端验证）：
 - ``lines`` / ``storyboard``：真实复用 ``_execute_lines`` / ``_execute_storyboard`` 的 opus
   结构化算法（经 :func:`_opus_structure` 间接层，便于测试注入桩；不重写算法）。
-- ``asr/rw/tts/image/render`` 的真实包装（含 video_pipeline/tts_gen/render.mjs 子进程、多模型 rw）
-  需抽 PipelineRunner 实例方法 / 真实外部依赖，留后续 slice；其 e2e 编排已由集成测试用桩验证。
+- ``asr/rw/tts/image/render`` 的真实包装（asr=shenkuo.collect_one 快采；rw=多模型；
+  tts/image/render=真实 helper/子进程），外部副作用经 seam 便于测试注入。
 
 约定：performer 经 ``step_inputs`` 收到 ``job_dir``（= ``video-jobs/{job_id}``），读写其下 ``02_rw/``。
 """
@@ -16,25 +16,19 @@ slice-1 范围（最小后端验证）：
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import os
 import re
-import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ncds_opus_core.common import cancel as _cancel
 from ncds_opus_core.templates import template_dir as _template_dir
 
-from ncds_opus_factory.commands import render_015
+from ncds_opus_factory.commands import render_015, shenkuo
+from ncds_opus_factory.common import tikhub_client
 from ncds_opus_factory.server import storyboard_director
 from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile
-from ncds_opus_factory.server.pipeline_asr_helpers import (
-    _asr_stage_label,
-    _polish_transcript_with_opus,
-    _run_video_pipeline,
-)
 from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
 from ncds_opus_factory.server.pipeline_lines_tasks import (
     _build_lines_prompt,
@@ -64,10 +58,11 @@ _run_tts_gen = _run_tts_gen_015
 _gen_scene_image = _generate_scene_image
 _render_run = render_015.run
 
-# asr seam：默认指向真实 helper，测试 monkeypatch 替换。
-# 命名风格仿照上面的 _run_tts_gen / _gen_scene_image。
-_run_video_pipeline_fn = _run_video_pipeline
-_polish_transcript = _polish_transcript_with_opus
+# asr seam：默认走沈括快采；测试 monkeypatch 替换。
+_resolve_aweme_id = tikhub_client.resolve_aweme_id
+_fetch_one_video_detail = tikhub_client.fetch_one_video_detail
+_extract_meta = tikhub_client.extract_meta
+_collect_one = shenkuo.collect_one
 
 # rw seam：async 调用候选模型的间接层。
 _invoke_rw = _invoke_rw_candidate
@@ -149,14 +144,9 @@ def _episode_path(job_dir: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# ASR performer：串行跑每条 URL → video_pipeline.py 转写 + opus polish 成文章。
-# 转写逻辑的唯一实现（早期画布执行已删）。相对画布执行模式做了以下替换：
-#   - state.inputs["urls"] → 参数 urls
-#   - self.video_jobs_dir/job_id → Path(job_dir)
-#   - 跨 job 下载缓存从 self.video_jobs_dir/"_downloads" → Path(job_dir).parent/"_downloads"
-#   - self._push_progress → on_progress
-#   - 删掉 push_items()/push_outputs_patch 增量 mid-run 进度（引擎暂不支持增量 outputs）；
-#     改成关键状态通过 on_progress 文本透出。
+# ASR performer：串行跑每条 URL → 沈括 collect_one 快采。
+# web 画布的 ASR 节点固定走 legacy fast collect 路径；这里给 /instances 保留同口径 performer，
+# 避免注册了另一套 video_pipeline 转写实现却在主链跑不到。
 # ---------------------------------------------------------------------------
 def run_asr_step(
     on_progress: Callable[[str], None],
@@ -166,30 +156,13 @@ def run_asr_step(
     shares: list[dict[str, Any]] | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """ASR：串行处理每条媒体 URL，产出 transcript + opus 整理稿 article.md。
-
-    产物布局：
-      01_asr/{idx}/deliverables/result.json    — video_pipeline.py 产出
-      01_asr/{idx}/article.md                  — opus polish 后的文章（或 fallback 到 transcript）
-    """
+    """ASR：串行处理每条媒体 URL，产出沈括快采 entry（文案/评论/元数据）。"""
     jd = Path(job_dir)
     if not urls:
         raise ValueError("urls is empty; need at least one media URL")
 
-    asr_root = jd / "01_asr"
-    asr_root.mkdir(parents=True, exist_ok=True)
-
-    # 定位 video_pipeline.py：复用 core 的 repo_root() + NOF_VIDEO_PIPELINE_SCRIPT 兜底。
-    from ncds_opus_core.common.paths import repo_root as _repo_root
-
-    env_script = os.getenv("NOF_VIDEO_PIPELINE_SCRIPT")
-    pipeline_script = (
-        Path(env_script)
-        if env_script
-        else _repo_root() / "skills" / "video-pipeline" / "scripts" / "video_pipeline.py"
-    )
-    if not pipeline_script.is_file():
-        raise RuntimeError(f"video_pipeline.py not found at {pipeline_script}")
+    collect_dir = jd / "01_collect"
+    collect_dir.mkdir(parents=True, exist_ok=True)
 
     # shares：InputPanel 解析出的标题/作者，按 URL 对齐（可选）。
     shares_by_url: dict[str, dict[str, Any]] = {}
@@ -197,136 +170,53 @@ def run_asr_step(
         if isinstance(s, dict) and isinstance(s.get("url"), str):
             shares_by_url[s["url"]] = s
 
-    # 跨 job 下载缓存：parent = video-jobs/，_downloads 与各 job 目录平级。
-    downloads_cache = jd.parent / "_downloads"
-    downloads_cache.mkdir(parents=True, exist_ok=True)
-
-    items: list[dict[str, Any]] = []
+    collected: list[dict[str, Any]] = []
     for idx, url in enumerate(urls, start=1):
-        on_progress(f"[{idx}/{len(urls)}] 准备中")
+        on_progress(f"[{idx}/{len(urls)}] 解析作品链接")
         try:
-            item_dir = asr_root / str(idx)
-            item_dir.mkdir(parents=True, exist_ok=True)
+            aweme_id = _resolve_aweme_id(url)
+            if not aweme_id:
+                raise RuntimeError(f"解析不出 aweme_id（仅支持抖音链接/口令）：{url}")
 
-            url_md5 = hashlib.md5(url.encode("utf-8"), usedforsecurity=False).hexdigest()
-            url_md5_short = url_md5[:12]
-            cache_dir = downloads_cache / url_md5
-            cache_dir.mkdir(parents=True, exist_ok=True)
-
-            # 幂等 stamp：URL 变了（用户在 INPUT 节点改了链接）→ 清掉旧产物重新链入缓存。
-            stamp_path = item_dir / ".url-stamp"
-            existing_stamp = (
-                stamp_path.read_text(encoding="utf-8").strip()
-                if stamp_path.is_file() else ""
-            )
-            if existing_stamp and existing_stamp != url_md5_short:
-                on_progress(f"[{idx}/{len(urls)}] URL 已变更，清掉旧产物")
-                shutil.rmtree(item_dir)
-                item_dir.mkdir(parents=True, exist_ok=True)
-            stamp_path.write_text(url_md5_short, encoding="utf-8")
-
-            # 缓存→raw/ symlink：若全局缓存里已有此 URL 对应的 mp4，链进 item_dir/raw/。
-            # video_pipeline.py 的 download_video fast-path 看到 raw/ 已有 mp4 就跳过下载。
-            raw_dir = item_dir / "raw"
-            raw_dir.mkdir(parents=True, exist_ok=True)
-            cached_mp4s = sorted(cache_dir.glob("*.mp4"))
-            if cached_mp4s:
-                on_progress(
-                    f"[{idx}/{len(urls)}] 命中下载缓存，复用 {cached_mp4s[0].name}（跳过下载）"
-                )
-                for mp4 in cached_mp4s:
-                    link = raw_dir / mp4.name
-                    if not link.exists():
-                        link.symlink_to(mp4.resolve())
-
-            on_progress(f"[{idx}/{len(urls)}] 启动 video_pipeline.py")
-
-            # on_line 闭包：把 video_pipeline.py 的 stdout 行转成阶段进度文本透出。
-            def on_line(line: str, i: int = idx, total: int = len(urls)) -> None:
-                lbl = _asr_stage_label(line)
-                if lbl:
-                    on_progress(f"[{i}/{total}] 阶段：{lbl}")
-                on_progress(f"[{i}/{total}] {line}")
-
-            _run_video_pipeline_fn(
-                pipeline_script=pipeline_script,
-                url=url,
-                output_dir=item_dir,
-                on_line=on_line,
-            )
-
-            # 下载完成后，把 raw/ 里新产出的真 mp4 迁移到全局缓存，原位留 symlink。
-            # 下次同 URL（含其他 job）的 cache_dir.glob("*.mp4") 就能命中。
-            for mp4 in raw_dir.glob("*.mp4"):
-                if mp4.is_symlink():
-                    continue
-                cache_target = cache_dir / mp4.name
-                if not cache_target.exists():
-                    shutil.move(str(mp4), str(cache_target))
-                else:
-                    mp4.unlink()
-                mp4.symlink_to(cache_target.resolve())
-
-            result_json = item_dir / "deliverables" / "result.json"
-            if not result_json.is_file():
-                raise RuntimeError(f"video_pipeline 未产出 result.json: {result_json}")
-            result = json.loads(result_json.read_text(encoding="utf-8"))
-
-            transcript_abs = result.get("rawTranscriptPath") or result.get("transcript")
-            if not transcript_abs or not Path(transcript_abs).is_file():
-                raise RuntimeError(f"transcript 缺失或不存在: {transcript_abs}")
-
-            # 文章整理：调本机 opus polish 原始 transcript 成 markdown 文章。
-            # 幂等命中则跳过 opus；失败时 fallback 到 transcript 路径。
-            article_path = item_dir / "article.md"
             share = shares_by_url.get(url) or {}
+            meta: dict[str, Any] = {}
             try:
-                polished = _polish_transcript(
-                    transcript_path=Path(transcript_abs),
-                    output_path=article_path,
-                    title_hint=str(share.get("title") or share.get("author") or ""),
-                )
-                on_progress(f"[{idx}/{len(urls)}] " + (
-                    "调 opus 整理成文章" if polished else "文章已是最新,跳过 opus"))
-                article_abs = str(article_path)
+                extracted_meta = _extract_meta(_fetch_one_video_detail(aweme_id))
+                meta = extracted_meta if isinstance(extracted_meta, dict) else {}
             except Exception as exc:
-                on_progress(
-                    f"[{idx}/{len(urls)}] opus polish 失败：{exc}；fallback 到原始 transcript"
-                )
-                article_abs = transcript_abs
+                on_progress(f"[{idx}/{len(urls)}] 元数据获取失败（不阻塞）：{exc}")
+            if share.get("title") and not meta.get("desc"):
+                meta["desc"] = str(share["title"])
+            if share.get("author") and not meta.get("author"):
+                meta["author"] = str(share["author"])
 
-            items.append({
-                "index": idx,
-                "url": url,
-                "title": str(share.get("title") or ""),
-                "author": str(share.get("author") or ""),
-                "transcript_relpath": str(Path(transcript_abs).resolve().relative_to(jd)),
-                "article_relpath": str(Path(article_abs).resolve().relative_to(jd)),
-                "error": None,
-            })
-            on_progress(f"[{idx}/{len(urls)}] 完成")
+            def item_progress(text: str, i: int = idx, total: int = len(urls)) -> None:
+                on_progress(f"[{i}/{total}] {text}")
 
+            entry = _collect_one(
+                aweme_id, collect_dir,
+                meta=meta, on_progress=item_progress,
+                do_audio=False, do_frames=False,
+            )
+            entry["index"] = idx
+            entry["url"] = url
+            entry.setdefault("error", None)
+            collected.append(entry)
+            on_progress(f"[{idx}/{len(urls)}] 采集完成（文案/评论/数据）")
+        except _cancel.TaskCancelled:
+            raise
         except Exception as exc:
             msg = str(exc)
             first_line = msg.splitlines()[0] if msg.splitlines() else "未知错误"
             on_progress(f"[{idx}/{len(urls)}] 失败：{first_line}")
-            sh = shares_by_url.get(url) or {}
-            items.append({
-                "index": idx,
-                "url": url,
-                "title": str(sh.get("title") or ""),
-                "author": str(sh.get("author") or ""),
-                "transcript_relpath": "",
-                "article_relpath": "",
-                "error": msg,
-            })
+            collected.append({"index": idx, "url": url, "aweme_id": "", "status": {}, "error": msg})
             continue
 
-    succeeded = [it for it in items if not it.get("error")]
+    succeeded = [it for it in collected if not it.get("error")]
     if not succeeded:
         raise RuntimeError(f"全部 {len(urls)} 个作品处理失败，详见各作品状态")
 
-    return {"items": items, "asr_dir": str(asr_root)}
+    return {"collected": collected, "items": collected, "collect_dir": str(collect_dir)}
 
 
 # ---------------------------------------------------------------------------
