@@ -23,7 +23,6 @@ from typing import Any, Callable
 from ncds_opus_core.runners import runner_path
 from ncds_opus_factory.common import ai_taste, quality_rubric, rubric_store
 from ncds_opus_factory.common.node_runtime import resolve_node
-from ncds_opus_factory.common.opus_cli import call_opus
 
 ROOT = Path(__file__).resolve().parents[3]
 # rewrite 引擎已迁入 ncds_opus_core.runners（P1.6）；用 core 定位器取，不再从 repo 根拼 scripts/
@@ -39,30 +38,6 @@ def _noop(_text: str) -> None:
 
 def _build_job_id() -> str:
     return f"OGV_{int(time.time() * 1000)}_{secrets.token_hex(3)}"
-
-
-def _purge_ai_taste(text: str, report: dict, env: dict, timeout_seconds: int) -> str:
-    """把质检命中的 AI 味句式甩回模型消除,返回改写后的全文。
-
-    原走 scodex shim(codex gpt-5.5),codex 订阅失效后改调 opus(claude-opus-4-8 + effort max)。
-    注意:柳永主链(content_rewrite_runner.mjs)仍由 codex 驱动,该 .mjs 引擎层未迁(见 run())。
-    """
-    lines: list[str] = []
-    for h in report.get("density", []):
-        lines.append(f'- "{h["rule"]}" 出现 {h["count"]} 次,例:{h.get("samples")}')
-    for h in report.get("hard", []):
-        lines.append(f'- "{h["rule"]}",例:{h.get("samples")}')
-    prompt = (
-        "下面这篇抖音口播稿有 AI 味句式问题,请改写消除。\n\n"
-        "【必须消除的句式】\n" + "\n".join(lines) + "\n\n"
-        "【改写要求】\n"
-        "- 把'不是X而是Y/不是X你是Y/X不是A才是B'等否定转折句,改成自然口语的直接陈述\n"
-        "- 保持原意、保持骨架和所有具体台词不变,只动这些句式\n"
-        "- 不要引入其他 AI 腔(然而/事实上/本质上/归根结底/愿你 等)\n"
-        "- 只输出改写后的全文,不要解释、不要标题、不要 markdown\n\n"
-        "【原稿】\n" + text
-    )
-    return call_opus(prompt, timeout_seconds=timeout_seconds, env=env).strip()
 
 
 def run(
@@ -149,7 +124,9 @@ def run(
         while report["verdict"] == "fail" and rounds < 2:
             rounds += 1
             on_progress(f"  AI 味超标,打回重写第 {rounds} 轮...")
-            new_text = _purge_ai_taste(d["text"], report, env, timeout_seconds)
+            new_text = ai_taste.purge_ai_taste(
+                d["text"], report, env=env, timeout_seconds=timeout_seconds
+            )
             if not new_text or len(new_text) < 200:
                 on_progress("  重写未返回有效稿,保留上一版")
                 break

@@ -1,7 +1,7 @@
 ---
 id: task-3.5
 title: 横切能力统一（opus_cli / purge_ai_taste）
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-19 13:46'
 labels:
@@ -29,8 +29,15 @@ priority: medium
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `call_opus` 补 system_prompt 通道（若缺）
-- [ ] #2 `_polish_transcript_with_opus` / `_call_opus_for_rw` / `_call_opus_judge` 全改委托 call_opus，删重复手拼
-- [ ] #3 `purge_ai_taste` 抽到 common/ 单一实现，liuyong 与 pipeline_runner 共用
-- [ ] #4 回归 586 passed；rw/judge 行为前后一致（用 fake 验等价）
+- [x] #1 `call_opus` 补 system_prompt 通道（若缺）
+- [x] #2 `_polish_transcript_with_opus` / `_call_opus_for_rw` / `_call_opus_judge` 全改委托 call_opus，删重复手拼
+- [x] #3 `purge_ai_taste` 抽到 common/ 单一实现，liuyong 与 pipeline_runner 共用
+- [x] #4 回归 586 passed；rw/judge 行为前后一致（用 fake 验等价）
 <!-- AC:END -->
+
+## 完成记录
+
+- 2026-06-22：确认 `common.opus_cli.call_opus` 已支持 `system_prompt` / `timeout_seconds` / `env`，补齐 launch 参数、NDJSON result、error、availability fallback 的单测；新增 `is_opus_available()`，统一 PATH 与 `~/.sclaude/bin/opus` 回退判断。
+- 2026-06-22：`pipeline_runner._polish_transcript_with_opus` 与 `_call_opus_for_rw` 改为委托 `call_opus`；`quality_rubric` 的 opus judge 已经走 `call_opus`，同步改可用性判断为 common 单点。
+- 2026-06-22：新增 `common.ai_taste.build_purge_prompt()` / `purge_ai_taste()`，以柳永更完整的消 AI 味 prompt 为 canonical；`commands/liuyong.py` 与 `pipeline_runner._purge_ai_taste_rw` 共用该实现。
+- 验证：focused tests `70 passed`；`py_compile` 与 `git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 通过，`597 passed, 173 warnings in 25.55s`。

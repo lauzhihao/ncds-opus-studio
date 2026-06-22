@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from ncds_opus_factory.common import ai_taste
 from ncds_opus_factory.common.ai_taste import scan
 
 
@@ -80,3 +81,37 @@ def test_legacy_density_still_fails():
     r = scan(text)
     assert r["verdict"] == "fail"
     assert any(h["rule"] == "不是X而是Y" for h in r["density"])
+
+
+def test_build_purge_prompt_includes_density_and_hard_hits():
+    report = {
+        "density": [{"rule": "不是X而是Y", "count": 3, "samples": ["不是A而是B"]}],
+        "hard": [{"rule": "套路连接词", "samples": ["然而，"]}],
+    }
+    prompt = ai_taste.build_purge_prompt("原稿正文", report)
+    assert "必须消除的句式" in prompt
+    assert "不是X而是Y" in prompt
+    assert "套路连接词" in prompt
+    assert "原稿正文" in prompt
+
+
+def test_purge_ai_taste_delegates_to_model_call():
+    captured: dict = {}
+
+    def fake_model(prompt: str, **kwargs) -> str:
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return "  改写后正文  "
+
+    out = ai_taste.purge_ai_taste(
+        "原稿",
+        {"density": ["套话"], "hard": []},
+        timeout_seconds=12,
+        env={"X": "Y"},
+        model_call=fake_model,
+    )
+    assert out == "改写后正文"
+    assert "原稿" in captured["prompt"]
+    assert captured["kwargs"]["system_prompt"] == ai_taste.DEFAULT_PURGE_SYSTEM_PROMPT
+    assert captured["kwargs"]["timeout_seconds"] == 12
+    assert captured["kwargs"]["env"] == {"X": "Y"}

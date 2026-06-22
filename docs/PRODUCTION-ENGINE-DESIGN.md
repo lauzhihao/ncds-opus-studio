@@ -360,6 +360,17 @@ storyboard/image/render running 态进度冻结）。
 - 旧 `job_id`(12-hex)/`task_id`(t_*) → `instance_id` 兼容适配层（§6）。
 - 保留：SSE 满队列丢事件（与现 PipelineRunner 同款取舍，客户端 GET 全量重同步）。
 
+**E2 app `/tasks` → engine 迁移草案（task-3.1）**：
+1. 先补 engine 跨进程事件总线：把 `InstanceRunner.EngineEventBus` 从进程内 `asyncio.Queue` 扩展为
+   `events.jsonl` tail/merge，否则 S3.x 把 engine 步骤迁到 worker 后，8810 的 `/instances/*/events`
+   收不到 worker 侧 `_emit`。
+2. 引入 task/instance 兼容层：`POST /tasks` 为现有 app contract 保持不变，但内部为可生产类 agent
+   创建 `ProductionInstance`，把 `task_id` 映射到 `instance_id`，`GET /tasks/{id}` 兼容读 instance meta/step。
+3. 迁卧龙 driver：让 wolong/rounds_gate 不再直接串 TaskRunner 化石命令，而是按 recipe 调
+   `InstanceRunner.run_step()`，review 仍经 rounds_gate 落案卷；app 订阅 `level=meta,step`。
+4. app 前端切读实例列表/决策卡：保留 `/tasks` 兼容读一段时间，新增 `/instances` 直连视图验证后再收口。
+5. 最后清理：废弃 TaskRunner 中仅为生产链保留的旧命令入口，保留非生产工具任务或迁为 engine recipe/step。
+
 ---
 
 ## 11. 风险与缓解（研究的 blocker/major → 折入）

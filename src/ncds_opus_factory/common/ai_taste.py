@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+DEFAULT_PURGE_SYSTEM_PROMPT = "你是中文口播稿润色专家，擅长把 AI 味句式改成自然口语。"
+
 # 密度类:正常修辞,出现次数 >= 阈值才判为 AI 味(基于一篇 1500-2000 字长口播)
 DENSITY_RULES: list[tuple[str, str, int]] = [
     ("不是X而是Y", r"不是[^，。！？\n]{1,30}[，,]?\s*而是", 3),
@@ -101,6 +103,60 @@ def scan(text: str) -> dict[str, Any]:
         "hard": hits_hard,
         "summary": f"密度超阈 {len(hits_density)} 类 / 硬禁命中 {len(hits_hard)} 类",
     }
+
+
+def _purge_issue_lines(report: dict[str, Any]) -> list[str]:
+    """把 scan(report) 命中项格式化成 prompt 里的必须消除清单。"""
+    lines: list[str] = []
+    for h in report.get("density") or []:
+        if isinstance(h, dict):
+            lines.append(f'- "{h.get("rule", "密度类")}" 出现 {h.get("count", "?")} 次,例:{h.get("samples")}')
+        else:
+            lines.append(f"- {h}")
+    for h in report.get("hard") or []:
+        if isinstance(h, dict):
+            lines.append(f'- "{h.get("rule", "硬禁类")}",例:{h.get("samples")}')
+        else:
+            lines.append(f"- {h}")
+    return lines or ["- 泛 AI 味句式 / 模板表达"]
+
+
+def build_purge_prompt(text: str, report: dict[str, Any]) -> str:
+    """构造消 AI 味 prompt；柳永与 web/pipeline 质检共用这一份口径。"""
+    return (
+        "下面这篇抖音口播稿有 AI 味句式问题,请改写消除。\n\n"
+        "【必须消除的句式】\n" + "\n".join(_purge_issue_lines(report)) + "\n\n"
+        "【改写要求】\n"
+        "- 把'不是X而是Y/不是X你是Y/X不是A才是B'等否定转折句,改成自然口语的直接陈述\n"
+        "- 保持原意、保持骨架和所有具体台词不变,只动这些句式\n"
+        "- 不要引入其他 AI 腔(然而/事实上/本质上/归根结底/愿你 等)\n"
+        "- 只输出改写后的全文,不要解释、不要标题、不要 markdown\n\n"
+        "【原稿】\n" + text
+    )
+
+
+def purge_ai_taste(
+    text: str,
+    report: dict[str, Any],
+    *,
+    env: dict[str, str] | None = None,
+    timeout_seconds: int = 900,
+    model_call: Any | None = None,
+) -> str:
+    """调用 opus 消除 ai_taste 命中的显性 AI 口癖，返回改写后全文。
+
+    ``model_call`` 仅供测试注入；生产默认走 common.opus_cli.call_opus。
+    """
+    if model_call is None:
+        from ncds_opus_factory.common.opus_cli import call_opus
+
+        model_call = call_opus
+    return model_call(
+        build_purge_prompt(text, report),
+        system_prompt=DEFAULT_PURGE_SYSTEM_PROMPT,
+        timeout_seconds=timeout_seconds,
+        env=env,
+    ).strip()
 
 
 if __name__ == "__main__":

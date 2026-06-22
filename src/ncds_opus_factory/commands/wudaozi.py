@@ -1,5 +1,10 @@
 """/wudaozi —— 吴道子：抖音认知成片的「美术 / 视觉」agent。
 
+冷链标记（task-3.7，2026-06-22）：这是旧 figure_talk/剪影成片实现，仍可经 CLI、
+`/tasks`、`/commands` 与 app catalog 触达，但**不是**当前 web/engine 主生产链。
+当前主链是 paper_card_talk_015 的 storyboard -> tts -> image -> render_015。后续重写
+吴道子/伯牙/render 下游时应直接替换这条冷链，不必为旧实现做兼容层。
+
 吴道子,画圣 —— 把柳永的文字口播稿「分镜」成可渲染的剪影成片。
 
 设计原则(和柳永/伯牙对仗):

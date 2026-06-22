@@ -91,6 +91,23 @@ def test_asr_stage_label_accepts_ascii_and_legacy_transcribe_progress():
     assert pr._asr_stage_label("[DL] 下载中...") == "下载视频"
 
 
+def test_call_opus_for_rw_delegates_to_common_call_opus(monkeypatch: pytest.MonkeyPatch):
+    captured: dict = {}
+
+    def fake_call_opus(prompt: str, **kwargs) -> str:
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return "ok"
+
+    monkeypatch.setattr(pr, "call_opus", fake_call_opus)
+
+    assert pr._call_opus_for_rw("user", "system", "model-x") == "ok"
+    assert captured["prompt"] == "user"
+    assert captured["kwargs"]["system_prompt"] == "system"
+    assert captured["kwargs"]["model"] == "model-x"
+    assert captured["kwargs"]["timeout_seconds"] == pr.RW_LLM_TIMEOUT_SEC
+
+
 # --- 鬼谷子选题：job inputs 的 domain 透传到 guiguzi（task-2.5 调用方线程化）------ #
 def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """job inputs 带 domain（前端 doCreate 写入）时，analyze/generate 两个 bg 都把它透传给鬼谷子。"""

@@ -42,6 +42,8 @@ AGENT_SCHEMAS: dict[str, dict[str, Any]] = {
             _f("deliverables_dir", "产出目录", "string", help="留空自动建 video-jobs/OGV_*"),
         ],
     },
+    # task-3.7: wudaozi/boya 仍可通过 /tasks 派单,但当前只是旧 figure_talk 冷链入口；
+    # web/engine 主链不经它们。后续重写下游时直接替换,不为旧实现加兼容层。
     "wudaozi": {
         "label": "吴道子 · 美术/视觉",
         "group": "agent",

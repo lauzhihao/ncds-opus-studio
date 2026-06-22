@@ -39,11 +39,12 @@ from ncds_opus_core.templates import template_dir as _template_dir
 from ncds_opus_core.gpt_image.paths import GPT_IMAGE_OUTPUT_ROOT
 from ncds_opus_core.pipelines import PIPELINE_REGISTRY, get_pipeline
 from ncds_opus_core.common import cancel as _cancel
+from ncds_opus_factory.common.opus_cli import DEFAULT_OPUS_MODEL, call_opus, is_opus_available
 from ncds_opus_factory.server import storyboard_director
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OPUS_MODEL_ID = "claude-opus-4-8"
+DEFAULT_OPUS_MODEL_ID = DEFAULT_OPUS_MODEL
 ASR_PROC_TIMEOUT_SEC = int(os.getenv("NOF_ASR_PROC_TIMEOUT", "3600"))
 ASR_POLISH_TIMEOUT_SEC = int(os.getenv("NOF_ASR_POLISH_TIMEOUT", "600"))
 TTS_PROC_TIMEOUT_SEC = int(os.getenv("NOF_TTS_PROC_TIMEOUT", "3600"))
@@ -1298,6 +1299,9 @@ class PipelineRunner:
 
         默认 rw/lines/storyboard/tts/image/render 经 engine strangler 执行；
         asr 固定走 legacy 采集路径。NOF_ENGINE_NODES=legacy 可全量回旧实现。
+        除 asr 外的 `_execute_*` 分支现在只是冷回退：engine performer 是 015 执行真源，
+        legacy lines/storyboard 已知缺少引擎侧 JSON 重试与 domain_image_style 注入，不再作为
+        新功能对齐目标；只有显式回退/排障时才应使用。
         """
         # 4h：重跑前清残留 flag（防幽灵边界 DOA）。节点(重)启动前清掉任何残留 flag，
         # 确保 fresh run 不被旧 flag 秒取消。submit_node 已防双跑，故这里只在真正新启动时执行。
@@ -1461,7 +1465,17 @@ class PipelineRunner:
         self._push_outputs_patch(job_id, node_name, "model_progress", model_progress)
 
     # ------------------------------------------------------------
-    # 真接入：tts 节点
+    # Legacy fallback for non-ASR nodes.
+    #
+    # 默认非 asr 节点经 _execute_via_engine -> pct015_* performer 执行；下面这些
+    # `_execute_tts/_execute_image/_execute_rw/_execute_lines/_execute_storyboard/_execute_render`
+    # 只在 NOF_ENGINE_NODES=legacy/off/none 或显式排除节点时作为回退护城河。
+    # 已知漂移（task-3.1/A2）：legacy lines/storyboard 没有引擎侧 JSON parse retry；
+    # storyboard 也不会注入 domain_image_style。不要在这里继续扩展主链行为。
+    # ------------------------------------------------------------
+
+    # ------------------------------------------------------------
+    # tts 节点
     # ------------------------------------------------------------
     async def _execute_tts(self, job_id: str) -> dict[str, Any]:
         """按 02_rw/episode.json 按 scene 整段合成配音（scene-<sid>.mp3 + 字级时间戳
@@ -2584,12 +2598,7 @@ def _polish_transcript_with_opus(
 ) -> bool:
     """调本机 opus launcher（Claude Opus 4.8）把语音转写原稿整理成 markdown 文章。
 
-    透传到 claude CLI，参数参考远程 video_rewrite_runner.runClaudeCli：
-      claude -p <prompt> --output-format json --model <DEFAULT_OPUS_MODEL_ID>
-             --permission-mode bypassPermissions --tools '' --no-session-persistence
-
-    Claude CLI 的 JSON 输出末行形如 {"type":"result","is_error":false,"result":"<markdown>"}。
-    我们逐行扫描，取最后一条 type=result 的 payload。
+    opus 启动、PATH/fallback 解析与 NDJSON 解析统一委托 common.opus_cli.call_opus。
 
     幂等：返回 True=真调了 opus；False=命中缓存跳过。缓存键用「转写内容 + title_hint」的
     sha256（不用 mtime —— video_pipeline 每次重转写会刷新 transcript mtime，但同音频转写文本
@@ -2620,50 +2629,11 @@ def _polish_transcript_with_opus(
         "【原稿】\n" + text
     )
 
-    launcher = "opus"  # 本机 sclaude 启动器壳
-    # --no-resume:  强制开新会话；否则 launcher 会 resume cwd 下最近的 claude session，
-    #               把无关的旧上下文带进来污染输出（实测会让 claude 输出元话题回答）
-    # --no-session-persistence: claude CLI 自身的开关，防止本次会话留痕影响后续
-    args = [
-        launcher, "launch", "--no-resume", "--",
-        "-p", prompt,
-        "--output-format", "json",
-        "--model", DEFAULT_OPUS_MODEL_ID,
-        "--effort", "max",
-        "--permission-mode", "bypassPermissions",
-        "--tools", "",
-        "--no-session-persistence",
-    ]
-    proc = subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        timeout=ASR_POLISH_TIMEOUT_SEC,
-        stdin=subprocess.DEVNULL,  # 防止父进程残留 stdin 流入 claude CLI
+    final_text = call_opus(
+        prompt,
+        model=DEFAULT_OPUS_MODEL_ID,
+        timeout_seconds=ASR_POLISH_TIMEOUT_SEC,
     )
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
-        raise RuntimeError(f"opus launcher exited {proc.returncode}: {tail}")
-
-    # 逐行扫描，找最后一条 type=result
-    final_text = ""
-    for raw_line in proc.stdout.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if payload.get("type") != "result":
-            continue
-        if payload.get("is_error"):
-            raise RuntimeError(f"claude returned error: {payload.get('result')}")
-        result = payload.get("result")
-        if isinstance(result, str) and result.strip():
-            final_text = result.strip()
-    if not final_text:
-        raise RuntimeError(f"opus returned empty result; stdout tail={proc.stdout[-300:]}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(final_text + "\n", encoding="utf-8")
@@ -2701,7 +2671,7 @@ def _check_model_available(cand: dict[str, str]) -> tuple[bool, str]:
     """返回 (是否可用, 不可用原因)。可用时 reason='' 。"""
     runner = cand["runner"]
     if runner == "opus":
-        return (shutil.which("opus") is not None, "本机未安装 opus 启动器")
+        return (is_opus_available(), "本机未安装 opus 启动器")
     if runner == "scodex":
         return (shutil.which("scodex") is not None, "本机未安装 scodex 启动器")
     if runner == "gemini_local":
@@ -2774,51 +2744,13 @@ async def _invoke_rw_candidate(
 
 
 def _call_opus_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> str:
-    """走本机 opus 启动器 → claude CLI。沿用 _polish_transcript_with_opus 的
-    --no-resume / --no-session-persistence / stdin=DEVNULL 套路防止会话污染。
-    """
-    args = [
-        "opus", "launch", "--no-resume", "--",
-        "-p", user_prompt,
-        "--output-format", "json",
-        "--model", model_id,
-        "--effort", "max",
-        "--permission-mode", "bypassPermissions",
-        "--tools", "",
-        "--no-session-persistence",
-    ]
-    if system_prompt:
-        args.extend(["--system-prompt", system_prompt])
-    proc = subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        timeout=RW_LLM_TIMEOUT_SEC,
-        stdin=subprocess.DEVNULL,
+    """RW opus 调用薄适配层；真实 launch/parse 统一委托 common.opus_cli.call_opus。"""
+    return call_opus(
+        user_prompt,
+        system_prompt=system_prompt,
+        model=model_id,
+        timeout_seconds=RW_LLM_TIMEOUT_SEC,
     )
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
-        raise RuntimeError(f"opus launcher exited {proc.returncode}: {tail}")
-
-    final = ""
-    for raw_line in proc.stdout.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if payload.get("type") != "result":
-            continue
-        if payload.get("is_error"):
-            raise RuntimeError(f"claude error: {payload.get('result')}")
-        result = payload.get("result")
-        if isinstance(result, str) and result.strip():
-            final = result.strip()
-    if not final:
-        raise RuntimeError(f"opus empty result; stdout tail={proc.stdout[-300:]}")
-    return final
 
 
 def _call_scodex_for_rw(prompt: str, model_id: str) -> str:
@@ -2982,24 +2914,11 @@ def _rw_source_text(asr_items: list[dict[str, Any]], job_dir: Path) -> str:
 
 
 def _purge_ai_taste_rw(text: str, report: dict[str, Any], on_progress: Callable[[str], None]) -> str:
-    """把 ai_taste 命中的 AI 味甩回 opus 消除，返回改写后全文（同柳永 liuyong._purge_ai_taste）。"""
-    hits = report.get("density") or []
-    hit_desc = "；".join(str(h) for h in hits[:10]) if hits else "（泛 AI 味句式）"
-    user = (
-        "下面这篇抖音口播稿有 AI 味句式问题，请改写消除。\n\n"
-        f"【命中问题】{hit_desc}\n\n"
-        "【改写要求】\n"
-        "- 保持原意、结构、信息量不变；\n"
-        "- 只消除 AI 味套话 / 模板句式，换成口语化的自然表达；\n"
-        "- 只输出改写后的全文，不要解释、不要标题、不要 ``` 包裹。\n\n"
-        f"== 原稿 ==\n{text}\n== 原稿结束 =="
-    )
+    """把 ai_taste 命中的 AI 味甩回 opus 消除，返回改写后全文（common 单点实现）。"""
+    from ncds_opus_factory.common import ai_taste
+
     try:
-        return (_call_opus_for_rw(
-            user,
-            "你是中文口播稿润色专家，擅长把 AI 味句式改成自然口语。",
-            DEFAULT_OPUS_MODEL_ID,
-        ) or "").strip()
+        return ai_taste.purge_ai_taste(text, report, timeout_seconds=RW_LLM_TIMEOUT_SEC)
     except Exception as exc:  # noqa: BLE001 — 消 AI 味失败不致命，保留上一版
         on_progress(f"  消 AI 味调用失败: {exc}")
         return ""

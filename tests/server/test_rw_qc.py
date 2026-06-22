@@ -1,6 +1,6 @@
 """柳永质检闸门（pipeline_runner._apply_rw_qc / _purge_ai_taste_rw）单元测试。
 
-mock ai_taste / quality_rubric / _call_opus_for_rw，验证（同 liuyong.py 质检语义）：
+mock ai_taste / quality_rubric / purge_ai_taste，验证（同 liuyong.py 质检语义）：
 - ai_taste pass → 不打回，带 qc + qc_rubric + draft.qc.json sidecar；
 - ai_taste fail → _purge_ai_taste_rw 调 opus 重写 → 二次 scan pass，回写 draft.md。
 """
@@ -52,7 +52,7 @@ def test_apply_rw_qc_fail_then_purge(tmp_path, monkeypatch):
     purged = "消除 AI 味后的干净长稿。" * 30  # >200 字，过 _purge 有效性闸
     monkeypatch.setattr(ai_taste, "scan", fake_scan)
     monkeypatch.setattr(quality_rubric, "score", lambda t, **k: {"available": False, "skipped": "本机无 opus"})
-    monkeypatch.setattr(pr, "_call_opus_for_rw", lambda u, s, m: purged)
+    monkeypatch.setattr(ai_taste, "purge_ai_taste", lambda *_a, **_k: purged)
 
     out = pr._apply_rw_qc(md, "gpt5", lambda *_: None)
     assert calls["scan"] == 2                       # 打回重写一轮后复检
@@ -67,7 +67,7 @@ def test_apply_rw_qc_fail_purge_empty_keeps_original(tmp_path, monkeypatch):
     md = _seed_draft(tmp_path, original)
     monkeypatch.setattr(ai_taste, "scan", lambda t: {"verdict": "fail", "summary": "x", "density": ["套话"]})
     monkeypatch.setattr(quality_rubric, "score", lambda t, **k: {"available": False, "skipped": "no opus"})
-    monkeypatch.setattr(pr, "_call_opus_for_rw", lambda u, s, m: "太短")  # <200 字，无效
+    monkeypatch.setattr(ai_taste, "purge_ai_taste", lambda *_a, **_k: "太短")  # <200 字，无效
 
     out = pr._apply_rw_qc(md, "deepseek", lambda *_: None)
     assert out["qc"]["verdict"] == "fail"           # 仍 fail（重写无效，未死循环）

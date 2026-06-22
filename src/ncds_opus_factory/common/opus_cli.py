@@ -35,6 +35,15 @@ def _resolve_opus() -> str:
     )
 
 
+def is_opus_available() -> bool:
+    """本机 opus 启动器是否可用（PATH 或 ~/.sclaude/bin/opus 任一命中）。"""
+    try:
+        _resolve_opus()
+    except RuntimeError:
+        return False
+    return True
+
+
 def call_opus(
     prompt: str,
     *,

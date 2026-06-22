@@ -10,21 +10,19 @@
 - rubric 是 Humanizer 50 分制的"口播体裁改造版",护栏写死防止惩罚爆款骨架
   (金句/三段/反差钩子/长口播/逐字台词一律不扣)。
 
-common 层不依赖 server:opus 调用在本模块自带(仿 server/pipeline_runner.py 的范例)。
+common 层不依赖 server；opus 调用统一走 common.opus_cli.call_opus。
 """
 from __future__ import annotations
 
 import json
 import os
 import re
-import shutil
 import subprocess
-from pathlib import Path
 from typing import Any
 
 from ncds_opus_factory.common.agy_cli import call_agy
 from ncds_opus_factory.common.deepseek_cli import call_deepseek
-from ncds_opus_factory.common.opus_cli import call_opus
+from ncds_opus_factory.common.opus_cli import call_opus, is_opus_available
 
 # 质检 judge 优先级（靠前优先尝试）。id 与 MODEL_CANDIDATES.id 对齐，避免_models 据此传递。
 JUDGE_PRIORITY: list[str] = ["opus", "codex", "agy", "ds"]
@@ -53,9 +51,7 @@ def available() -> bool:
 def _check_judge_available(model_id: str) -> bool:
     """检查指定 judge 模型在本机是否可用。"""
     if model_id == "opus":
-        if shutil.which("opus") is not None:
-            return True
-        return (Path.home() / ".sclaude" / "bin" / "opus").is_file()
+        return is_opus_available()
     elif model_id == "codex":
         return shutil.which("scodex") is not None
     elif model_id == "agy":

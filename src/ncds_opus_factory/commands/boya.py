@@ -1,5 +1,10 @@
 """/boya —— 伯牙：抖音认知成片的「声音」agent。
 
+冷链标记（task-3.7，2026-06-22）：这是旧 figure_talk/剪影音频床实现，仍可经 CLI、
+`/tasks`、`/commands` 与 app catalog 触达，但**不是**当前 web/engine 主生产链。
+当前主链是 paper_card_talk_015 的 storyboard -> tts -> image -> render_015。后续重写
+吴道子/伯牙/render 下游时应直接替换这条冷链，不必为旧实现做兼容层。
+
 俞伯牙,高山流水遇知音 —— 以声写意、为「知音」(目标观众)而奏。
 负责一条成片的整条声音床:配音(TTS,复用 tts_gen 产的人声)、配乐(BGM)、关键音效(SFX)。
 

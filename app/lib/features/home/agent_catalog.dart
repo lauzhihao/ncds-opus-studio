@@ -2,6 +2,8 @@
 // cmd 对齐 server COMMAND_REGISTRY;离线也可见(灯态/角标才靠后端聚合)。
 // 排序按生产链 + 重要度:操盘手在前,再到采集→选题→编剧→美术→声音。
 // accent 用设计 token 里的 6 个 agent 主色(对齐原生 Color 字面量)。
+// task-3.7: wudaozi/boya 当前仍保留在 catalog,但它们是旧 figure_talk 冷链入口;
+// web/engine 主链不经它们。后续重写下游时直接替换,不为旧实现加兼容层。
 
 import 'package:flutter/widgets.dart';
 
