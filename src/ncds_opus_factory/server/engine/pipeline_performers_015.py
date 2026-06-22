@@ -21,16 +21,24 @@ import json
 import os
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ncds_opus_core.templates import template_dir as _template_dir
+
 from ncds_opus_factory.commands import render_015
 from ncds_opus_factory.server import storyboard_director
+from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile
 from ncds_opus_factory.server.pipeline_asr_helpers import (
     _asr_stage_label,
     _polish_transcript_with_opus,
     _run_video_pipeline,
+)
+from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
+from ncds_opus_factory.server.pipeline_lines_tasks import (
+    _build_lines_prompt,
+    _episode_from_lines_response,
 )
 from ncds_opus_factory.server.pipeline_media_helpers import (
     _generate_scene_image,
@@ -38,20 +46,18 @@ from ncds_opus_factory.server.pipeline_media_helpers import (
     _rebuild_tts_items_015,
     _run_tts_gen_015,
 )
-from ncds_opus_factory.server.pipeline_lines_tasks import (
-    _build_lines_prompt,
-    _load_template_episode,
-)
+from ncds_opus_factory.server.pipeline_render_tasks import PipelineRenderRun
 from ncds_opus_factory.server.pipeline_rw_helpers import (
     MODEL_CANDIDATES,
-    _ModelUnavailable,
     _apply_rw_qc,
     _build_rw_prompt,
     _call_opus_for_rw,
     _invoke_rw_candidate,
+    _ModelUnavailable,
     _rw_source_text,
 )
-from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile
+from ncds_opus_factory.server.pipeline_rw_tasks import build_rw_draft
+from ncds_opus_factory.server.pipeline_tts_tasks import PipelineTtsRun
 
 # 外部副作用调用的 seam（subprocess / node / gpt-image）：默认走真实 helper，测试 monkeypatch。
 _run_tts_gen = _run_tts_gen_015
@@ -65,6 +71,16 @@ _polish_transcript = _polish_transcript_with_opus
 
 # rw seam：async 调用候选模型的间接层。
 _invoke_rw = _invoke_rw_candidate
+
+
+class _ProgressFacade:
+    """Tiny runner-compatible facade for task contexts used by engine performers."""
+
+    def __init__(self, on_progress: Callable[[str], None]) -> None:
+        self._on_progress = on_progress
+
+    def _push_progress(self, _job_id: str, _node_name: str, text: str) -> None:
+        self._on_progress(text)
 
 
 def _opus_structure(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-8") -> str:
@@ -192,7 +208,7 @@ def run_asr_step(
             item_dir = asr_root / str(idx)
             item_dir.mkdir(parents=True, exist_ok=True)
 
-            url_md5 = hashlib.md5(url.encode("utf-8")).hexdigest()
+            url_md5 = hashlib.md5(url.encode("utf-8"), usedforsecurity=False).hexdigest()
             url_md5_short = url_md5[:12]
             cache_dir = downloads_cache / url_md5
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -365,40 +381,6 @@ def run_rw_step(
 
     on_progress(f"{len(MODEL_CANDIDATES)} 模型并行启动；source={len(source_text)} 字")
 
-    # make_draft：把单模型结果（成功文本 / 异常）转成 draft dict，成功时写盘。
-    # 内部实现与原版 _execute_rw 的 make_draft 闭包完全对齐。
-    def make_draft(cand: dict[str, str], res: Any) -> dict[str, Any]:
-        mid, label = cand["id"], cand["label"]
-        if isinstance(res, _ModelUnavailable):
-            return {
-                "model_id": mid, "label": label, "status": "failed",
-                "reason": "模型不可用", "draft_relpath": None, "episode_relpath": None,
-            }
-        if isinstance(res, BaseException):
-            return {
-                "model_id": mid, "label": label, "status": "failed",
-                "reason": "模型调用失败", "draft_relpath": None, "episode_relpath": None,
-            }
-        raw_text = (res or "").strip()
-        # 去掉 ```json / ``` 包裹（与原版一致）。
-        if raw_text.startswith("```"):
-            inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", raw_text)
-            if inner:
-                raw_text = inner.group(1).strip()
-        if not raw_text:
-            return {
-                "model_id": mid, "label": label, "status": "failed",
-                "reason": "模型输出为空", "draft_relpath": None, "episode_relpath": None,
-            }
-        model_dir = rw_root / mid
-        model_dir.mkdir(parents=True, exist_ok=True)
-        (model_dir / "draft.md").write_text(raw_text + "\n", encoding="utf-8")
-        on_progress(f"模型 {mid} draft 写盘完成（{len(raw_text)} 字）")
-        return {
-            "model_id": mid, "label": label, "status": "success", "reason": None,
-            "draft_relpath": f"02_rw/{mid}/draft.md", "episode_relpath": None,
-        }
-
     # 内部 async 函数：复用原版 asyncio.gather 并发语义，调 _invoke_rw seam。
     # on_status 给 no-op，performer 不需要模型级增量状态（引擎暂不支持）。
     async def _run() -> list[dict[str, Any]]:
@@ -411,7 +393,13 @@ def run_rw_step(
                 )
             except BaseException as exc:  # noqa: BLE001
                 res = exc
-            draft = make_draft(cand, res)
+            draft = build_rw_draft(
+                rw_root=rw_root,
+                cand=cand,
+                res=res,
+                model_unavailable_cls=_ModelUnavailable,
+                on_progress=on_progress,
+            )
             if draft.get("status") == "success":
                 # 柳永质检闸门：ai_taste 打回重写 + rubric 评分（与 _execute_rw 一致）。
                 try:
@@ -453,8 +441,8 @@ def run_lines_step(
 ) -> dict[str, Any]:
     """LINES：读 ``02_rw/draft.md`` → opus 结构化成 beats[] → 合模板骨架写 ``02_rw/episode.json``。
 
-    复用 ``_execute_lines`` 的算法（``_build_lines_prompt`` + :func:`_opus_structure`
-    + ``_load_template_episode``），去掉 PipelineRunner 的状态管理（引擎接管）。
+    复用 ``_build_lines_prompt`` + ``_episode_from_lines_response`` 的结构化算法，
+    去掉 PipelineRunner 的状态管理（引擎接管）。
     scenes 留空 {} 交给下游 storyboard。
     """
     jd = Path(job_dir)
@@ -468,46 +456,13 @@ def run_lines_step(
     system_prompt, user_prompt = _build_lines_prompt(draft)
     on_progress("调 opus 结构化为 beats…")
     parsed = _opus_json_with_retry(user_prompt, system_prompt, on_progress)
-
-    beats = parsed.get("beats") if isinstance(parsed, dict) else None
-    meta_in = parsed.get("meta") if isinstance(parsed, dict) else None
-    if not isinstance(beats, list) or not beats:
-        raise RuntimeError("结构化结果缺 beats[] 或为空")
-
-    norm_beats: list[dict[str, Any]] = []
-    for b in beats:
-        if not isinstance(b, dict):
-            continue
-        zh = str(b.get("zh") or "").strip()
-        if not zh:
-            continue
-        norm_beats.append({
-            "zh": zh,
-            "en": str(b.get("en") or ""),
-            "scene": "",
-            "chapter": b.get("chapter") if isinstance(b.get("chapter"), int) else None,
-        })
-    if not norm_beats:
-        raise RuntimeError("beats 全部为空")
-
-    episode = _load_template_episode(pipeline_id)
-    episode["beats"] = norm_beats
-    episode["scenes"] = {}
-    if isinstance(meta_in, dict):
-        meta = dict(episode.get("meta") or {})
-        if meta_in.get("title"):
-            meta["title"] = str(meta_in["title"])
-        if meta_in.get("subtitle"):
-            meta["subtitle"] = str(meta_in["subtitle"])
-        if isinstance(meta_in.get("tags"), list):
-            meta["tags"] = [str(t) for t in meta_in["tags"]]
-        episode["meta"] = meta
+    episode, beats_count = _episode_from_lines_response(parsed, pipeline_id)
 
     ep_path = _episode_path(jd)
     ep_path.parent.mkdir(parents=True, exist_ok=True)
     ep_path.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
-    on_progress(f"完成：{len(norm_beats)} 条 beats（scenes 待分镜产出）")
-    return {"episode_relpath": "02_rw/episode.json", "beats_count": len(norm_beats)}
+    on_progress(f"完成：{beats_count} 条 beats（scenes 待分镜产出）")
+    return {"episode_relpath": "02_rw/episode.json", "beats_count": beats_count}
 
 
 def run_storyboard_step(
@@ -594,27 +549,16 @@ def run_tts_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) 
     ep = _read_episode(jd)
     if ep is None:
         raise ValueError("episode.json not found; run rw/lines first")
-    beats_raw = ep.get("beats") or []
-    if not beats_raw:
-        raise ValueError("episode.beats is empty; nothing to synthesize")
-
-    out_dir = jd / "04_tts"
-    out_dir.mkdir(parents=True, exist_ok=True)
     tts_gen = _template_dir("paper_card_talk_015") / ".015-draft-assets" / "tts_gen.py"
-    if not tts_gen.is_file():
-        raise RuntimeError(f"tts_gen.py not found: {tts_gen}")
-    ep_path = jd / "02_rw" / "episode.json"
-    on_progress(f"按 scene 整段合成（{len(beats_raw)} beats）…")
-    _run_tts_gen(script=tts_gen, episode_path=ep_path, audio_dir=out_dir, on_line=on_progress)
-
-    ep2 = json.loads(ep_path.read_text(encoding="utf-8"))
-    items = _rebuild_tts_items_015(ep2)
-    scene_files = {it["audio_relpath"] for it in items if it.get("audio_relpath")}
-    on_progress(f"完成：{len(scene_files)} 段 scene 音频 · {len(items)} beats")
-    return {
-        "items": items, "audio_dir": str(out_dir), "mode": "segmented",
-        "scene_count": len(scene_files), "audio_count": len(scene_files),
-    }
+    return asyncio.run(PipelineTtsRun(
+        runner=_ProgressFacade(on_progress),
+        job_id=jd.name,
+        job_dir=jd,
+        episode=ep,
+        tts_gen_script=tts_gen,
+        run_tts_gen=_run_tts_gen,
+        rebuild_tts_items=_rebuild_tts_items_015,
+    ).run())
 
 
 def run_image_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) -> dict[str, Any]:
@@ -627,143 +571,24 @@ def run_image_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any
     ep = _read_episode(jd)
     if ep is None:
         raise ValueError("episode.json not found; run rw/lines first")
-
-    beats = ep.get("beats") or []
-    scenes_def = ep.get("scenes") or {}
-    image_cfg = ep.get("image") or {}
-
-    seen: set[str] = set()
-    scene_order: list[str] = []
-    for b in beats:
-        sid = b.get("scene")
-        if sid and sid not in seen:
-            seen.add(sid)
-            scene_order.append(sid)
-    eligible = [sid for sid in scene_order if not sid.startswith("ch")]
-    if not eligible:
-        raise ValueError("no image-eligible scenes (all are chapter cards or no scenes)")
-
-    size = image_cfg.get("size") or "1536x1024"
-    quality = image_cfg.get("quality") or "auto"
-    no_text_hint = image_cfg.get("noTextHint") or ""
-    sketch_size = image_cfg.get("sketchSize") or "1024x1024"
-    sketch_prefix = str(image_cfg.get("sketchStylePrefix") or "").strip()
-
-    out_dir = jd / "03_image"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    on_progress(f"image 开始：{len(eligible)} 个场景 · {size} {quality}")
-
-    items: list[dict[str, Any]] = []
-    ok = sk = fail = 0
-    sketch_ok = sketch_fail = 0
-    n_scenes = len(scene_order)
-    for i, sid in enumerate(scene_order, start=1):
-        sc = scenes_def.get(sid) or {}
-        prompt = str(sc.get("prompt") or "").strip()
-        if sid.startswith("ch"):
-            items.append({"scene_id": sid, "prompt": prompt, "image_relpath": None,
-                          "skipped_reason": "chapter card", "sketches": []})
-            continue
-        if not prompt:
-            items.append({"scene_id": sid, "prompt": "", "image_relpath": None,
-                          "skipped_reason": "empty prompt", "sketches": []})
-            fail += 1
-            continue
-
-        target = out_dir / f"{sid}.webp"
-        container_rel: str | None = None
-        container_err: str | None = None
-        if target.is_file():
-            container_rel = f"03_image/{sid}.webp"
-            sk += 1
-            on_progress(f"[{i}/{n_scenes}] {sid} 容器图已存在，跳过")
-        else:
-            full_prompt = f"{prompt} {no_text_hint}".strip() if no_text_hint else prompt
-            on_progress(f"[{i}/{n_scenes}] {sid} 容器图生成中…")
-            try:
-                _gen_scene_image(scene_id=sid, prompt=full_prompt, size=size,
-                                 quality=quality, target=target, job_id=job_id)
-                container_rel = f"03_image/{sid}.webp"
-                ok += 1
-            except Exception as exc:  # noqa: BLE001
-                on_progress(f"[{i}/{n_scenes}] {sid} 容器图失败: {exc}")
-                container_err = str(exc)
-                fail += 1
-
-        sketches_def = sc.get("sketches") or []
-        sketch_items: list[dict[str, Any]] = []
-        for n, skd in enumerate(sketches_def, start=1):
-            sp = str((skd or {}).get("prompt") or "").strip()
-            if not sp:
-                continue
-            srel = f"03_image/{sid}-sk{n}.webp"
-            stgt = out_dir / f"{sid}-sk{n}.webp"
-            if stgt.is_file():
-                sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
-                continue
-            sfull = " ".join(p for p in (sketch_prefix, sp, no_text_hint) if p)
-            on_progress(f"[{i}/{n_scenes}] {sid} 简笔画 {n}/{len(sketches_def)} 生成中…")
-            try:
-                _gen_scene_image(scene_id=f"{sid}-sk{n}", prompt=sfull, size=sketch_size,
-                                 quality=quality, target=stgt, job_id=job_id)
-                sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
-                sketch_ok += 1
-            except Exception as exc:  # noqa: BLE001
-                on_progress(f"[{i}/{n_scenes}] {sid} 简笔画 {n} 失败: {exc}")
-                sketch_items.append({"index": n, "prompt": sp, "image_relpath": None,
-                                     "error": str(exc)})
-                sketch_fail += 1
-
-        item: dict[str, Any] = {"scene_id": sid, "prompt": prompt,
-                                "image_relpath": container_rel, "sketches": sketch_items}
-        if container_err:
-            item["error"] = container_err
-        items.append(item)
-
-    if ok == 0 and fail > 0:
-        raise RuntimeError(f"all {fail} scene image generations failed")
-
-    on_progress(
-        f"image 完成：容器 ok={ok} skipped={sk} failed={fail} · "
-        f"简笔画 ok={sketch_ok} failed={sketch_fail}"
-    )
-    return {
-        "items": items, "pictures_dir": str(out_dir), "pictures_count": ok + sk,
-        "ok": ok, "skipped": sk, "failed": fail,
-        "sketch_ok": sketch_ok, "sketch_failed": sketch_fail,
-    }
+    return asyncio.run(PipelineImageRun(
+        runner=_ProgressFacade(on_progress),
+        job_id=job_id,
+        job_dir=jd,
+        episode=ep,
+        generate_scene_image=_gen_scene_image,
+    ).run())
 
 
 def run_render_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) -> dict[str, Any]:
     """RENDER：``render_015.run`` 出 1920x1080 MP4（依赖 episode + 04_tts/*.mp3 + 03_image/*.webp）。"""
     jd = Path(job_dir)
-    episode_path = jd / "02_rw" / "episode.json"
-    if not episode_path.is_file():
-        raise ValueError("02_rw/episode.json missing; select an rw model first")
-    audio_dir = jd / "04_tts"
-    if not audio_dir.is_dir() or not any(audio_dir.glob("*.mp3")):
-        raise ValueError("04_tts/*.mp3 missing; run tts first")
-    picture_dir = jd / "03_image"
-    out_dir = jd / "06_render"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "output.mp4"
-
-    on_progress("启动 render_015（scene 整段合音）")
-    result = _render_run(
-        episode_path=str(episode_path),
-        audio_dir=str(audio_dir),
-        output_path=str(out_path),
-        picture_dir=str(picture_dir) if picture_dir.is_dir() else None,
-        workdir=str(out_dir / "_render_workdir"),
-        cleanup_workdir=True,
-        on_progress=on_progress,
-    )
-    return {
-        "video_relpath": f"06_render/{out_path.name}",
-        "output_path": result.get("output_path", str(out_path)),
-        "video_size_bytes": result.get("video_size_bytes"),
-        "workdir": result.get("workdir"),
-    }
+    return asyncio.run(PipelineRenderRun(
+        runner=_ProgressFacade(on_progress),
+        job_id=jd.name,
+        job_dir=jd,
+        render_run=_render_run,
+    ).run())
 
 
 # 015 recipe 各步 cmd → orchestration performer。键带 ``pct015_`` 前缀，与 build_full_registry

@@ -6,14 +6,69 @@ import asyncio
 import json
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import asdict
+from typing import Any
 
 from ncds_opus_core.templates import template_dir as _template_dir
+
 from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 
 
 class PipelineRegenOperationsMixin:
     """Image and TTS regeneration operations triggered from preview drawers."""
+
+    def _emit_node_status(self, job_id: str, node_name: str, node: Any) -> None:
+        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(node)})
+
+    def _update_image_items(
+        self,
+        job_id: str,
+        mutate_items: Callable[[list[dict[str, Any]]], None],
+        *,
+        touch_job: bool = True,
+    ) -> None:
+        state = self._load(job_id)
+        img = state.nodes.get("image")
+        if img is None or not img.outputs:
+            return
+        items = list(img.outputs.get("items") or [])
+        mutate_items(items)
+        img.outputs["items"] = items
+        img.finished_at = time.time()
+        if touch_job:
+            state.updated_at = time.time()
+        self._save(state)
+        self._emit_node_status(job_id, "image", img)
+
+    @staticmethod
+    def _put_scene_image(items: list[dict[str, Any]], scene_id: str, rel: str) -> None:
+        for it in items:
+            if it.get("scene_id") == scene_id:
+                it["image_relpath"] = rel
+                break
+
+    @staticmethod
+    def _put_sketch_image(
+        items: list[dict[str, Any]],
+        *,
+        scene_id: str,
+        n: int,
+        rel: str,
+        prompt: str,
+    ) -> None:
+        for it in items:
+            if it.get("scene_id") != scene_id:
+                continue
+            sk_items = list(it.get("sketches") or [])
+            hit = next((s for s in sk_items if s.get("index") == n), None)
+            if hit is not None:
+                hit["image_relpath"] = rel
+                hit.pop("error", None)
+            else:
+                sk_items.append({"index": n, "prompt": prompt, "image_relpath": rel})
+            it["sketches"] = sk_items
+            break
 
     async def _mock_regen_delay(self) -> None:
         """mock 下 regen 类操作的统一模拟耗时。"""
@@ -56,22 +111,7 @@ class PipelineRegenOperationsMixin:
             job_id=job_id,
         )
 
-        state = self._load(job_id)
-        image_node = state.nodes.get("image")
-        if image_node and image_node.outputs:
-            items = list(image_node.outputs.get("items") or [])
-            for it in items:
-                if it.get("scene_id") == scene_id:
-                    it["image_relpath"] = rel
-                    break
-            image_node.outputs["items"] = items
-            image_node.finished_at = time.time()
-            state.updated_at = time.time()
-            self._save(state)
-            self._emit(
-                job_id,
-                {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(image_node)},
-            )
+        self._update_image_items(job_id, lambda items: self._put_scene_image(items, scene_id, rel))
         return rel
 
     async def regen_image_scene(self, job_id: str, scene_id: str) -> None:
@@ -134,30 +174,10 @@ class PipelineRegenOperationsMixin:
             quality=quality, target=target, job_id=job_id,
         )
 
-        state = self._load(job_id)
-        img = state.nodes.get("image")
-        if img and img.outputs:
-            items = list(img.outputs.get("items") or [])
-            for it in items:
-                if it.get("scene_id") != scene_id:
-                    continue
-                sk_items = list(it.get("sketches") or [])
-                hit = next((s for s in sk_items if s.get("index") == n), None)
-                if hit is not None:
-                    hit["image_relpath"] = rel
-                    hit.pop("error", None)
-                else:
-                    sk_items.append({"index": n, "prompt": sp, "image_relpath": rel})
-                it["sketches"] = sk_items
-                break
-            img.outputs["items"] = items
-            img.finished_at = time.time()
-            state.updated_at = time.time()
-            self._save(state)
-            self._emit(
-                job_id,
-                {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)},
-            )
+        self._update_image_items(
+            job_id,
+            lambda items: self._put_sketch_image(items, scene_id=scene_id, n=n, rel=rel, prompt=sp),
+        )
         return rel
 
     async def regen_tts_scene(self, job_id: str, scene_id: str) -> None:
@@ -207,7 +227,7 @@ class PipelineRegenOperationsMixin:
         n.finished_at = time.time()
         state.updated_at = time.time()
         self._save(state)
-        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
+        self._emit_node_status(job_id, "tts", n)
 
     async def _mock_regen_image(self, job_id: str, scene_id: str) -> str:
         """mock：从 015 素材拷该 scene 容器图到 03_image/{scene_id}.webp。"""
@@ -219,18 +239,12 @@ class PipelineRegenOperationsMixin:
         src_pic = mock_mod._source_dir() / "pictures" / f"{scene_id}.webp"
         if src_pic.is_file():
             await asyncio.to_thread(shutil.copyfile, src_pic, target)
-        state = self._load(job_id)
-        img = state.nodes.get("image")
-        if img and img.outputs and target.is_file():
-            items = list(img.outputs.get("items") or [])
-            for it in items:
-                if it.get("scene_id") == scene_id:
-                    it["image_relpath"] = rel
-                    break
-            img.outputs["items"] = items
-            img.finished_at = time.time()
-            self._save(state)
-            self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)})
+        if target.is_file():
+            self._update_image_items(
+                job_id,
+                lambda items: self._put_scene_image(items, scene_id, rel),
+                touch_job=False,
+            )
         return rel
 
     async def _mock_regen_sketch(self, job_id: str, scene_id: str, n: int) -> str:
@@ -246,26 +260,12 @@ class PipelineRegenOperationsMixin:
             cand = pics / f"{scene_id}.webp"
         if cand.is_file():
             await asyncio.to_thread(shutil.copyfile, cand, target)
-        state = self._load(job_id)
-        img = state.nodes.get("image")
-        if img and img.outputs and target.is_file():
-            items = list(img.outputs.get("items") or [])
-            for it in items:
-                if it.get("scene_id") != scene_id:
-                    continue
-                sk_items = list(it.get("sketches") or [])
-                hit = next((s for s in sk_items if s.get("index") == n), None)
-                if hit is not None:
-                    hit["image_relpath"] = rel
-                    hit.pop("error", None)
-                else:
-                    sk_items.append({"index": n, "prompt": "", "image_relpath": rel})
-                it["sketches"] = sk_items
-                break
-            img.outputs["items"] = items
-            img.finished_at = time.time()
-            self._save(state)
-            self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "image", "state": asdict(img)})
+        if target.is_file():
+            self._update_image_items(
+                job_id,
+                lambda items: self._put_sketch_image(items, scene_id=scene_id, n=n, rel=rel, prompt=""),
+                touch_job=False,
+            )
         return rel
 
     async def _mock_regen_tts(self, job_id: str, scene_id: str) -> None:
@@ -281,4 +281,4 @@ class PipelineRegenOperationsMixin:
             n.outputs["items"] = media_helpers._rebuild_tts_items_015(ep)
         n.finished_at = time.time()
         self._save(state)
-        self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
+        self._emit_node_status(job_id, "tts", n)

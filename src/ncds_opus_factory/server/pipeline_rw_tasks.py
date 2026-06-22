@@ -10,6 +10,38 @@ from pathlib import Path
 from typing import Any
 
 
+def build_rw_draft(
+    *,
+    rw_root: Path,
+    cand: dict[str, str],
+    res: Any,
+    model_unavailable_cls: type[BaseException],
+    on_progress: Callable[[str], None],
+) -> dict[str, Any]:
+    """把单模型结果（成功文本 / 异常）转成 draft dict，成功时写盘。"""
+    mid, label = cand["id"], cand["label"]
+    if isinstance(res, model_unavailable_cls):
+        return {"model_id": mid, "label": label, "status": "failed",
+                "reason": "模型不可用", "draft_relpath": None, "episode_relpath": None}
+    if isinstance(res, BaseException):
+        return {"model_id": mid, "label": label, "status": "failed",
+                "reason": "模型调用失败", "draft_relpath": None, "episode_relpath": None}
+    raw_text = (res or "").strip()
+    if raw_text.startswith("```"):
+        inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", raw_text)
+        if inner:
+            raw_text = inner.group(1).strip()
+    if not raw_text:
+        return {"model_id": mid, "label": label, "status": "failed",
+                "reason": "模型输出为空", "draft_relpath": None, "episode_relpath": None}
+    model_dir = rw_root / mid
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "draft.md").write_text(raw_text + "\n", encoding="utf-8")
+    on_progress(f"模型 {mid} draft 写盘完成（{len(raw_text)} 字）")
+    return {"model_id": mid, "label": label, "status": "success", "reason": None,
+            "draft_relpath": f"02_rw/{mid}/draft.md", "episode_relpath": None}
+
+
 @dataclass
 class PipelineRwRun:
     """`PipelineRunner._execute_rw` 的一次多模型运行上下文。"""
@@ -58,28 +90,13 @@ class PipelineRwRun:
         self.runner._push_outputs_patch(self.job_id, "rw", "drafts", self.ordered_drafts())
 
     def make_draft(self, cand: dict[str, str], res: Any) -> dict[str, Any]:
-        """把单模型结果（成功文本 / 异常）转成 draft dict + 成功时写盘。"""
-        mid, label = cand["id"], cand["label"]
-        if isinstance(res, self.model_unavailable_cls):
-            return {"model_id": mid, "label": label, "status": "failed",
-                    "reason": "模型不可用", "draft_relpath": None, "episode_relpath": None}
-        if isinstance(res, BaseException):
-            return {"model_id": mid, "label": label, "status": "failed",
-                    "reason": "模型调用失败", "draft_relpath": None, "episode_relpath": None}
-        raw_text = (res or "").strip()
-        if raw_text.startswith("```"):
-            inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", raw_text)
-            if inner:
-                raw_text = inner.group(1).strip()
-        if not raw_text:
-            return {"model_id": mid, "label": label, "status": "failed",
-                    "reason": "模型输出为空", "draft_relpath": None, "episode_relpath": None}
-        model_dir = self.rw_root / mid
-        model_dir.mkdir(parents=True, exist_ok=True)
-        (model_dir / "draft.md").write_text(raw_text + "\n", encoding="utf-8")
-        self.on_progress(f"模型 {mid} draft 写盘完成（{len(raw_text)} 字）")
-        return {"model_id": mid, "label": label, "status": "success", "reason": None,
-                "draft_relpath": f"02_rw/{mid}/draft.md", "episode_relpath": None}
+        return build_rw_draft(
+            rw_root=self.rw_root,
+            cand=cand,
+            res=res,
+            model_unavailable_cls=self.model_unavailable_cls,
+            on_progress=self.on_progress,
+        )
 
     async def run_one(self, cand: dict[str, str]) -> None:
         try:
