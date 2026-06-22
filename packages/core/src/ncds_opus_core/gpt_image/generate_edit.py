@@ -14,7 +14,7 @@ import sys
 from typing import Any, Dict, List
 
 
-DEFAULT_OUTPUT_ROOT = Path("/tmp/gpt-image-edit")
+DEFAULT_OUTPUT_ROOT = Path(os.environ.get("NOF_GPT_IMAGE_OUTPUT_DIR", "/tmp/gpt-image-edit"))
 CLEANUP_MAX_AGE_DAYS = 14
 
 
@@ -78,6 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mask", help="Optional mask image.")
     parser.add_argument("--out-dir", help="Directory for generated files.")
     parser.add_argument("--timeout", type=int, default=600, help="Timeout in seconds.")
+    parser.add_argument("--size", help="Aspect ratio (1:1/3:2/2:3/16:9/21:9/9:16/4:3/3:4).")
     return parser.parse_args()
 
 
@@ -102,6 +103,8 @@ def main() -> None:
     edit_cmd.extend(["--image", args.image])
     if args.mask:
         edit_cmd.extend(["--mask", args.mask])
+    if args.size:
+        edit_cmd.extend(["--size", args.size])
 
     env = os.environ.copy()
     result = run(edit_cmd, cwd=Path.cwd(), env=env, timeout=args.timeout + 30)

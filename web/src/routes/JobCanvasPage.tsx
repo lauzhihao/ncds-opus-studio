@@ -27,6 +27,7 @@ import { useJobStream } from '../hooks/useJobStream';
 import { AgentCard, type AgentCardData } from '../components/AgentCard';
 import { AgentDrawer } from '../components/AgentDrawer';
 import { PulseEdge } from '../components/PulseEdge';
+import { AppsMenu } from '../components/AppsMenu';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import {
   AGENTS,
@@ -37,9 +38,6 @@ import {
   type AgentId,
 } from '../config/agents';
 import { parseTitleTags } from '../utils/title';
-
-const NODE_TYPES = { card: AgentCard };
-const EDGE_TYPES = { pulse: PulseEdge };
 
 // 6 个 agent 的 zigzag 两列错开布局（沿用旧画布的 ROW/COL）。
 const ROW = 200;
@@ -63,12 +61,14 @@ export function JobCanvasPage() {
   const [openAgent, setOpenAgent] = useState<AgentId | null>(null);
   // 选题确认的本地脉冲：解耦后选定选题不再触发 rw 的 SSE，靠它让 angleConfirmed 立即重算翻鬼谷子 DONE。
   const [angleTick, setAngleTick] = useState(0);
-  const { job, connected } = useJobStream(jobId);
+  const { job, connected, reconnect } = useJobStream(jobId);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<AgentCardData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const initialized = useRef(false);
   const rfRef = useRef<ReactFlowInstance | null>(null);
+  const nodeTypesRef = useRef({ card: AgentCard });
+  const edgeTypesRef = useRef({ pulse: PulseEdge });
 
   useEffect(() => {
     if (!job) return;
@@ -238,6 +238,7 @@ export function JobCanvasPage() {
           <span className="dot" />
           {connected ? 'LIVE' : 'OFFLINE'}
         </span>
+        <AppsMenu />
         <ThemeSwitcher />
       </div>
 
@@ -287,8 +288,8 @@ export function JobCanvasPage() {
           onEdgesChange={onEdgesChange}
           onNodeDragStop={onNodeDragStop}
           onInit={(rf) => { rfRef.current = rf; }}
-          nodeTypes={NODE_TYPES}
-          edgeTypes={EDGE_TYPES}
+          nodeTypes={nodeTypesRef.current}
+          edgeTypes={edgeTypesRef.current}
           defaultViewport={{ x: 0, y: 0, zoom: 1 }}
           minZoom={0.3}
           maxZoom={1.5}
@@ -313,6 +314,7 @@ export function JobCanvasPage() {
           onClose={() => setOpenAgent(null)}
           onAdvanceAgent={(next) => setOpenAgent(next)}
           onTopicConfirmed={() => setAngleTick((t) => t + 1)}
+          onReconnectSSE={reconnect}
         />
       )}
     </div>

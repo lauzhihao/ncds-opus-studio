@@ -30,7 +30,7 @@ from ncds_opus_factory.server.schemas import Review, TaskEvent, TaskMeta, TaskSt
 
 # task_id 白名单：只允许字母/数字/下划线/连字符。task_dir = base_dir / task_id 是
 # 直接拼接，不显式校验的话像 ../../etc 这样的 task_id 会越出 base_dir。这里禁掉 . 和 /
-# 即可挡住路径穿越，同时兼容 _new_task_id() 的 t_<ms>_<hex> 与历史种子 id（如 t_demo_*）。
+# 即可挡住路径穿越，同时兼容 _new_task_id() 的 <cmd>_<ms>_<hex> 与历史种子 id（如 t_demo_*）。
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -46,9 +46,9 @@ def _now_iso() -> str:
     return datetime.now().isoformat()
 
 
-def _new_task_id() -> str:
-    # 时间戳前缀方便目录里按生成顺序观察；hex 后缀避免并发碰撞
-    return f"t_{_now_ms()}_{secrets.token_hex(4)}"
+def _new_task_id(cmd: str) -> str:
+    # 指令前缀方便识别命令类型；时间戳按生成顺序观察；hex 后缀避免并发碰撞
+    return f"{cmd}_{_now_ms()}{secrets.token_hex(4)}"
 
 
 class TaskStore:
@@ -93,7 +93,7 @@ class TaskStore:
         round_id: str | None = None,
         intent_key: str | None = None,
     ) -> TaskMeta:
-        task_id = _new_task_id()
+        task_id = _new_task_id(cmd)
         task_dir = self.task_dir(task_id)
         task_dir.mkdir(parents=True, exist_ok=True)
         # 预创建空 events 文件，便于 SSE tail

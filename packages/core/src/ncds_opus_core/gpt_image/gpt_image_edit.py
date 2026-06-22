@@ -30,7 +30,7 @@ DEFAULT_USER_AGENT = (
 
 
 # 502 时按顺序换模型重试：裸名先行，再 2k，再 4k，全失败才报错。
-RETRY_MODELS = ["gpt-image-2", "gpt-image-2-2k", "gpt-image-2-4k"]
+RETRY_MODELS = ["gpt-image-2"]
 RETRY_HTTP_STATUS = 502
 
 

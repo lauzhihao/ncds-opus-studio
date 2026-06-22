@@ -712,12 +712,18 @@ textarea.code-pane.editable:focus {
   border-radius: var(--r-3);
   background: var(--bg-surface-2);
 }
-/* 顶部一行：verdict（左）+ 质量等级 pill（右），不再用 absolute 飘角 */
+/* 顶部一行：字数标签（左）+ AI 味告警（左）+ 质量等级 pill（右） */
 .rw-qc-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s-2);
+}
+/* 左半组：字数标签 + AI 味告警，flex 水平排列 */
+.rw-qc-meta-left {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
 }
 .rw-qc-verdict {
   display: inline-flex;
@@ -729,6 +735,9 @@ textarea.code-pane.editable:focus {
 .rw-qc-verdict.pass { color: var(--status-done); }
 .rw-qc-verdict.fail { color: var(--status-failed, #d1242f); }
 .rw-qc-grade {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
   padding: 2px 10px;
   border-radius: var(--r-pill);
@@ -738,6 +747,10 @@ textarea.code-pane.editable:focus {
   font-weight: 600;
   letter-spacing: 0.04em;
   line-height: 1.6;
+}
+.rw-qc-wordcount {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--ink-3);
 }
 /* 雷达图 + 质量分 */
 .rw-qc-chart {

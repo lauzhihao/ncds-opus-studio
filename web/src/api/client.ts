@@ -11,6 +11,8 @@ import type {
   ParsedShare,
   PipelineDef,
   SubscriptionsConfig,
+  TaskCreateResponse,
+  TaskDetailResponse,
   WorkResolveResult,
 } from './types';
 
@@ -159,6 +161,10 @@ export const api = {
   getEpisode: (jobId: string) => get<Episode>(`/jobs/${jobId}/episode`),
   putEpisode: (jobId: string, ep: Episode) =>
     put<{ ok: boolean }>(`/jobs/${jobId}/episode`, ep),
+  submitTask: (cmd: string, params: Record<string, unknown>) =>
+    post<TaskCreateResponse>('/tasks', { cmd, params }),
+  getTask: (taskId: string) => get<TaskDetailResponse>(`/tasks/${taskId}`),
+  cancelTask: (taskId: string) => post<{ ok: boolean; status: string }>(`/tasks/${taskId}/cancel`),
   regenSceneImage: (jobId: string, sceneId: string) =>
     fetch(`/jobs/${jobId}/scenes/${sceneId}/regen-image`, { method: 'POST' })
       .then(async (r) => {

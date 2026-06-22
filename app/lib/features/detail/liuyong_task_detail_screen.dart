@@ -854,14 +854,14 @@ class _QCReport extends StatelessWidget {
     final r = draft.qcRubric;
     if (r == null) return const SizedBox.shrink();
     if (r.available != true || r.dims == null) {
-      return Text('rubric 跳过(${r.skipped ?? 'opus 不可用'})',
+      return Text('rubric 跳过(${r.skipped ?? '无可用的 judge 模型'})',
           style: AppTypography.body.copyWith(color: AppColors.ink.withValues(alpha: 0.55)));
     }
     final dims = r.dims!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('质量评分(opus rubric)', style: AppTypography.subhead.copyWith(fontWeight: FontWeight.w700)),
+        Text('质量评分(${r.judgeModel ?? 'opus'} rubric)', style: AppTypography.subhead.copyWith(fontWeight: FontWeight.w700)),
         const SizedBox(height: AppSpacing.m),
         for (final dim in _rubricDims) ...[
           _dimBar(dim, dims[dim] ?? 0),

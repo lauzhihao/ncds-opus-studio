@@ -157,11 +157,12 @@ def run(
             report = ai_taste.scan(new_text)
             on_progress(f"  第 {rounds} 轮后: {report['verdict']} - {report['summary']}")
         d["qc"] = report
-        # 第 2 层:rubric 正向质量分(opus 他评,仅标注不打回,校准期)
+        # 第 2 层:rubric 正向质量分(多模型优先级降级,仅标注不打回,校准期)
         rub = quality_rubric.score(d["text"], timeout_seconds=timeout_seconds)
         d["qc_rubric"] = rub
         if rub.get("available"):
-            on_progress(f"质检2[rubric/opus]: {rub['total']}/50 {rub['grade']}")
+            judge = rub.get("judge_model", "?")
+            on_progress(f"质检2[rubric](judge={judge}): {rub['total']}/50 {rub['grade']}")
         else:
             on_progress(f"质检2[rubric]: 跳过({rub.get('skipped')})")
         if d.get("path"):

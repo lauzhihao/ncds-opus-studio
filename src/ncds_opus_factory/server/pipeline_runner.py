@@ -791,7 +791,8 @@ class PipelineRunner:
         try:
             raw_text = await _invoke_rw_candidate(cand, user_prompt, system_prompt, on_progress)
         except _ModelUnavailable as exc:
-            raise RuntimeError(f"模型 {model_id} 不可用：{exc}") from exc
+            on_progress(f"模型 {model_id} 不可用，跳过: {exc}")
+            return
 
         # 剥模型偶尔自带的 ```markdown ... ``` 包裹
         cleaned = (raw_text or "").strip()
@@ -879,7 +880,7 @@ class PipelineRunner:
             self._push_progress(job_id, "rw", f"[refine {model_id}] {msg}")
 
         on_progress(f"按 {len(issues)} 条建议优化启动")
-        refined = await asyncio.to_thread(quality_rubric.refine, text, issues)
+        refined = await asyncio.to_thread(quality_rubric.refine, text, issues, prefer_models={model_id})
         if not refined or len(refined.strip()) < 200:
             raise RuntimeError("优化未返回有效稿（已保留原稿）")
         draft_path.write_text(refined.strip() + "\n", encoding="utf-8")
@@ -2170,10 +2171,10 @@ class PipelineRunner:
             mid, label = cand["id"], cand["label"]
             if isinstance(res, _ModelUnavailable):
                 return {"model_id": mid, "label": label, "status": "failed",
-                        "reason": f"模型不可用：{res}", "draft_relpath": None, "episode_relpath": None}
+                        "reason": "模型不可用", "draft_relpath": None, "episode_relpath": None}
             if isinstance(res, BaseException):
                 return {"model_id": mid, "label": label, "status": "failed",
-                        "reason": str(res), "draft_relpath": None, "episode_relpath": None}
+                        "reason": "模型调用失败", "draft_relpath": None, "episode_relpath": None}
             raw_text = (res or "").strip()
             if raw_text.startswith("```"):
                 inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", raw_text)
@@ -2192,7 +2193,10 @@ class PipelineRunner:
         async def run_one(cand: dict[str, str]) -> None:
             try:
                 res: Any = await _invoke_rw_candidate(cand, user_prompt, system_prompt, on_progress, push_status)
-            except BaseException as exc:  # noqa: BLE001 — 失败/不可用都收进 draft
+            except _ModelUnavailable as exc:
+                on_progress(f"  [{cand['id']}] 不可用，静默跳过")
+                return  # 不可用静默跳过，不加入 drafts，前端不显示
+            except BaseException as exc:  # noqa: BLE001 — 运行时失败保留在列表
                 res = exc
             draft = make_draft(cand, res)
             if draft.get("status") == "success":
@@ -2675,7 +2679,9 @@ def _polish_transcript_with_opus(
 # 增删候选即生效（前端 tab、质检、增量写盘、重写/优化均数据驱动）。
 MODEL_CANDIDATES: list[dict[str, str]] = [
     {"id": "opus",         "label": "改写方案 A",  "runner": "opus",         "model": "claude-opus-4-8"},
-    {"id": "deepseek",     "label": "改写方案 D",  "runner": "deepseek",     "model": "deepseek-v4-pro"},
+    {"id": "deepseek",     "label": "改写方案 B",  "runner": "deepseek",     "model": "deepseek-v4-pro"},
+    {"id": "agy",          "label": "改写方案 C",  "runner": "agy",          "model": "gemini-3.5-flash"},
+    {"id": "codex",        "label": "改写方案 D",  "runner": "scodex",       "model": "gpt-5.5-codex"},
 ]
 
 
@@ -2695,6 +2701,8 @@ def _check_model_available(cand: dict[str, str]) -> tuple[bool, str]:
     if runner == "gemini_local":
         p = Path.home() / ".gemini" / "g.sh"
         return (p.is_file(), "~/.gemini/g.sh 未安装")
+    if runner == "agy":
+        return (shutil.which("agy") is not None, "本机未安装 agy 启动器")
     if runner == "deepseek":
         return (bool(os.environ.get("DEEPSEEK_API_KEY")), "DEEPSEEK_API_KEY 未设置")
     return (False, f"unknown runner: {runner}")
@@ -2740,6 +2748,8 @@ async def _invoke_rw_candidate(
                 expect_json=False,
             )
             text = await asyncio.to_thread(_call_scodex_for_rw, combined, cand["model"])
+        elif runner == "agy":
+            text = await asyncio.to_thread(_call_agy_for_rw, user_prompt, system_prompt, cand["model"])
         elif runner == "deepseek":
             text = await asyncio.to_thread(_call_deepseek_for_rw, user_prompt, system_prompt, cand["model"])
         else:
@@ -2901,6 +2911,24 @@ def _call_deepseek_for_rw(user_prompt: str, system_prompt: str, model_id: str) -
     return call_deepseek(user_prompt, system_prompt=system_prompt, model=model_id)
 
 
+def _call_agy_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> str:
+    """rw 改写候选的 AGY 调用 —— 委托 common.agy_cli.call_agy（单点实现）。
+
+    AGY 没有独立的 system 通道，按 codex 方式把 system_prompt 拼进 user prompt 头部。
+    """
+    from ncds_opus_factory.common.agy_cli import call_agy
+
+    combined = "\n".join([
+        "【系统角色】",
+        system_prompt,
+        "",
+        "【任务要求】",
+        user_prompt,
+    ]) if system_prompt else user_prompt
+
+    return call_agy(combined, model=model_id)
+
+
 # RW 写作兜底正文：仅当作品**无垂类标签(domain)**时用这段通用写作要求。
 # 有 domain 时，写作改由 domain_profiles 的 liuyong 槽位（该垂类的完整写作方法，含目标体裁/
 # 结构/语言标准/合规红线）独家驱动——「体裁 profile」这一层已废（格式由垂类标签规定，二者职责重叠）。
@@ -2911,7 +2939,7 @@ _GENERIC_RW_BODY: list[str] = [
     "- 体裁、风格、结构由你判断什么最适合这份素材；",
     "- 开头黄金 3 秒抛钩子（反差 / 反常识 / 悬念），结尾有力收束；",
     "- 口语化、强节奏、信息密度高；不堆术语、不写 AI 味套话（如「首先 / 其次 / 综上所述」）；",
-    "- 合理分段，必要时加 `## ` 小标题。",
+    "- 合理分段（用空行分隔），不要 markdown 标记。",
 ]
 
 
@@ -2991,9 +3019,11 @@ def _apply_rw_qc(model_dir: Path, model_id: str, on_progress: Callable[[str], No
         text = new_text
         report = ai_taste.scan(text)
         on_progress(f"  [{model_id}] 第 {rounds} 轮后: {report.get('verdict')}")
-    rub = quality_rubric.score(text)
+    # 第 2 层：rubric 正向质量分（多模型优先级降级，避免使用改写同一模型）。
+    rub = quality_rubric.score(text, avoid_models={model_id})
     if rub.get("available"):
-        on_progress(f"质检2[rubric/{model_id}]: {rub.get('total')}/50 {rub.get('grade')}")
+        judge = rub.get("judge_model", "?")
+        on_progress(f"质检2[rubric/{model_id}](judge={judge}): {rub.get('total')}/50 {rub.get('grade')}")
     else:
         on_progress(f"质检2[rubric/{model_id}]: 跳过（{rub.get('skipped')}）")
     draft_path.write_text(text + "\n", encoding="utf-8")
@@ -3010,7 +3040,7 @@ def _build_rw_prompt(
 ) -> tuple[str, str]:
     """构造 RW 的 (system_prompt, user_prompt)。
 
-    本阶段产物 = 候选稿 markdown 文章（**不是** beats[] JSON）；LINES 阶段才把定稿切成 beats[]。
+    本阶段产物 = 候选稿纯文本文章（**不是** beats[] JSON 或 markdown）；LINES 阶段才把定稿切成 beats[]。
 
     写作要求来源（单一权威，已无「体裁 profile」叠加层）：
       - domain_guidance（domain_profiles 的 liuyong 槽位）非空 → 它就是该垂类的完整写作方法
@@ -3019,7 +3049,7 @@ def _build_rw_prompt(
     """
     system_prompt = (
         "你是中文内容改写的资深写手。请按下方【写作要求】把源文档改写成一篇可直接使用的中文稿件，"
-        "保留原意、不编造事实，输出 markdown 正文，不要 JSON 或代码块包裹。"
+        "保留原意、不编造事实，输出纯文本正文，不要 JSON 或代码块包裹。"
     )
     if domain_guidance and domain_guidance.strip():
         parts: list[str] = ["【写作要求】", domain_guidance.strip()]
@@ -3029,7 +3059,7 @@ def _build_rw_prompt(
         "",
         "【通用约束】",
         "- 必须使用简体中文；",
-        "- 直接输出 markdown 正文，不要 JSON、不要 ``` 代码块包裹、不要额外的元描述；",
+        "- 直接输出纯文本正文，不要 JSON、不要 ``` 代码块包裹、不要额外的元描述；",
         "- 不得编造源文档未出现的人物、平台、数据；只能改写、压缩、重组源文档信息。",
         "",
         "== 源文档 ==",

@@ -126,19 +126,28 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
     api.getGuiguzi(jobId).then(setResult).catch(() => setResult(null));
   }, [jobId]);
 
+  // running 期间轮询（每 2s），兜底 SSE 断连/丢事件场景
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
-    if (!running) return;
-    let cancelled = false;
-    api
-      .getGuiguzi(jobId)
-      .then((d) => {
-        if (!cancelled) setResult(d);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
+    if (!running) {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      return;
+    }
+    const tick = () => {
+      api.getGuiguzi(jobId).then((d) => {
+        if (d.status !== 'running' && pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        setResult(d);
+      }).catch(() => {});
     };
-  }, [running, jobId, job]);
+    tick();
+    pollRef.current = setInterval(tick, 2000);
+    return () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    };
+  }, [running, jobId]);
 
   useEffect(() => {
     if (analyzed && result?.analysis) {

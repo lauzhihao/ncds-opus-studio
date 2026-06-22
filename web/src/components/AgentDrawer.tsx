@@ -39,6 +39,8 @@ interface Props {
   onAdvanceAgent: (nextAgentId: AgentId) => void;
   // 鬼谷子选定选题时上报：让 page 翻 angleConfirmed（解耦后选题不再触发 rw 的 SSE，需本地脉冲）。
   onTopicConfirmed?: () => void;
+  /** 外部主动触发 SSE 重连，用于「重新执行」等操作前后避免竞态。 */
+  onReconnectSSE?: () => void;
 }
 
 function defaultIdleState(name: string): NodeState {
@@ -62,7 +64,7 @@ const STATUS_DOT_ZH: Record<NodeStatus, string> = {
   failed: '失败',
 };
 
-export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClose, onAdvanceAgent, onTopicConfirmed }: Props) {
+export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClose, onAdvanceAgent, onTopicConfirmed, onReconnectSSE }: Props) {
   const { members } = agent;
   const Icon = agent.icon;
 
@@ -172,7 +174,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
         );
       case 'rw':
         return (
-          <LiuyongPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('rw')} />
+          <LiuyongPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('rw')} onReconnectSSE={onReconnectSSE} />
         );
       case 'lines':
         return (

@@ -595,8 +595,9 @@ class QCHit {
 
 /// opus rubric:5 维各 /10,total /50,grade=优秀/良好/需重修;不可用时 available=false。
 class RubricQC {
-  const RubricQC({this.available, this.dims, this.total, this.grade, this.issues, this.skipped});
+  const RubricQC({this.available, this.judgeModel, this.dims, this.total, this.grade, this.issues, this.skipped});
   final bool? available;
+  final String? judgeModel;
   final Map<String, int>? dims;
   final int? total;
   final String? grade;
@@ -605,6 +606,7 @@ class RubricQC {
 
   factory RubricQC.fromJson(Map<String, dynamic> j) => RubricQC(
         available: j['available'] as bool?,
+        judgeModel: j['judge_model'] as String?,
         dims: (j['dims'] as Map?)?.map((k, v) => MapEntry(k.toString(), v is num ? v.toInt() : 0)),
         total: (j['total'] as num?)?.toInt(),
         grade: j['grade'] as String?,

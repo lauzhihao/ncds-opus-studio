@@ -467,3 +467,91 @@
   margin-top: var(--s-2);
 }
 
+/* ============================================================
+   Apps Menu (9-dots + popover panel)
+   ============================================================ */
+.apps-menu {
+  position: relative;
+  display: flex;
+}
+.apps-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.apps-menu-btn:hover {
+  background: var(--bg-overlay);
+  color: var(--ink-1);
+}
+.apps-menu-btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+.apps-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 31;
+}
+.apps-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 32;
+  min-width: 160px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-4);
+  padding: var(--s-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: panel-pop var(--dur-fast) var(--ease-out);
+}
+@keyframes panel-pop {
+  from { transform: translateY(-4px) scale(0.96); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+.apps-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border: none;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ink-1);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.apps-menu-item:hover { background: var(--bg-overlay); }
+.apps-menu-item:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+.apps-menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-2);
+  background: var(--accent-tint);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.apps-menu-item-label {
+  font-weight: 500;
+}
+

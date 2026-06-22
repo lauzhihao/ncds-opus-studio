@@ -1,4 +1,4 @@
-/* 画布页 + 节点卡 NodeCard  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
+/* 画布页 + 节点卡 NodeCard + 空白画布  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
 /* ============================================================
    Canvas page
    ============================================================ */
@@ -246,4 +246,242 @@
   from { background-position: 200% 0; }
   to   { background-position: 0% 0; }
 }
+
+/* ============================================================
+   Blank Canvas (文生图/图生图)
+   ============================================================ */
+.canvas-blank {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: auto;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.canvas-blank:has(.canvas-image-card) {
+  display: block;
+}
+.canvas-blank:not(:has(.canvas-image-card)) {
+  display: grid;
+  place-items: center;
+}
+.canvas-blank.is-dragover {
+  background: var(--accent-tint);
+}
+.canvas-drag-hint {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: var(--text-lg);
+  font-family: var(--font-mono);
+  color: var(--accent);
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  z-index: 1;
+}
+.canvas-blank-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.canvas-blank-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-tint);
+  transform: scale(1.08);
+}
+.canvas-blank-add:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+.canvas-image-card {
+  position: absolute;
+  border-radius: var(--r-3);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: var(--shadow-2);
+  padding: var(--s-3);
+}
+.canvas-image-photo {
+  border-radius: calc(var(--r-3) - 2px);
+  overflow: hidden;
+  background: var(--bg-overlay);
+}
+.canvas-image-photo img,
+.canvas-image-loading {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  pointer-events: none;
+  user-select: none;
+}
+.canvas-image-loading {
+  background: linear-gradient(
+    135deg,
+    var(--bg-overlay) 0%,
+    var(--bg-overlay) 30%,
+    var(--accent-tint) 50%,
+    var(--bg-overlay) 70%,
+    var(--bg-overlay) 100%
+  );
+  background-size: 200% 200%;
+  animation: canvas-shimmer 0.5s ease-in-out infinite;
+}
+@keyframes canvas-shimmer {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 100% 100%; }
+}
+.canvas-image-loading-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.canvas-image-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.canvas-image-spinner::after {
+  content: '';
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--accent-tint);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: canvas-spin 0.6s linear infinite;
+}
+@keyframes canvas-spin {
+  to { transform: rotate(360deg); }
+}
+.canvas-image-error {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  background: color-mix(in srgb, var(--status-failed) 8%, var(--bg-overlay));
+  color: var(--status-failed);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  text-align: center;
+  word-break: break-word;
+  user-select: none;
+}
+.canvas-image-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--s-3);
+  padding: 6px 10px;
+  min-height: 34px;
+  background: var(--accent-tint);
+  border-radius: calc(var(--r-3) - 2px);
+  cursor: grab;
+  user-select: none;
+}
+.canvas-image-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.canvas-image-bar-btn:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.canvas-image-timer {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+}
+.canvas-image-timer.interrupted {
+  color: var(--status-failed);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.canvas-image-interrupted {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--status-failed);
+  background: var(--bg-overlay);
+}
+.copy-feedback {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: #22c55e;
+  white-space: nowrap;
+  animation: fadeIn 0.15s ease-out;
+}
+.copy-feedback .check {
+  font-weight: 700;
+  font-size: 13px;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateX(-4px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.canvas-image-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.canvas-image-card:hover .canvas-image-resize {
+  opacity: 1;
+}
+.canvas-image-resize::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--ink-3);
+  border-bottom: 2px solid var(--ink-3);
+}
+
 

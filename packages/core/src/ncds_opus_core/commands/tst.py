@@ -55,6 +55,7 @@ def parse_command_body(text: str) -> tuple[list[str], str]:
 def run(
     prompt: str,
     reference_images: list[str | Path],
+    size: str = "3:4",
     timeout_seconds: int = DEFAULT_TIMEOUT,
     on_progress: ProgressFn = _noop,
     extra_args: list[str] | None = None,
@@ -71,7 +72,8 @@ def run(
     if len(reference_images) > 1:
         image_args.extend(["--mask", str(reference_images[1])])
 
-    command = [sys.executable, str(IMAGE_EDIT_GATEWAY), "--prompt", prompt, *image_args, *(extra_args or [])]
+    command = [sys.executable, str(IMAGE_EDIT_GATEWAY), "--prompt", prompt, "--size", size,
+               "--timeout", str(timeout_seconds), *image_args, *(extra_args or [])]
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "图生图失败").strip())

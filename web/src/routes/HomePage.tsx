@@ -11,6 +11,7 @@ import { api } from '../api/client';
 import type { AccountResolveResult, JobSummary, SubscriptionAuthor, WorkResolveResult } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
+import { AppsMenu } from '../components/AppsMenu';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { AccountCard, JobCard } from '../components/WorkCards';
 import { useToast } from '../components/Toast';
@@ -285,6 +286,7 @@ export function HomePage() {
           <span className="mark">NCDS Opus Studio</span>
         </div>
         <div className="spacer" />
+        <AppsMenu />
         <ThemeSwitcher />
         {/* 移动端：赛道筛选收进右上角汉堡菜单（桌面端 CSS 隐藏，筛选仍内联在分区标题行） */}
         <div className="topbar-filter-menu">

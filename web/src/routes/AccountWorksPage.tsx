@@ -7,6 +7,7 @@ import { AlertCircle, ArrowLeft, Clock, Heart, Loader2, MessageCircle, Play, Rot
 
 import { api } from '../api/client';
 import type { AccountPost, SubscriptionAuthor } from '../api/types';
+import { AppsMenu } from '../components/AppsMenu';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useToast } from '../components/Toast';
 import { CoverImage } from '../components/WorkCards';
@@ -134,6 +135,7 @@ export function AccountWorksPage() {
           <ArrowLeft size={14} strokeWidth={1.6} /> 返回
         </button>
         <div className="spacer" />
+        <AppsMenu />
         <ThemeSwitcher />
       </div>
 

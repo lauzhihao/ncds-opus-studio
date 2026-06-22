@@ -15,12 +15,28 @@ common 层不依赖 server:opus 调用在本模块自带(仿 server/pipeline_run
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
-OPUS_MODEL = "claude-opus-4-8"
+from ncds_opus_factory.common.agy_cli import call_agy
+from ncds_opus_factory.common.deepseek_cli import call_deepseek
+from ncds_opus_factory.common.opus_cli import call_opus
+
+# 质检 judge 优先级（靠前优先尝试）。id 与 MODEL_CANDIDATES.id 对齐，避免_models 据此传递。
+JUDGE_PRIORITY: list[str] = ["opus", "codex", "agy", "ds"]
+
+# 每个 judge 对应的 runner 类型和实际模型名
+_JUDGE_MODEL_MAP: dict[str, str] = {
+    "opus":   "claude-opus-4-8",
+    "codex":  "gpt-5.5-codex",
+    "agy":    "gemini-3.5-flash",
+    "ds":     "deepseek-v4-pro",
+}
+
 DEFAULT_TIMEOUT_SECONDS = 600
 DIMENSIONS: tuple[str, ...] = ("节奏", "真实性", "精炼度", "直接性", "信任度")
 
@@ -30,8 +46,85 @@ GRADE_GOOD = 35
 
 
 def available() -> bool:
-    """本机 opus 启动器是否就绪。不可用时第 2 层优雅降级、不报错。"""
-    return shutil.which("opus") is not None
+    """任意一个 judge 模型是否就绪。不可用时第 2 层优雅降级。"""
+    return any(_check_judge_available(mid) for mid in JUDGE_PRIORITY)
+
+
+def _check_judge_available(model_id: str) -> bool:
+    """检查指定 judge 模型在本机是否可用。"""
+    if model_id == "opus":
+        if shutil.which("opus") is not None:
+            return True
+        return (Path.home() / ".sclaude" / "bin" / "opus").is_file()
+    elif model_id == "codex":
+        return shutil.which("scodex") is not None
+    elif model_id == "agy":
+        return shutil.which("agy") is not None
+    elif model_id == "ds":
+        return bool(os.environ.get("DEEPSEEK_API_KEY"))
+    return False
+
+
+def _call_scodex_judge(prompt: str, model_id: str, timeout: int) -> str:
+    """调用 scodex (codex CLI) 执行 judge，返回 raw text。"""
+    args = [
+        "scodex", "launch", "--no-resume", "--",
+        "exec",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "-s", "read-only",
+        "-m", model_id,
+        "--json",
+        prompt,
+    ]
+    proc = subprocess.run(
+        args, capture_output=True, text=True,
+        timeout=timeout, stdin=subprocess.DEVNULL,
+    )
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
+        raise RuntimeError(f"scodex judge exited {proc.returncode}: {tail}")
+
+    final = ""
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "item.completed":
+            continue
+        item = payload.get("item") or {}
+        text = item.get("text")
+        if not isinstance(text, str) and isinstance(item.get("content"), list):
+            text = "".join(
+                p.get("text", "")
+                for p in item["content"]
+                if isinstance(p, dict) and isinstance(p.get("text"), str)
+            )
+        if isinstance(text, str) and text.strip():
+            final = text.strip()
+    if not final:
+        raise RuntimeError(f"scodex judge empty; stdout tail={proc.stdout[-300:]}")
+    return final
+
+
+def _call_judge(prompt: str, model_id: str, timeout: int) -> str:
+    """按 model_id 选择合适的 runner 调用 judge，返回 raw text。"""
+    model = _JUDGE_MODEL_MAP.get(model_id)
+    if not model:
+        raise ValueError(f"unknown judge model: {model_id}")
+    if model_id == "opus":
+        return call_opus(prompt, timeout_seconds=timeout)
+    elif model_id == "codex":
+        return _call_scodex_judge(prompt, model, timeout)
+    elif model_id == "agy":
+        return call_agy(prompt, timeout_seconds=timeout)
+    elif model_id == "ds":
+        return call_deepseek(prompt, model=model, timeout_seconds=timeout)
+    raise ValueError(f"unknown judge model: {model_id}")
 
 
 def grade_of(total: int) -> str:
@@ -144,72 +237,48 @@ def parse_rubric_output(raw: str) -> dict[str, Any]:
     return {"dims": dims, "total": total, "issues": [str(x) for x in issues][:8]}
 
 
-def _call_opus_judge(prompt: str, timeout_seconds: int) -> str:
-    """走本机 opus 启动器 -> claude CLI,返回 result 文本。
-
-    仿 server/pipeline_runner.py 的 _call_opus_for_rw:--no-resume / --no-session-persistence
-    / stdin=DEVNULL 防会话污染;逐行扫 stdout 取最后一条 type=result 的 result。
-    """
-    args = [
-        "opus", "launch", "--no-resume", "--",
-        "-p", prompt,
-        "--output-format", "json",
-        "--model", OPUS_MODEL,
-        "--effort", "max",
-        "--permission-mode", "bypassPermissions",
-        "--tools", "",
-        "--no-session-persistence",
-    ]
-    proc = subprocess.run(
-        args, capture_output=True, text=True,
-        timeout=timeout_seconds, stdin=subprocess.DEVNULL,
-    )
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-400:]
-        raise RuntimeError(f"opus judge exited {proc.returncode}: {tail}")
-    final_text = ""
-    for raw_line in proc.stdout.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if payload.get("type") != "result":
-            continue
-        if payload.get("is_error"):
-            raise RuntimeError(f"opus judge error: {payload.get('result')}")
-        result = payload.get("result")
-        if isinstance(result, str) and result.strip():
-            final_text = result.strip()
-    if not final_text:
-        raise RuntimeError(f"opus judge empty; stdout tail={proc.stdout[-200:]}")
-    return final_text
-
-
-def score(text: str, *, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> dict[str, Any]:
+def score(
+    text: str,
+    *,
+    avoid_models: set[str] | None = None,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     """对成稿打 rubric 质量分。
 
-    opus 不可用 / 调用失败 / 解析失败 -> 优雅降级,返回 available=False+skipped,
-    绝不抛异常(第 2 层是仅标注的附加信息,不能因它拖垮整个柳永流程)。
+    按 JUDGE_PRIORITY 顺序尝试可用 judge，优先使用非 avoid_models 的模型。
+    所有 judge 不可用 / 全部调用失败 -> 优雅降级，返回 available=False+skipped。
+    avoid_models 传入改写所使用的模型 id 集合（如 ``{"agy"}``），避免自评偏差。
     """
-    if not available():
-        return {"available": False, "skipped": "opus 不可用(本机无 opus 启动器)"}
-    try:
-        raw = _call_opus_judge(build_rubric_prompt(text), timeout_seconds)
-        parsed = parse_rubric_output(raw)
-    except Exception as exc:  # 降级:judge 失败不拖垮主流程
-        return {"available": False, "skipped": f"rubric 打分失败: {exc}"}
-    total = parsed["total"]
-    return {
-        "available": True,
-        "dims": parsed["dims"],
-        "total": total,
-        "grade": grade_of(total),
-        "issues": parsed["issues"],
-        "calibration": "校准期默认阈值(45优秀/35良好),分数仅供参考,待真稿校准",
-    }
+    candidates = [m for m in JUDGE_PRIORITY if m not in (avoid_models or set())]
+    fallback = [m for m in JUDGE_PRIORITY if m in (avoid_models or set())]
+    ordered = candidates + fallback
+
+    prompt = build_rubric_prompt(text)
+    errors: list[str] = []
+    for model_id in ordered:
+        if not _check_judge_available(model_id):
+            continue
+        try:
+            raw = _call_judge(prompt, model_id, timeout_seconds)
+            parsed = parse_rubric_output(raw)
+        except Exception as exc:
+            errors.append(f"{model_id}={exc}")
+            continue
+        total = parsed["total"]
+        return {
+            "available": True,
+            "judge_model": model_id,
+            "dims": parsed["dims"],
+            "total": total,
+            "grade": grade_of(total),
+            "issues": parsed["issues"],
+            "calibration": "校准期默认阈值(45优秀/35良好),分数仅供参考,待真稿校准",
+        }
+
+    all_models = [m for m in JUDGE_PRIORITY if _check_judge_available(m)]
+    if not all_models:
+        return {"available": False, "skipped": "无可用的 judge 模型(本机未安装 opus/scodex/agy/ds)"}
+    return {"available": False, "skipped": f"rubric 打分失败: {'; '.join(errors)}"}
 
 
 def build_refine_prompt(text: str, issues: list[str]) -> str:
@@ -241,28 +310,46 @@ def build_refine_prompt(text: str, issues: list[str]) -> str:
 
 
 def refine(
-    text: str, issues: list[str], *, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    text: str,
+    issues: list[str],
+    *,
+    prefer_models: set[str] | None = None,
+    avoid_models: set[str] | None = None,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> str | None:
     """按 rubric 优化建议(issues)重写一条口播稿,返回优化后的全文。
 
     定位:这是"按建议优化"按钮的后端能力——不重新生成,只基于现有稿+issues 做最小改动。
-    opus 不可用 / 调用失败 / 输出过短 -> 返回 None(由调用方决定保留原稿,绝不抛异常)。
+    按 JUDGE_PRIORITY 尝试可用模型，优先使用 prefer_models，其次非 avoid_models。
+    全部调用失败 / 输出过短 -> 返回 None(由调用方决定保留原稿,绝不抛异常)。
     """
     if not available() or not text.strip() or not issues:
         return None
-    try:
-        raw = _call_opus_judge(build_refine_prompt(text, issues), timeout_seconds)
-    except Exception:  # 优化失败不致命,调用方保留原稿
-        return None
-    out = (raw or "").strip()
-    if not out:
-        return None
-    # 剥模型偶发自带的 ```markdown ... ``` 包裹
-    if out.startswith("```"):
-        inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", out)
-        if inner:
-            out = inner.group(1).strip()
-    return out or None
+
+    preferred = [m for m in JUDGE_PRIORITY if m in (prefer_models or set())]
+    candidates = [m for m in JUDGE_PRIORITY if m not in (avoid_models or set()) and m not in (prefer_models or set())]
+    fallback = [m for m in JUDGE_PRIORITY if m in (avoid_models or set())]
+    ordered = preferred + candidates + fallback
+
+    prompt = build_refine_prompt(text, issues)
+    for model_id in ordered:
+        if not _check_judge_available(model_id):
+            continue
+        try:
+            raw = _call_judge(prompt, model_id, timeout_seconds)
+        except Exception:
+            continue
+        out = (raw or "").strip()
+        if not out:
+            continue
+        # 剥模型偶发自带的 ```markdown ... ``` 包裹
+        if out.startswith("```"):
+            inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", out)
+            if inner:
+                out = inner.group(1).strip()
+        if out:
+            return out
+    return None
 
 
 if __name__ == "__main__":

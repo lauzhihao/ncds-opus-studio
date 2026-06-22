@@ -76,20 +76,45 @@ def test_prompt_embeds_text():
 
 # --- score 优雅降级(绝不抛异常) ---
 
-def test_score_degrades_when_opus_missing(monkeypatch):
-    monkeypatch.setattr(quality_rubric.shutil, "which", lambda _name: None)
+def test_score_degrades_when_no_judge_available(monkeypatch):
+    monkeypatch.setattr(quality_rubric, "_check_judge_available", lambda _mid: False)
     r = quality_rubric.score("一段稿子")
     assert r["available"] is False
     assert "skipped" in r
 
 
-def test_score_degrades_on_judge_failure(monkeypatch):
-    monkeypatch.setattr(quality_rubric, "available", lambda: True)
+def test_score_degrades_on_all_judges_fail(monkeypatch):
+    def fake_available(mid: str) -> bool:
+        return mid in ("opus", "codex", "agy", "ds")
+    monkeypatch.setattr(quality_rubric, "_check_judge_available", fake_available)
 
     def boom(*_a, **_k):
-        raise RuntimeError("opus 炸了")
+        raise RuntimeError("judge 炸了")
 
-    monkeypatch.setattr(quality_rubric, "_call_opus_judge", boom)
+    monkeypatch.setattr(quality_rubric, "_call_judge", boom)
     r = quality_rubric.score("一段稿子")
     assert r["available"] is False
     assert "失败" in r["skipped"]
+
+
+def test_score_uses_first_available_judge(monkeypatch):
+    """验证 score 按优先级使用第一个可用 judge。"""
+    called: list[str] = []
+
+    def fake_available(mid: str) -> bool:
+        return mid in ("opus", "ds")  # opus 可用, codex/agy 不可用
+    monkeypatch.setattr(quality_rubric, "_check_judge_available", fake_available)
+
+    def tracking_call(prompt: str, model_id: str, timeout: int) -> str:
+        called.append(model_id)
+        if model_id == "opus":
+            raise RuntimeError("opus failed")
+        # ds 返回 mock JSON
+        return '{"dims":{"节奏":8,"真实性":7,"精炼度":6,"直接性":7,"信任度":8},"issues":[]}'
+
+    monkeypatch.setattr(quality_rubric, "_call_judge", tracking_call)
+
+    r = quality_rubric.score("一段稿子", avoid_models=set())
+    assert r["available"] is True
+    assert r["judge_model"] == "ds"
+    assert called == ["opus", "ds"]

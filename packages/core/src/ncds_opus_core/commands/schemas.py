@@ -48,13 +48,17 @@ def _f(
 PRIMITIVE_SCHEMAS: dict[str, dict[str, Any]] = {
     "wst": {
         "label": "文生图", "group": "primitive", "summary": "gpt-image 文生图",
-        "fields": [_f("prompt", "提示词", "text", required=True)],
+        "fields": [
+            _f("prompt", "提示词", "text", required=True),
+            _f("size", "尺寸", "string", default="3:4", enum=["3:4", "1:1", "4:3", "9:16", "16:9"]),
+        ],
     },
     "tst": {
         "label": "图生图", "group": "primitive", "summary": "gpt-image 参考图编辑",
         "fields": [
             _f("prompt", "提示词", "text", required=True),
             _f("reference_images", "参考图", "string[]", required=True, help="本地路径或 URL"),
+            _f("size", "尺寸", "string", default="3:4", enum=["3:4", "1:1", "4:3", "9:16", "16:9"]),
         ],
     },
     "vid": {

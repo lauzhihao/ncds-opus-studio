@@ -10,7 +10,7 @@
 // 注：本阶段（A）RW 不再出 beats JSON；LINES 节点接收 02_rw/draft.md 后调 LLM 把它结构化。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Play, RefreshCw, Sparkles, Square } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileText, Play, RefreshCw, Sparkles, Square } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type { NodeState, PipelineNodeDef, RwDraft } from '../../api/types';
@@ -22,6 +22,8 @@ interface Props {
   nodeDef: PipelineNodeDef;
   nodeState: NodeState;
   onAdvanced?: () => void;
+  /** 外部主动触发 SSE 重连，防止 doRun 期间 SSE 事件冲入造成竞态。 */
+  onReconnectSSE?: () => void;
 }
 
 const NEXT_NODE = 'lines';
@@ -87,16 +89,22 @@ function QcRadar({ dims, max = 10, size = 180 }: { dims: Record<string, number>;
 // 质检字段（qc/qc_rubric）由后端质检闸门产出；还在后台跑时字段未到，整块不渲染。
 // AI 味 verdict 只在「仍超标」(fail) 时提示：pass 是自动打回重写后的常态终判，
 // 对用户无信息量、反像系统自言自语，故 pass 时静默（只留质量等级 pill）。
+function countChars(text: string): number {
+  return text.replace(/\s/g, '').length;
+}
+
 function QcReport({
   draft,
   onRefine,
   refining,
   canRefine,
+  wordCount,
 }: {
   draft?: RwDraft;
   onRefine?: () => void;
   refining?: boolean;
   canRefine?: boolean;
+  wordCount?: number;
 }) {
   if (!draft || draft.status !== 'success') return null;
   const qc = draft.qc;
@@ -105,26 +113,31 @@ function QcReport({
   const showFail = qc?.verdict === 'fail';
   return (
     <div className="rw-qc-report">
-      {/* 顶部一行：AI 味「仍超标」告警（仅 fail，左）+ 质量等级 pill（右） */}
-      {(showFail || rub?.grade) && (
-        <div className="rw-qc-head">
-          {showFail ? (
+      {/* 顶部一行：字数标签（左）+ AI 味告警（左）+ 质量等级 pill（右） */}
+      <div className="rw-qc-head">
+        <span className="rw-qc-meta-left">
+          <span className="rw-qc-grade rw-qc-wordcount">
+            <FileText size={12} strokeWidth={1.6} />
+            {wordCount ?? '-'}
+          </span>
+          {showFail && (
             <span className="rw-qc-verdict fail">
               <AlertTriangle size={14} />
               AI 味仍超标
             </span>
-          ) : (
-            <span />
           )}
-          {rub?.grade && <span className="rw-qc-grade">{rub.grade}</span>}
-        </div>
-      )}
+        </span>
+        {rub?.grade && <span className="rw-qc-grade">{rub.grade}</span>}
+      </div>
 
       {rub?.available ? (
         <div className="rw-qc-chart">
           <QcRadar dims={rub.dims ?? {}} />
           <span className="rw-qc-score">
             质量分 <b>{rub.total}</b> / 50
+            {rub.judge_model && (
+              <span className="rw-qc-judge">（judge: {rub.judge_model}）</span>
+            )}
           </span>
         </div>
       ) : rub ? (
@@ -144,8 +157,8 @@ function QcReport({
                   refining
                     ? '优化中…'
                     : canRefine
-                      ? '让模型按上述建议优化当前稿（保留爆款骨架），改完自动重跑质检'
-                      : '需先等本模型完成'
+                      ? '让模型按上述建议优化所有稿件（保留爆款骨架），改完自动重跑质检'
+                      : '需先等执行完成'
                 }
                 onClick={onRefine}
               >
@@ -170,13 +183,13 @@ function QcReport({
 // 泛化：对外只暴露「改写方案 A/B/C/D」，不泄露真实模型身份（与后端 MODEL_CANDIDATES.label 一致）。
 const MODEL_LABELS: Record<string, string> = {
   opus: '改写方案 A',
-  gpt5: '改写方案 B',
-  gemini_local: '改写方案 C',
-  deepseek: '改写方案 D',
+  deepseek: '改写方案 B',
+  agy: '改写方案 C',
+  codex: '改写方案 D',
 };
 const modelLabel = (id: string, fallback: string): string => MODEL_LABELS[id] ?? fallback;
 
-export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced, onReconnectSSE }: Props) {
   const { showToast } = useToast();
   const drafts = (nodeState.outputs?.drafts as RwDraft[] | undefined) ?? [];
   // 下方 tabs 只渲染成功的稿件；失败/不可用模型只在上面的状态行展示。
@@ -279,12 +292,16 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
 
   async function doRun() {
     setActionBusy(true);
+    // 断开 SSE，避免 runNode 期间后端先发的 SSE 事件与 POST 返回产生竞态
+    onReconnectSSE?.();
     try {
       await api.runNode(jobId, nodeDef.name);
     } catch (e) {
       showToast('启动失败，请稍后再试');
       console.error('[LiuyongPanel] 启动失败', e);
     } finally {
+      // 重连 SSE，确保后续事件可正常推送
+      onReconnectSSE?.();
       setActionBusy(false);
     }
   }
@@ -304,31 +321,36 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   }
 
   async function doRewriteTab() {
-    if (!tab) return;
     setRewriteBusy(true);
     try {
-      await flushDrafts(); // 先 flush 当前编辑
-      await api.rewriteRwModel(jobId, tab);
+      await flushDrafts();
+      const modelIds = drafts.map((d) => d.model_id);
+      for (const mid of modelIds) {
+        try {
+          await api.rewriteRwModel(jobId, mid);
+        } catch (e) {
+          console.error(`[LiuyongPanel] 模型 ${mid} 改写失败`, e);
+        }
+      }
       setCache((c) => {
         const next = { ...c };
-        delete next[tab];
+        for (const mid of modelIds) delete next[mid];
         return next;
       });
     } catch (e) {
-      showToast('重写失败，请稍后再试');
-      console.error('[LiuyongPanel] 重写失败', e);
+      console.error('[LiuyongPanel] 改写异常', e);
     } finally {
       setRewriteBusy(false);
     }
   }
 
-  // 「按建议优化」：把当前 tab 的稿连同 rubric issues 交给后端，让 opus 按建议最小改动优化。
-  // 是长 await（opus 几分钟）；后端改完会重跑质检并 emit 新 qc_rubric，前端清缓存重拉 draft.md。
+  // 「按建议优化」：把所有模型的稿连同 rubric issues 交给后端，按质检建议最小改动优化。
+  // 后端改完会重跑质检并 emit 新 qc_rubric，前端清缓存重拉 draft.md。
   async function doRefineTab() {
     if (!tab) return;
     setRefineBusy(true);
     try {
-      await flushDrafts(); // 先落盘用户当前编辑，避免被优化稿覆盖丢失
+      await flushDrafts();
       await api.refineRwModel(jobId, tab);
       setCache((c) => {
         const next = { ...c };
@@ -336,8 +358,8 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
         return next;
       });
     } catch (e) {
-      showToast('优化失败，请稍后再试');
-      console.error('[LiuyongPanel] 按建议优化失败', e);
+      console.error(`[LiuyongPanel] 模型 ${tab} 优化失败`, e);
+      showToast(`优化失败：${(e as Error)?.message ?? '未知错误'}`);
     } finally {
       setRefineBusy(false);
     }
@@ -399,22 +421,19 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   const currentDraft = drafts.find((d) => d.model_id === tab);
   // 成功的稿件默认可编辑（textarea 直接改 + 防抖落盘）；失败/加载中不可编辑
   const editable = currentDraft?.status === 'success' && !loading && !refineBusy;
-  // 单模型重试：节点不在跑 + 本模型当前不在 rewrite + (本模型 success 或 failed)
+  // 全部模型重写：节点 done 且无其他进行中操作
   const canRewriteThisTab =
     !rewriteBusy &&
     !refineBusy &&
     !actionBusy &&
-    status === 'done' &&
-    currentDraft != null &&
-    currentDraft.status !== undefined;
-  // 「按建议优化」可用：节点 done + 本稿 success + 有 rubric issues + 无其他进行中操作
+    status === 'done';
+  // 「按建议优化」可用：节点 done + 有 rubric issues + 无其他进行中操作
   const canRefineThisTab =
     !refineBusy &&
     !rewriteBusy &&
     !actionBusy &&
     status === 'done' &&
-    currentDraft?.status === 'success' &&
-    (currentDraft?.qc_rubric?.issues?.length ?? 0) > 0;
+    successDrafts.some((d) => (d.qc_rubric?.issues?.length ?? 0) > 0);
 
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
   if (drafts.length === 0 && status === 'idle') {
@@ -460,7 +479,7 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
             <button
               type="button"
               className="btn sm icon-only ghost"
-              title={rewriteBusy ? '重写中…' : canRewriteThisTab ? '重写本模型' : '需先等本模型完成'}
+              title={rewriteBusy ? '全部重写中…' : canRewriteThisTab ? '全部模型重写' : '需先等执行完成'}
               disabled={!canRewriteThisTab}
               onClick={doRewriteTab}
             >
@@ -495,6 +514,7 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
             onRefine={doRefineTab}
             refining={refineBusy}
             canRefine={canRefineThisTab}
+            wordCount={body ? countChars(body) : undefined}
           />
         </>
       )}

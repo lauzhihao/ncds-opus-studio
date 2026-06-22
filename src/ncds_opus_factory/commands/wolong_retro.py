@@ -70,11 +70,17 @@ _FAKE_OUTPUT = (
 def _default_llm(prompt: str, timeout_seconds: int) -> str:
     if os.environ.get("NOF_RETRO_FAKE_LLM", "").strip():
         return _FAKE_OUTPUT
-    # 复盘走 opus headless 单 prompt（§8.3:参考 _call_opus_judge,
-    # 不是 _run_opus_legacy——那是整套 SOP 的 bash 包装）
-    from ncds_opus_factory.common.quality_rubric import _call_opus_judge
+    # 复盘走多模型优先级 LLM（优先非 opus 模型，按 JUDGE_PRIORITY 降级）
+    from ncds_opus_factory.common.quality_rubric import _call_judge, JUDGE_PRIORITY, _check_judge_available
 
-    return _call_opus_judge(prompt, timeout_seconds)
+    for model_id in JUDGE_PRIORITY:
+        if not _check_judge_available(model_id):
+            continue
+        try:
+            return _call_judge(prompt, model_id, timeout_seconds)
+        except Exception:
+            continue
+    raise RuntimeError(f"retro LLM 全部不可用: {JUDGE_PRIORITY}")
 
 
 # 模块级函数属性:测试 monkeypatch 注入假 LLM

@@ -136,4 +136,9 @@ def extract_artifacts(cmd: str, result: dict[str, Any] | None) -> list[dict[str,
         if result.get("review_dir"):
             add(_dir(result["review_dir"], "待验收清单"))
 
+    elif cmd in ("wst", "tst"):
+        images = result.get("images") or []
+        for i, img in enumerate(images):
+            add(_file(img, f"图片 {i + 1}", "image"))
+
     return out

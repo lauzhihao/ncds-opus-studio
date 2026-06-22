@@ -366,12 +366,12 @@ def run_rw_step(
         if isinstance(res, _ModelUnavailable):
             return {
                 "model_id": mid, "label": label, "status": "failed",
-                "reason": f"模型不可用：{res}", "draft_relpath": None, "episode_relpath": None,
+                "reason": "模型不可用", "draft_relpath": None, "episode_relpath": None,
             }
         if isinstance(res, BaseException):
             return {
                 "model_id": mid, "label": label, "status": "failed",
-                "reason": str(res), "draft_relpath": None, "episode_relpath": None,
+                "reason": "模型调用失败", "draft_relpath": None, "episode_relpath": None,
             }
         raw_text = (res or "").strip()
         # 去掉 ```json / ``` 包裹（与原版一致）。

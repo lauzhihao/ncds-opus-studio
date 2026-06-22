@@ -1,6 +1,20 @@
 // 后端 server/routes/pipelines.py 的响应类型镜像。
 // 改后端 schema 时同步改这里。
 
+export interface TaskCreateResponse {
+  task_id: string;
+  status: string;
+}
+
+export interface TaskDetailResponse {
+  task_id: string;
+  cmd: string;
+  status: string;
+  result?: { images?: string[]; output_dir?: string } | null;
+  error?: string | null;
+  artifacts?: { label: string; kind: string; url: string; path: string }[] | null;
+}
+
 export type NodeStatus = 'idle' | 'queued' | 'running' | 'done' | 'failed';
 export type NodeKind = 'input' | 'command' | 'output';
 
@@ -64,10 +78,11 @@ export interface RwQcAiTaste {
   density?: unknown[];
 }
 
-// 柳永质检：quality_rubric（opus 5 维度质量分），对齐后端 quality_rubric.score。
+// 柳永质检：quality_rubric（5 维度质量分），对齐后端 quality_rubric.score。
 export interface RwQcRubric {
   available?: boolean;
   skipped?: string;
+  judge_model?: string; // 实际执行打分的模型 id（opus/codex/agy/ds）
   total?: number; // 满分 50
   grade?: string;
   dims?: Record<string, number>; // 节奏/真实性/精炼度/直接性/信任度
