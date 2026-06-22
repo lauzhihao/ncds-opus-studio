@@ -213,6 +213,40 @@ def test_execute_image_all_failed_raises(tmp_path: Path, monkeypatch: pytest.Mon
         asyncio.run(runner._execute_image(job.job_id))
 
 
+def test_execute_storyboard_fills_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    runner.write_episode(job.job_id, {
+        "meta": {"title": "T"},
+        "image": {},
+        "visual": {},
+        "beats": [
+            {"zh": "一", "en": "", "scene": ""},
+            {"zh": "二", "en": "", "scene": ""},
+            {"zh": "三", "en": "", "scene": ""},
+        ],
+        "scenes": {},
+    })
+    director_json = json.dumps({
+        "scenes": {
+            "s1": {"prompt": "场景一", "group": "g1", "imageFit": "contain",
+                   "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
+            "s2": {"prompt": "场景二", "group": "g1", "imageFit": "contain",
+                   "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
+        },
+        "sceneMap": {"1": "s1", "2": "s1", "3": "s2"},
+    }, ensure_ascii=False)
+
+    monkeypatch.setattr(pr, "_call_opus_for_rw", lambda *_args, **_kwargs: director_json)
+    out = asyncio.run(runner._execute_storyboard(job.job_id))
+
+    assert out["scenes_count"] == 2
+    assert out["groups_count"] == 1
+    got = json.loads((tmp_path / job.job_id / "02_rw" / "episode.json").read_text(encoding="utf-8"))
+    assert set(got["scenes"]) == {"s1", "s2"}
+    assert [b["scene"] for b in got["beats"]] == ["s1", "s1", "s2"]
+
+
 # --- 鬼谷子选题：job inputs 的 domain 透传到 guiguzi（task-2.5 调用方线程化）------ #
 def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """job inputs 带 domain（前端 doCreate 写入）时，analyze/generate 两个 bg 都把它透传给鬼谷子。"""
