@@ -34,7 +34,7 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 agent 后台任务（enrich/refresh/guiguzi）抽出独立模块，pipeline_runner 行数显著下降，586 passed
+- [x] #1 agent 后台任务（enrich/refresh/guiguzi）抽出独立模块，pipeline_runner 行数显著下降，586 passed
 - [x] #2 C6 复制抽成 helper（`_assert_known_model` + mock 短路），行为不变
 - [ ] #3 每步拆分后回归 586 passed、web 全链路 UI 不退化
 - [ ] #4 拆分边界先对齐再动手（L2，prefer 小步多次）
@@ -44,3 +44,6 @@ C1（god-object）/ C5（collect_one 235 行 + 5 个超长函数）/ C6（rewrit
 
 - 2026-06-22：第一刀先做低风险局部抽取：`rewrite_rw_model` / `refine_rw_model` 共用 `_assert_known_model()` 与 `_rw_mock_short_circuit()`，保留原有错误语义和 mock015 短路行为。
 - 验证：`pytest tests/server/test_pipeline_runner.py src/ncds_opus_factory/server/pipeline_runner_events_test.py src/ncds_opus_factory/server/pipelines_sse_test.py -q` 24 passed；`py_compile pipeline_runner.py` 与 `git diff --check` 通过；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
+- 2026-06-22：第二刀以 mixin 机械搬移 agent 后台任务，新增 `server/pipeline_agent_tasks.py`，把 ASR enrich、沈括 refresh、鬼谷子 analyze/generate 后台任务从 `pipeline_runner.py` 拆出；`PipelineRunner` 继承 `PipelineAgentTasksMixin`，public methods 保持不变。
+- 行数变化：`pipeline_runner.py` 从 3143 行降到 2779 行；新模块 `pipeline_agent_tasks.py` 393 行。
+- 验证：`py_compile pipeline_runner.py pipeline_agent_tasks.py` 通过；focused tests `46 passed`；单独降级用例通过；全量 `.venv/bin/python3 -m pytest -q` 598 passed, 173 warnings。
