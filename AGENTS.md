@@ -19,3 +19,5 @@
 ## 运行时（S3 后 = 三进程）
 
 `redis`（队列）+ `nof-server`（:8810，入队+SSE，纯 producer）+ `nof-worker`（唯一执行）。按序起，重启 server 不打断在跑任务。细节见 CLAUDE.md §9。
+
+## Imported Claude Cowork project instructions
