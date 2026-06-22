@@ -23,8 +23,8 @@ import pytest
 
 from ncds_opus_core.common import cancel as _cancel
 from ncds_opus_core.common.cancel import TaskCancelled, clear_flag, is_flagged, set_flag
-from ncds_opus_factory.server import pipeline_runner as pr
-from ncds_opus_factory.server.pipeline_runner import PipelineRunner, _terminate_proc_group
+from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
+from ncds_opus_factory.server.pipeline_runner import PipelineRunner
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner, _invoke
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
 from ncds_opus_factory.server.engine.types import Recipe, RecipeStep
@@ -83,7 +83,7 @@ def test_terminate_proc_group_kills_process(tmp_path: Path) -> None:
     )
     assert proc.poll() is None, "进程启动后应该还在跑"
 
-    _terminate_proc_group(proc)
+    media_helpers._terminate_proc_group(proc)
 
     # 给一点时间让 SIGTERM 生效
     try:
@@ -106,7 +106,7 @@ def test_terminate_proc_group_handles_already_dead(tmp_path: Path) -> None:
     assert proc.poll() is not None
 
     # 应当幂等，不抛
-    _terminate_proc_group(proc)
+    media_helpers._terminate_proc_group(proc)
 
 
 def test_run_tts_gen_cancel_via_checker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,7 +120,7 @@ def test_run_tts_gen_cancel_via_checker(tmp_path: Path, monkeypatch: pytest.Monk
     mock_proc.wait = MagicMock(return_value=0)
 
     killed = {"n": 0}
-    original_terminate = _terminate_proc_group
+    original_terminate = media_helpers._terminate_proc_group
 
     def fake_terminate(p: Any) -> None:
         killed["n"] += 1
@@ -131,14 +131,14 @@ def test_run_tts_gen_cancel_via_checker(tmp_path: Path, monkeypatch: pytest.Monk
         call_count["n"] += 1
         return call_count["n"] >= 2
 
-    monkeypatch.setattr(pr, "_terminate_proc_group", fake_terminate)
-    monkeypatch.setattr(pr.subprocess, "Popen", lambda *a, **kw: mock_proc)
+    monkeypatch.setattr(media_helpers, "_terminate_proc_group", fake_terminate)
+    monkeypatch.setattr(media_helpers.subprocess, "Popen", lambda *a, **kw: mock_proc)
 
     # install checker 后调 _run_tts_gen_015
     _cancel.install(checker)
     try:
         with pytest.raises(TaskCancelled):
-            pr._run_tts_gen_015(
+            media_helpers._run_tts_gen_015(
                 script=tmp_path / "tts_gen.py",
                 episode_path=tmp_path / "episode.json",
                 audio_dir=tmp_path / "audio",
@@ -593,7 +593,7 @@ def test_terminate_proc_group_kills_grandchild(tmp_path: Path) -> None:
     grandchild_pid = int(proc.stdout.readline().strip())
     os.kill(grandchild_pid, 0)  # 不抛 = 孙进程活着
 
-    _terminate_proc_group(proc)
+    media_helpers._terminate_proc_group(proc)
 
     try:
         proc.wait(timeout=5)

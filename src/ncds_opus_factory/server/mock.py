@@ -27,10 +27,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_core.pipelines import get_pipeline
+from ncds_opus_factory.server.pipeline_media_helpers import _rebuild_tts_items_015
 from ncds_opus_factory.server.pipeline_runner import (
     JobState,
     NodeState,
-    _rebuild_tts_items_015,
 )
 
 MOCK_JOB_ID = "mock015"

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from ncds_opus_factory.commands import shenkuo
-from ncds_opus_factory.server.pipeline_runner import _rw_source_text
+from ncds_opus_factory.server.pipeline_rw_helpers import _rw_source_text
 
 
 @pytest.fixture(autouse=True)

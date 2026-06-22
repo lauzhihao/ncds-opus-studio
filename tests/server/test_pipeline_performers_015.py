@@ -732,7 +732,7 @@ def test_run_rw_step_ignores_legacy_profile_kwarg(tmp_path: Path, monkeypatch: p
     async def stub_one_ok(cand, user_prompt, system_prompt, on_progress, on_status=None):
         if cand["id"] == "deepseek":
             return "# 仅 deepseek 成功\n\n正文。"
-        from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
+        from ncds_opus_factory.server.pipeline_rw_helpers import _ModelUnavailable as MU
         raise MU("跳过")
 
     monkeypatch.setattr(perf, "_invoke_rw", stub_one_ok)
@@ -753,7 +753,7 @@ def test_run_rw_step_codeblock_stripped(tmp_path: Path, monkeypatch: pytest.Monk
     async def stub_fence(cand, user_prompt, system_prompt, on_progress, on_status=None):
         if cand["id"] == "deepseek":
             return raw_with_fence
-        from ncds_opus_factory.server.pipeline_runner import _ModelUnavailable as MU
+        from ncds_opus_factory.server.pipeline_rw_helpers import _ModelUnavailable as MU
         raise MU("skip")
 
     monkeypatch.setattr(perf, "_invoke_rw", stub_fence)

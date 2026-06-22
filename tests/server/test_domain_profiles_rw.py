@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from ncds_opus_factory.server import pipeline_runner as pr
+from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 from ncds_opus_factory.server.domain_profiles import (
     DomainProfile,
     DOMAIN_PROFILES,
@@ -94,7 +94,7 @@ _GENERIC_SENTINEL = "你是资深中文内容写手"
 
 def _call_build(source: str = "测试源文档内容。",
                 domain_guidance: str | None = None) -> tuple[str, str]:
-    return pr._build_rw_prompt(source, domain_guidance=domain_guidance)
+    return rw_helpers._build_rw_prompt(source, domain_guidance=domain_guidance)
 
 
 def test_build_rw_prompt_no_domain_guidance_baseline():

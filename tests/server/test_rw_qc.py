@@ -1,4 +1,4 @@
-"""柳永质检闸门（pipeline_runner._apply_rw_qc / _purge_ai_taste_rw）单元测试。
+"""柳永质检闸门（pipeline_rw_helpers._apply_rw_qc / _purge_ai_taste_rw）单元测试。
 
 mock ai_taste / quality_rubric / purge_ai_taste，验证（同 liuyong.py 质检语义）：
 - ai_taste pass → 不打回，带 qc + qc_rubric + draft.qc.json sidecar；
@@ -8,7 +8,7 @@ mock ai_taste / quality_rubric / purge_ai_taste，验证（同 liuyong.py 质检
 from __future__ import annotations
 
 from ncds_opus_factory.common import ai_taste, quality_rubric
-from ncds_opus_factory.server import pipeline_runner as pr
+from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 
 
 def _seed_draft(tmp_path, text: str):
@@ -31,9 +31,9 @@ def test_apply_rw_qc_pass(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("pass 不该触发打回重写")
 
-    monkeypatch.setattr(pr, "_call_opus_for_rw", boom)
+    monkeypatch.setattr(rw_helpers, "_call_opus_for_rw", boom)
 
-    out = pr._apply_rw_qc(md, "opus", lambda *_: None)
+    out = rw_helpers._apply_rw_qc(md, "opus", lambda *_: None)
     assert out["qc"]["verdict"] == "pass"
     assert out["qc_rubric"]["total"] == 42 and out["qc_rubric"]["grade"] == "A"
     assert (md / "draft.qc.json").is_file()
@@ -54,7 +54,7 @@ def test_apply_rw_qc_fail_then_purge(tmp_path, monkeypatch):
     monkeypatch.setattr(quality_rubric, "score", lambda t, **k: {"available": False, "skipped": "本机无 opus"})
     monkeypatch.setattr(ai_taste, "purge_ai_taste", lambda *_a, **_k: purged)
 
-    out = pr._apply_rw_qc(md, "gpt5", lambda *_: None)
+    out = rw_helpers._apply_rw_qc(md, "gpt5", lambda *_: None)
     assert calls["scan"] == 2                       # 打回重写一轮后复检
     assert out["qc"]["verdict"] == "pass"           # 重写后通过
     assert purged.strip() in (md / "draft.md").read_text(encoding="utf-8")  # 回写重写稿
@@ -69,6 +69,6 @@ def test_apply_rw_qc_fail_purge_empty_keeps_original(tmp_path, monkeypatch):
     monkeypatch.setattr(quality_rubric, "score", lambda t, **k: {"available": False, "skipped": "no opus"})
     monkeypatch.setattr(ai_taste, "purge_ai_taste", lambda *_a, **_k: "太短")  # <200 字，无效
 
-    out = pr._apply_rw_qc(md, "deepseek", lambda *_: None)
+    out = rw_helpers._apply_rw_qc(md, "deepseek", lambda *_: None)
     assert out["qc"]["verdict"] == "fail"           # 仍 fail（重写无效，未死循环）
     assert original in (md / "draft.md").read_text(encoding="utf-8")

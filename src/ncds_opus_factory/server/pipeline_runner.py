@@ -20,15 +20,11 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import re
 import shutil
-import signal
-import subprocess
-import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -36,10 +32,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_core.templates import template_dir as _template_dir
-from ncds_opus_core.gpt_image.paths import GPT_IMAGE_OUTPUT_ROOT
 from ncds_opus_core.pipelines import PIPELINE_REGISTRY, get_pipeline
 from ncds_opus_core.common import cancel as _cancel
-from ncds_opus_factory.common.opus_cli import DEFAULT_OPUS_MODEL, call_opus, is_opus_available
+from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
+from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 from ncds_opus_factory.server.pipeline_agent_tasks import PipelineAgentTasksMixin
 from ncds_opus_factory.server.pipeline_engine_bridge import PipelineEngineBridgeMixin
 from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
@@ -50,12 +46,7 @@ from ncds_opus_factory.server.pipeline_tts_tasks import PipelineTtsRun
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_OPUS_MODEL_ID = DEFAULT_OPUS_MODEL
-ASR_PROC_TIMEOUT_SEC = int(os.getenv("NOF_ASR_PROC_TIMEOUT", "3600"))
-ASR_POLISH_TIMEOUT_SEC = int(os.getenv("NOF_ASR_POLISH_TIMEOUT", "600"))
-TTS_PROC_TIMEOUT_SEC = int(os.getenv("NOF_TTS_PROC_TIMEOUT", "3600"))
-RW_LLM_TIMEOUT_SEC = int(os.getenv("NOF_RW_LLM_TIMEOUT", "900"))
-IMAGE_GEN_TIMEOUT_SEC = int(os.getenv("NOF_PIPELINE_IMAGE_GEN_TIMEOUT", "600"))
+DEFAULT_OPUS_MODEL_ID = rw_helpers.DEFAULT_OPUS_MODEL_ID
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +447,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
             if cover.is_file() and cover.stat().st_mtime >= mp4.stat().st_mtime:
                 return cover
             try:
-                await asyncio.to_thread(_extract_first_frame, mp4, cover)
+                await asyncio.to_thread(media_helpers._extract_first_frame, mp4, cover)
                 if cover.is_file():
                     return cover
             except Exception as exc:
@@ -755,7 +746,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         missing_message: str | None = None,
     ) -> dict[str, str]:
         """返回 MODEL_CANDIDATES 中的候选；缺失时按既有语义抛 KeyError。"""
-        cand = next((c for c in MODEL_CANDIDATES if c["id"] == model_id), None)
+        cand = next((c for c in rw_helpers.MODEL_CANDIDATES if c["id"] == model_id), None)
         if cand is None:
             raise KeyError(missing_message or f"unknown model: {model_id}")
         return cand
@@ -808,20 +799,20 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         job_dir = self.video_jobs_dir / job_id
         asr_out = asr_node.outputs or {}
         asr_items = list(asr_out.get("collected") or asr_out.get("items") or [])
-        source_text = _rw_source_text(asr_items, job_dir)
+        source_text = rw_helpers._rw_source_text(asr_items, job_dir)
         if not source_text:
             raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
-        domain_guidance = _rw_domain_guidance(state.inputs.get("domain"))
-        system_prompt, user_prompt = _build_rw_prompt(source_text, domain_guidance=domain_guidance)
+        domain_guidance = rw_helpers._rw_domain_guidance(state.inputs.get("domain"))
+        system_prompt, user_prompt = rw_helpers._build_rw_prompt(source_text, domain_guidance=domain_guidance)
 
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "rw", f"[rerun {model_id}] {text}")
 
         on_progress("单模型重跑启动")
         try:
-            raw_text = await _invoke_rw_candidate(cand, user_prompt, system_prompt, on_progress)
-        except _ModelUnavailable as exc:
+            raw_text = await rw_helpers._invoke_rw_candidate(cand, user_prompt, system_prompt, on_progress)
+        except rw_helpers._ModelUnavailable as exc:
             on_progress(f"模型 {model_id} 不可用，跳过: {exc}")
             return
 
@@ -842,7 +833,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         # 重写后重跑质检闸门，回写 entry 的 qc/qc_rubric -> 前端雷达图/质量分随新稿刷新
         # （否则会停在上一版旧数据；与 refine_rw_model 保持一致）
         try:
-            qc = await asyncio.to_thread(_apply_rw_qc, model_dir, model_id, on_progress)
+            qc = await asyncio.to_thread(rw_helpers._apply_rw_qc, model_dir, model_id, on_progress)
             entry.update(qc)
         except Exception as exc:  # noqa: BLE001 — 质检失败不拖垮重写稿
             on_progress(f"质检异常（不影响稿件）: {exc}")
@@ -913,7 +904,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
 
         # 重跑质检闸门（ai_taste 终判 + rubric 评分），回写 entry 的 qc/qc_rubric -> 雷达图刷新
         try:
-            qc = await asyncio.to_thread(_apply_rw_qc, model_dir, model_id, on_progress)
+            qc = await asyncio.to_thread(rw_helpers._apply_rw_qc, model_dir, model_id, on_progress)
             entry.update(qc)
         except Exception as exc:  # noqa: BLE001 — 质检失败不拖垮优化稿
             on_progress(f"质检异常（不影响稿件）: {exc}")
@@ -1001,7 +992,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         if target.is_file():
             target.unlink()
         await asyncio.to_thread(
-            _generate_scene_image,
+            media_helpers._generate_scene_image,
             scene_id=scene_id,
             prompt=full_prompt,
             size=size,
@@ -1088,7 +1079,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
 
         on_progress("简笔画重生中…")
         await asyncio.to_thread(
-            _generate_scene_image,
+            media_helpers._generate_scene_image,
             scene_id=f"{scene_id}-sk{n}", prompt=full, size=sketch_size,
             quality=quality, target=target, job_id=job_id,
         )
@@ -1152,7 +1143,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
             self._push_progress(job_id, "tts", f"[regen {scene_id}] {text}")
 
         await asyncio.to_thread(
-            _run_tts_gen_015,
+            media_helpers._run_tts_gen_015,
             script=tts_gen,
             episode_path=ep_path,
             audio_dir=audio_dir,
@@ -1167,7 +1158,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         n = state.nodes.get("tts")
         if n is None:
             return
-        n.outputs["items"] = _rebuild_tts_items_015(ep2)
+        n.outputs["items"] = media_helpers._rebuild_tts_items_015(ep2)
         n.finished_at = time.time()
         state.updated_at = time.time()
         self._save(state)
@@ -1245,7 +1236,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         ep_path = self.video_jobs_dir / job_id / "02_rw" / "episode.json"
         if ep_path.is_file():
             ep = json.loads(ep_path.read_text(encoding="utf-8"))
-            n.outputs["items"] = _rebuild_tts_items_015(ep)
+            n.outputs["items"] = media_helpers._rebuild_tts_items_015(ep)
         n.finished_at = time.time()
         self._save(state)
         self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "tts", "state": asdict(n)})
@@ -1441,8 +1432,8 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
             job_dir=job_dir,
             episode=ep,
             tts_gen_script=tts_gen,
-            run_tts_gen=_run_tts_gen_015,
-            rebuild_tts_items=_rebuild_tts_items_015,
+            run_tts_gen=media_helpers._run_tts_gen_015,
+            rebuild_tts_items=media_helpers._rebuild_tts_items_015,
         ).run()
 
     # ------------------------------------------------------------
@@ -1466,7 +1457,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
             job_id=job_id,
             job_dir=job_dir,
             episode=ep,
-            generate_scene_image=_generate_scene_image,
+            generate_scene_image=media_helpers._generate_scene_image,
         ).run()
 
     async def _execute_asr_collect(self, job_id: str) -> dict[str, Any]:
@@ -1574,12 +1565,12 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         rw_root.mkdir(parents=True, exist_ok=True)
 
         # 拼 sourceText：沈括采集的清洗稿 text（缺失回退 legacy article 文件）
-        source_text = _rw_source_text(asr_items, job_dir)
+        source_text = rw_helpers._rw_source_text(asr_items, job_dir)
         if not source_text:
             raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
-        domain_guidance = _rw_domain_guidance(state.inputs.get("domain"))
-        system_prompt, user_prompt = _build_rw_prompt(source_text, domain_guidance=domain_guidance)
+        domain_guidance = rw_helpers._rw_domain_guidance(state.inputs.get("domain"))
+        system_prompt, user_prompt = rw_helpers._build_rw_prompt(source_text, domain_guidance=domain_guidance)
 
         return await PipelineRwRun(
             runner=self,
@@ -1588,10 +1579,10 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
             source_text=source_text,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            model_candidates=MODEL_CANDIDATES,
-            model_unavailable_cls=_ModelUnavailable,
-            invoke_rw_candidate=_invoke_rw_candidate,
-            apply_rw_qc=_apply_rw_qc,
+            model_candidates=rw_helpers.MODEL_CANDIDATES,
+            model_unavailable_cls=rw_helpers._ModelUnavailable,
+            invoke_rw_candidate=rw_helpers._invoke_rw_candidate,
+            apply_rw_qc=rw_helpers._apply_rw_qc,
         ).run()
 
     # ------------------------------------------------------------
@@ -1621,7 +1612,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
         system_prompt, user_prompt = _build_lines_prompt(draft)
         on_progress("调 opus 结构化为 beats…")
         raw = await asyncio.to_thread(
-            _call_opus_for_rw, user_prompt, system_prompt, DEFAULT_OPUS_MODEL_ID
+            rw_helpers._call_opus_for_rw, user_prompt, system_prompt, DEFAULT_OPUS_MODEL_ID
         )
 
         # 解析 JSON（容忍 ```json ... ``` 包裹）
@@ -1701,7 +1692,7 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
             job_id=job_id,
             episode=ep,
             beats_raw=beats_raw,
-            call_opus_for_rw=_call_opus_for_rw,
+            call_opus_for_rw=rw_helpers._call_opus_for_rw,
             model_id=DEFAULT_OPUS_MODEL_ID,
         ).run()
 
@@ -1721,574 +1712,6 @@ class PipelineRunner(PipelineEngineBridgeMixin, PipelineAgentTasksMixin):
             job_dir=job_dir,
             render_run=render_cmd.run,
         ).run()
-
-
-def _rebuild_tts_items_015(episode: dict[str, Any]) -> list[dict[str, Any]]:
-    """从写好时间戳的 episode 组装 beat 级 items（audio 指向所属 scene 整段 mp3）。
-    前端 TtsResultPanel 按 scene 分组渲染时用。"""
-    items: list[dict[str, Any]] = []
-    for i, b in enumerate(episode.get("beats") or [], start=1):
-        af = str(b.get("audioFile") or "")
-        name = af.split("/")[-1] if af else ""
-        items.append({
-            "index": i,
-            "zh": str(b.get("zh") or ""),
-            "scene": str(b.get("scene") or ""),
-            "audio_relpath": f"04_tts/{name}" if name else "",
-            "audio_start": b.get("audioStart"),
-            "audio_end": b.get("audioEnd"),
-        })
-    return items
-
-
-def _terminate_proc_group(proc: "subprocess.Popen[str]") -> None:
-    """杀整个进程组（直接子进程 + 孙进程 yt-dlp/ffmpeg/whisper/Demucs）。
-    SIGTERM→wait(5)→SIGKILL。proc 须以 start_new_session=True 启动（独立 pgid）。"""
-    try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        return
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-        proc.wait(5)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    except ProcessLookupError:
-        pass
-
-
-def _run_tts_gen_015(
-    *,
-    script: Path,
-    episode_path: Path,
-    audio_dir: Path,
-    on_line: Callable[[str], None],
-    only: str | None = None,
-    force: bool = False,
-) -> None:
-    """同步调 015 tts_gen.py 按 scene 整段合成 + 写回 episode.json 时间戳。
-    only: 只跑指定 scene（单 scene 重生）；force: 覆盖已存在产物。
-    行级转发 stdout；失败把末尾输出塞进 RuntimeError。
-    """
-    cmd = [
-        sys.executable, str(script),
-        "--episode", str(episode_path.resolve()),
-        "--audio-dir", str(audio_dir.resolve()),
-        "--workers", "6",
-    ]
-    if only:
-        cmd += ["--only", only]
-    if force:
-        cmd += ["--force"]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        start_new_session=True,  # 独立 pgid：killpg 可杀整组（包含孙进程）
-    )
-    assert proc.stdout is not None
-    tail: list[str] = []
-    checker = _cancel.current()  # 取主线程 install 的 checker（thread-local）
-    for line in iter(proc.stdout.readline, ""):
-        # 每行开头轮询取消：readline 阻塞期间无法检查，但 tts_gen 持续吐行，取消延迟≤下一行时间
-        if checker():
-            _terminate_proc_group(proc)
-            raise _cancel.TaskCancelled("cancelled during tts_gen subprocess")
-        s = line.rstrip("\n")
-        if s:
-            on_line(s)
-            tail.append(s)
-            if len(tail) > 20:
-                tail.pop(0)
-    proc.stdout.close()
-    code = proc.wait(timeout=TTS_PROC_TIMEOUT_SEC)
-    if code != 0:
-        snippet = "\n".join(tail).strip()
-        raise RuntimeError(f"tts_gen.py exited {code}\n--- last output ---\n{snippet}")
-
-
-def _asr_stage_label(line: str) -> str | None:
-    """从 video_pipeline.py 的 stdout 行识别当前阶段，给作品级状态行做实时 stage 文案。
-    polish（opus 整理）那步不在 video_pipeline 里，由 asr 转写流程单独设置。
-    """
-    s = line or ""
-    if not s:
-        return None
-    if re.search(r"\[OK\]\s*转写|\u2705\s*转写|转写完成|whisper|转写", s, re.IGNORECASE):
-        return "语音转写"
-    if re.search(r"提取音频|extract.*audio|ffmpeg.*audio", s, re.IGNORECASE):
-        return "提取音频"
-    if re.search(r"下载|download|TikHub|yt-dlp|复用.*缓存", s, re.IGNORECASE):
-        return "下载视频"
-    return None
-
-
-def _run_video_pipeline(
-    *,
-    pipeline_script: Path,
-    url: str,
-    output_dir: Path,
-    on_line: Callable[[str], None],
-) -> None:
-    """同步调 video_pipeline.py，行级转发 stdout 给 on_line。在 to_thread 里跑。
-    失败时把最后几行输出塞进 RuntimeError，避免前端只看到一个干瘪的 exit code。
-    """
-    proc = subprocess.Popen(
-        [sys.executable, str(pipeline_script), "-o", str(output_dir), url],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        start_new_session=True,  # 独立 pgid：killpg 可杀 yt-dlp/ffmpeg/whisper 等孙进程
-    )
-    assert proc.stdout is not None
-    tail: list[str] = []
-    checker = _cancel.current()  # 取主线程 install 的 checker（thread-local）
-    for line in iter(proc.stdout.readline, ""):
-        # 每行开头轮询取消：video_pipeline 持续吐进度行，取消延迟≤下一行时间（设计接受的范式）
-        if checker():
-            _terminate_proc_group(proc)
-            raise _cancel.TaskCancelled("cancelled during video_pipeline subprocess")
-        s = line.rstrip("\n")
-        if s:
-            on_line(s)
-            tail.append(s)
-            if len(tail) > 20:
-                tail.pop(0)
-    proc.stdout.close()
-    code = proc.wait(timeout=ASR_PROC_TIMEOUT_SEC)
-    if code != 0:
-        snippet = "\n".join(tail).strip()
-        raise RuntimeError(f"video_pipeline.py exited {code}\n--- last output ---\n{snippet}")
-
-
-def _polish_transcript_with_opus(
-    *,
-    transcript_path: Path,
-    output_path: Path,
-    title_hint: str = "",
-) -> bool:
-    """调本机 opus launcher（Claude Opus 4.8）把语音转写原稿整理成 markdown 文章。
-
-    opus 启动、PATH/fallback 解析与 NDJSON 解析统一委托 common.opus_cli.call_opus。
-
-    幂等：返回 True=真调了 opus；False=命中缓存跳过。缓存键用「转写内容 + title_hint」的
-    sha256（不用 mtime —— video_pipeline 每次重转写会刷新 transcript mtime，但同音频转写文本
-    一致，哈希相同就不必再调一次 opus）。指纹落 sidecar ``<article>.src-sha256``。
-    """
-    text = transcript_path.read_text(encoding="utf-8").strip()
-    if not text:
-        raise RuntimeError(f"transcript empty: {transcript_path}")
-
-    src_key = hashlib.sha256((text + "\x00" + (title_hint or "")).encode("utf-8")).hexdigest()
-    sha_path = output_path.with_name(output_path.name + ".src-sha256")
-    if (output_path.is_file()
-            and output_path.read_text(encoding="utf-8").strip()
-            and sha_path.is_file()
-            and sha_path.read_text(encoding="utf-8").strip() == src_key):
-        return False  # 幂等命中：同转写+同标题已整理过，复用 article.md，不再调 opus
-
-    hint = f"（参考标题：{title_hint}）" if title_hint else ""
-    prompt = (
-        "下面是一段语音转写得到的中文原稿，请把它整理成易读的中文文章" + hint + "。\n"
-        "整理要求：\n"
-        "1. 修正错别字、口误、明显的同音字错误；\n"
-        "2. 补全 / 修正标点符号；\n"
-        "3. 合理分段，每段表达一个相对完整的意思；\n"
-        "4. 若内容较长，可在合适位置加 2-4 个二级标题（## 标题）；\n"
-        "5. 保留原意，不要增删事实，不要添加你自己的总结或评论；\n"
-        "6. 输出 Markdown 格式，不要加代码块包裹，不要加任何前言或后记。\n\n"
-        "【原稿】\n" + text
-    )
-
-    final_text = call_opus(
-        prompt,
-        model=DEFAULT_OPUS_MODEL_ID,
-        timeout_seconds=ASR_POLISH_TIMEOUT_SEC,
-    )
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(final_text + "\n", encoding="utf-8")
-    sha_path.write_text(src_key, encoding="utf-8")  # 记录本次 polish 的源指纹，供下次幂等命中
-    return True
-
-
-# ---------------------------------------------------------------------------
-# RW 多模型并行调度（替代旧 content_rewrite_runner.mjs 路径）
-# ---------------------------------------------------------------------------
-
-# candidate 表。runner 决定调用方式：
-#   - opus    : `opus launch -- ...` 透传到 claude CLI（Claude Opus 4.8）
-#   - scodex  : `scodex launch -- ...` 透传到 codex CLI（GPT-5.5）
-#   - gemini  : `~/.gemini/g.sh` —— 本机未安装则直接标"模型不可用"
-#   - deepseek: HTTP POST 到 deepseek API —— 需 DEEPSEEK_API_KEY，未设则标"模型不可用"
-# label 仅作展示兜底（前端 MODEL_LABELS 优先）；runner/model 是真实调用，保持不动。
-# rw 候选模型。下游全部循环本表，增删候选即生效（前端 tab、质检、增量写盘、重写/优化
-# 均数据驱动）。runner 派发见 _invoke_rw_candidate，label 仅作服务端展示兜底。
-MODEL_CANDIDATES: list[dict[str, str]] = [
-    {"id": "opus",         "label": "改写方案 A",  "runner": "opus",         "model": DEFAULT_OPUS_MODEL_ID},
-    {"id": "deepseek",     "label": "改写方案 B",  "runner": "deepseek",     "model": "deepseek-v4-pro"},
-    {"id": "agy",          "label": "改写方案 C",  "runner": "agy",          "model": "gemini-3.5-flash"},
-    {"id": "codex",        "label": "改写方案 D",  "runner": "scodex",       "model": "gpt-5.5-codex"},
-]
-
-
-class _ModelUnavailable(Exception):
-    """专用 sentinel：模型在本机不可用（缺二进制 / 缺 API key 等）。
-    与"调用失败" 区别开 —— 不可用的不应该上报为运行时错误，而是稳定的状态。
-    """
-
-
-def _check_model_available(cand: dict[str, str]) -> tuple[bool, str]:
-    """返回 (是否可用, 不可用原因)。可用时 reason='' 。"""
-    runner = cand["runner"]
-    if runner == "opus":
-        return (is_opus_available(), "本机未安装 opus 启动器")
-    if runner == "scodex":
-        return (shutil.which("scodex") is not None, "本机未安装 scodex 启动器")
-    if runner == "gemini_local":
-        p = Path.home() / ".gemini" / "g.sh"
-        return (p.is_file(), "~/.gemini/g.sh 未安装")
-    if runner == "agy":
-        return (shutil.which("agy") is not None, "本机未安装 agy 启动器")
-    if runner == "deepseek":
-        return (bool(os.environ.get("DEEPSEEK_API_KEY")), "DEEPSEEK_API_KEY 未设置")
-    return (False, f"unknown runner: {runner}")
-
-
-async def _invoke_rw_candidate(
-    cand: dict[str, str],
-    user_prompt: str,
-    system_prompt: str,
-    on_progress: Callable[[str], None],
-    on_status: Callable[[str, str], None] | None = None,
-) -> str:
-    """对单个 candidate：可用就调，返回 raw text；不可用就 raise _ModelUnavailable。
-    被 asyncio.gather(return_exceptions=True) 包住，让一个失败不影响其他模型。
-    on_status(model_id, status) 推送模型级状态：running / done / failed / unavailable。
-    """
-    mid = cand["id"]
-
-    def status(st: str) -> None:
-        if on_status is not None:
-            on_status(mid, st)
-
-    available, reason = _check_model_available(cand)
-    if not available:
-        on_progress(f"模型 {mid} 跳过：{reason}")
-        status("unavailable")
-        raise _ModelUnavailable(reason)
-    on_progress(f"模型 {mid} 开始调用")
-    status("running")
-    runner = cand["runner"]
-    try:
-        if runner == "opus":
-            text = await asyncio.to_thread(_call_opus_for_rw, user_prompt, system_prompt, cand["model"])
-        elif runner == "scodex":
-            # codex 不支持独立 system prompt 通道 —— 按远程 buildCodexCliPrompt 的
-            # 「目标类型 / 系统角色 / 任务要求 / 硬性输出约束」四段结构拼成一个 user prompt。
-            # RW 阶段出 markdown 文章，所以 expect_json=False，否则 codex 会把文章
-            # 包进 {"content": "..."} JSON 返回。
-            combined = _build_codex_user_prompt(
-                system_prompt=system_prompt,
-                task_prompt=user_prompt,
-                target_profile="paper_card_talk",
-                expect_json=False,
-            )
-            text = await asyncio.to_thread(_call_scodex_for_rw, combined, cand["model"])
-        elif runner == "agy":
-            text = await asyncio.to_thread(_call_agy_for_rw, user_prompt, system_prompt, cand["model"])
-        elif runner == "deepseek":
-            text = await asyncio.to_thread(_call_deepseek_for_rw, user_prompt, system_prompt, cand["model"])
-        else:
-            # 其他 runner（gemini_local 等）真要接时在这里加分支。
-            status("unavailable")
-            raise _ModelUnavailable(f"runner {runner} 尚未实装")
-        on_progress(f"模型 {mid} 调用完成（{len(text)} 字）")
-        status("done")
-        return text
-    except _ModelUnavailable:
-        raise
-    except Exception as exc:
-        on_progress(f"模型 {mid} 调用失败：{exc}")
-        status("failed")
-        raise
-
-
-def _call_opus_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> str:
-    """RW opus 调用薄适配层；真实 launch/parse 统一委托 common.opus_cli.call_opus。"""
-    return call_opus(
-        user_prompt,
-        system_prompt=system_prompt,
-        model=model_id,
-        timeout_seconds=RW_LLM_TIMEOUT_SEC,
-    )
-
-
-def _call_scodex_for_rw(prompt: str, model_id: str) -> str:
-    """走本机 scodex 启动器 → codex CLI。--json 输出 NDJSON 流，取最后一条
-    type=item.completed 的 item.text 作为最终回答（参考远程 extractCodexJsonText）。
-    """
-    # 注意：不要传 `-a never`。scodex launcher 自己会注入
-    # `--dangerously-bypass-approvals-and-sandbox`，再加 `-a` 会触发
-    # "the argument ... cannot be used with --ask-for-approval" 冲突。
-    args = [
-        "scodex", "launch", "--no-resume", "--",
-        "exec",
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "-s", "read-only",
-        "-m", model_id,
-        "--json",
-        prompt,
-    ]
-    proc = subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        timeout=RW_LLM_TIMEOUT_SEC,
-        stdin=subprocess.DEVNULL,
-    )
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
-        raise RuntimeError(f"scodex launcher exited {proc.returncode}: {tail}")
-
-    final = ""
-    for raw_line in proc.stdout.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if payload.get("type") != "item.completed":
-            continue
-        item = payload.get("item") or {}
-        text = item.get("text")
-        if not isinstance(text, str) and isinstance(item.get("content"), list):
-            text = "".join(
-                p.get("text", "")
-                for p in item["content"]
-                if isinstance(p, dict) and isinstance(p.get("text"), str)
-            )
-        if isinstance(text, str) and text.strip():
-            final = text.strip()
-    if not final:
-        raise RuntimeError(f"scodex empty result; stdout tail={proc.stdout[-300:]}")
-    return final
-
-
-def _build_codex_user_prompt(
-    *,
-    system_prompt: str,
-    task_prompt: str,
-    target_profile: str,
-    expect_json: bool,
-) -> str:
-    """对齐远程 video_rewrite_runner.buildCodexCliPrompt 的四段结构。
-
-    codex CLI 没有独立的 system 通道（--json + exec 模式），把"系统角色"+
-    "硬性输出约束"显式拼进 user prompt，比单纯放 [系统提示] 标签更稳。
-    """
-    output_contract = (
-        '只输出一个合法 JSON 对象，不要代码块、解释或前后缀。'
-        if expect_json
-        else '只输出最终候选稿正文，不要解释过程、代码块或额外前后缀。'
-    )
-    return "\n".join([
-        f"目标类型：{target_profile}",
-        "",
-        "【系统角色】",
-        system_prompt,
-        "",
-        "【任务要求】",
-        task_prompt,
-        "",
-        "【硬性输出约束】",
-        output_contract,
-    ])
-
-
-def _call_deepseek_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> str:
-    """rw 改写候选的 DeepSeek 调用 —— 现委托 common.deepseek_cli.call_deepseek（单点实现）。
-
-    DeepSeek HTTP 调用已收口到 common（鬼谷子选题也复用），本函数保留名/签名仅作 rw 侧
-    适配薄层（_invoke_rw_candidate 按名引用）。模型字段示例：'deepseek-v4-pro'。
-    """
-    from ncds_opus_factory.common.deepseek_cli import call_deepseek
-
-    return call_deepseek(user_prompt, system_prompt=system_prompt, model=model_id)
-
-
-def _call_agy_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> str:
-    """rw 改写候选的 AGY 调用 —— 委托 common.agy_cli.call_agy（单点实现）。
-
-    AGY 没有独立的 system 通道，按 codex 方式把 system_prompt 拼进 user prompt 头部。
-    """
-    from ncds_opus_factory.common.agy_cli import call_agy
-
-    combined = "\n".join([
-        "【系统角色】",
-        system_prompt,
-        "",
-        "【任务要求】",
-        user_prompt,
-    ]) if system_prompt else user_prompt
-
-    return call_agy(combined, model=model_id)
-
-
-# RW 写作兜底正文：仅当作品**无垂类标签(domain)**时用这段通用写作要求。
-# 有 domain 时，写作改由 domain_profiles 的 liuyong 槽位（该垂类的完整写作方法，含目标体裁/
-# 结构/语言标准/合规红线）独家驱动——「体裁 profile」这一层已废（格式由垂类标签规定，二者职责重叠）。
-_GENERIC_RW_BODY: list[str] = [
-    "你是资深中文内容写手。请根据下面源文档的内容与气质，写一篇高质量、可直接使用的中文稿件。",
-    "",
-    "【写作要求】",
-    "- 体裁、风格、结构由你判断什么最适合这份素材；",
-    "- 开头黄金 3 秒抛钩子（反差 / 反常识 / 悬念），结尾有力收束；",
-    "- 口语化、强节奏、信息密度高；不堆术语、不写 AI 味套话（如「首先 / 其次 / 综上所述」）；",
-    "- 合理分段（用空行分隔），不要 markdown 标记。",
-]
-
-
-def _rw_domain_guidance(domain: str | None) -> str | None:
-    """取作品垂类(domain)的写作方法 prompt（domain_profiles.liuyong）；无/未知 domain → None。"""
-    from ncds_opus_factory.server.domain_profiles import get_profile
-
-    dp = get_profile(domain) if domain else None
-    return dp.get("liuyong") if dp else None
-
-
-def _rw_source_text(asr_items: list[dict[str, Any]], job_dir: Path) -> str:
-    """把 asr 产物拼成 rw 的源文本。
-
-    沈括统一走采集后，优先用 collected 条目内嵌的清洗稿 ``text``；为兼容 legacy 转写产物
-    （items 带 article_relpath/transcript_relpath 文件路径），text 缺失时回退读文件。
-    来源标题用作品文案 ``desc``（剥掉内嵌 #话题），无则用 title。
-    """
-    sections: list[str] = []
-    for it in asr_items:
-        txt = (it.get("text") or "").strip()
-        if not txt:
-            relpath = it.get("article_relpath") or it.get("transcript_relpath")
-            if relpath and (job_dir / relpath).is_file():
-                txt = (job_dir / relpath).read_text(encoding="utf-8").strip()
-        if not txt:
-            continue
-        title = str(it.get("desc") or it.get("title") or "")
-        for tag in it.get("hashtags") or []:
-            title = title.replace(f"#{tag}", "")
-        title = " ".join(title.split())
-        sections.append(f"## 来源 {it.get('index')} - {title}\n\n{txt}")
-    return "\n\n---\n\n".join(sections).strip()
-
-
-def _purge_ai_taste_rw(text: str, report: dict[str, Any], on_progress: Callable[[str], None]) -> str:
-    """把 ai_taste 命中的 AI 味甩回 opus 消除，返回改写后全文（common 单点实现）。"""
-    from ncds_opus_factory.common import ai_taste
-
-    try:
-        return ai_taste.purge_ai_taste(text, report, timeout_seconds=RW_LLM_TIMEOUT_SEC)
-    except Exception as exc:  # noqa: BLE001 — 消 AI 味失败不致命，保留上一版
-        on_progress(f"  消 AI 味调用失败: {exc}")
-        return ""
-
-
-def _apply_rw_qc(model_dir: Path, model_id: str, on_progress: Callable[[str], None]) -> dict[str, Any]:
-    """对一份已写盘的 draft.md 跑柳永质检闸门（同 liuyong.py:154-184）：
-    ai_taste.scan -> fail 打回重写≤2 轮 -> quality_rubric.score(opus 5 维度)。
-    重写后回写 draft.md + 旁挂 draft.qc.json，返回 {"qc":..., "qc_rubric":...}。
-    """
-    from ncds_opus_factory.common import ai_taste, quality_rubric
-
-    draft_path = model_dir / "draft.md"
-    if not draft_path.is_file():
-        return {}
-    text = draft_path.read_text(encoding="utf-8").strip()
-    report = ai_taste.scan(text)
-    on_progress(f"质检[{model_id}]: {report.get('verdict')} - {report.get('summary', '')}")
-    rounds = 0
-    while report.get("verdict") == "fail" and rounds < 2:
-        rounds += 1
-        on_progress(f"  [{model_id}] AI 味超标，打回重写第 {rounds} 轮…")
-        new_text = _purge_ai_taste_rw(text, report, on_progress)
-        if not new_text or len(new_text) < 200:
-            on_progress(f"  [{model_id}] 重写未返回有效稿，保留上一版")
-            break
-        text = new_text
-        report = ai_taste.scan(text)
-        on_progress(f"  [{model_id}] 第 {rounds} 轮后: {report.get('verdict')}")
-    # 第 2 层：rubric 正向质量分（多模型优先级降级，避免使用改写同一模型）。
-    rub = quality_rubric.score(text, avoid_models={model_id})
-    if rub.get("available"):
-        judge = rub.get("judge_model", "?")
-        on_progress(f"质检2[rubric/{model_id}](judge={judge}): {rub.get('total')}/50 {rub.get('grade')}")
-    else:
-        on_progress(f"质检2[rubric/{model_id}]: 跳过（{rub.get('skipped')}）")
-    draft_path.write_text(text + "\n", encoding="utf-8")
-    (model_dir / "draft.qc.json").write_text(
-        json.dumps({"qc": report, "qc_rubric": rub}, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return {"qc": report, "qc_rubric": rub}
-
-
-def _build_rw_prompt(
-    source_text: str,
-    user_requirements: str = "",
-    domain_guidance: str | None = None,
-) -> tuple[str, str]:
-    """构造 RW 的 (system_prompt, user_prompt)。
-
-    本阶段产物 = 候选稿纯文本文章（**不是** beats[] JSON 或 markdown）；LINES 阶段才把定稿切成 beats[]。
-
-    写作要求来源（单一权威，已无「体裁 profile」叠加层）：
-      - domain_guidance（domain_profiles 的 liuyong 槽位）非空 → 它就是该垂类的完整写作方法
-        （含目标体裁/结构/语言标准/合规红线），独家驱动写作；
-      - 为空（作品无垂类标签）→ 回退到通用兜底 _GENERIC_RW_BODY。
-    """
-    system_prompt = (
-        "你是中文内容改写的资深写手。请按下方【写作要求】把源文档改写成一篇可直接使用的中文稿件，"
-        "保留原意、不编造事实，输出纯文本正文，不要 JSON 或代码块包裹。"
-    )
-    if domain_guidance and domain_guidance.strip():
-        parts: list[str] = ["【写作要求】", domain_guidance.strip()]
-    else:
-        parts = list(_GENERIC_RW_BODY)
-    parts += [
-        "",
-        "【通用约束】",
-        "- 必须使用简体中文；",
-        "- 直接输出纯文本正文，不要 JSON、不要 ``` 代码块包裹、不要额外的元描述；",
-        "- 不得编造源文档未出现的人物、平台、数据；只能改写、压缩、重组源文档信息。",
-        "",
-        "== 源文档 ==",
-        source_text,
-        "== 源文档结束 ==",
-    ]
-    # 注入卧龙复盘归纳的 Leader 口味备忘（同柳永 liuyong.py：让 rw 一开始就照 Leader 口味写）。
-    reqs = user_requirements or ""
-    try:
-        from ncds_opus_factory.common import rubric_store
-
-        brief = rubric_store.injection_brief()
-        if brief:
-            reqs = (reqs + "\n\n" if reqs else "") + brief
-    except Exception:  # noqa: BLE001 — 口味注入失败不阻塞改写
-        pass
-    if reqs.strip():
-        parts += [
-            "",
-            "【用户附加要求 / Leader 口味（最高优先级，可覆盖以上默认要求）】：",
-            reqs.strip(),
-        ]
-    return system_prompt, "\n".join(parts)
 
 
 def _build_lines_prompt(draft_md: str) -> tuple[str, str]:
@@ -2336,85 +1759,3 @@ def _load_template_episode(pipeline_id: str = "paper_card_talk_015") -> dict[str
         / ".015-draft-assets" / "episode.json"
     )
     return json.loads(tpl.read_text(encoding="utf-8"))
-
-
-def _extract_first_frame(mp4: Path, out: Path) -> None:
-    """ffmpeg 抽 mp4 首帧到 out（jpg）。同步、在 to_thread 里调。"""
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(out.suffix + ".part")
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-i", str(mp4),
-        "-frames:v", "1", "-q:v", "3",
-        str(tmp),
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if res.returncode != 0 or not tmp.is_file():
-        tail = (res.stderr or res.stdout or "").strip()[-300:]
-        raise RuntimeError(f"ffmpeg first-frame failed: {tail}")
-    tmp.rename(out)
-
-
-def _generate_scene_image(
-    *,
-    scene_id: str,
-    prompt: str,
-    size: str,
-    quality: str,
-    target: Path,
-    job_id: str,
-) -> None:
-    """单 scene 出图：subprocess 调 gpt_image_gen.py → Pillow PNG→WebP → 落 target。
-
-    复刻 ~/projects/ncds-materials/.014-draft-assets/pic_gen.py 的 generate_one()
-    逻辑。在 to_thread 里被调，整个函数纯同步、纯 IO。
-    """
-    # gpt_image 已迁入 ncds_opus_core（P1.2）；按包内位置定位，不再 parents[3]
-    from ncds_opus_core.gpt_image import script_path as _gpt_image_script
-
-    gen_script = _gpt_image_script("gpt_image_gen.py")
-    if not gen_script.is_file():
-        raise RuntimeError(f"gpt_image_gen.py not found at {gen_script}")
-
-    gen_out_dir = GPT_IMAGE_OUTPUT_ROOT / f"job-{job_id}-{scene_id}"
-    shutil.rmtree(gen_out_dir, ignore_errors=True)
-    gen_out_dir.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        sys.executable, str(gen_script),
-        "--out-dir", str(gen_out_dir),
-        "--size", size,
-        "--quality", quality,
-        "--overwrite",
-        "--prompt", prompt,
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=IMAGE_GEN_TIMEOUT_SEC)
-    if res.returncode != 0:
-        tail = (res.stderr or res.stdout or "").strip()[-500:]
-        raise RuntimeError(f"gpt-image gen failed: {tail}")
-
-    local_png = gen_out_dir / "image_01.png"
-    if not local_png.is_file():
-        raise RuntimeError(f"expected {local_png} not found after gen")
-
-    try:
-        from PIL import Image
-    except ImportError as exc:
-        raise RuntimeError("Pillow not installed; pip install Pillow") from exc
-
-    img = Image.open(local_png).convert("RGB")
-    tmp = target.with_suffix(target.suffix + ".part")
-    img.save(tmp, format="WEBP", quality=85, method=6)
-    tmp.rename(target)
-    shutil.rmtree(gen_out_dir, ignore_errors=True)
-
-
-def _read_episode(job_dir: Path) -> dict[str, Any] | None:
-    """读 job_dir/02_rw/episode.json，找不到或解析失败返回 None。"""
-    ep_path = job_dir / "02_rw" / "episode.json"
-    if not ep_path.exists():
-        return None
-    try:
-        return json.loads(ep_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None

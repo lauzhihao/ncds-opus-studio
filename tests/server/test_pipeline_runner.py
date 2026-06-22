@@ -13,7 +13,10 @@ from pathlib import Path
 
 import pytest
 
+from ncds_opus_factory.server import pipeline_asr_helpers as asr_helpers
+from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 from ncds_opus_factory.server import pipeline_runner as pr
+from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 
 
 class _FakeProc:
@@ -38,28 +41,28 @@ def test_polish_transcript_idempotent(tmp_path: Path, monkeypatch: pytest.Monkey
         calls["n"] += 1
         return _FakeProc("# 整理后\n正文")
 
-    monkeypatch.setattr(pr.subprocess, "run", fake_run)
+    monkeypatch.setattr(asr_helpers.subprocess, "run", fake_run)
 
     # 首次:真调 opus,产出 article.md + 指纹 sidecar
-    assert pr._polish_transcript_with_opus(
+    assert asr_helpers._polish_transcript_with_opus(
         transcript_path=transcript, output_path=article, title_hint="标题") is True
     assert article.read_text(encoding="utf-8").startswith("# 整理后")
     assert sha.is_file()
     assert calls["n"] == 1
 
     # 第二次:同转写+同标题 -> 幂等命中,不再调 opus
-    assert pr._polish_transcript_with_opus(
+    assert asr_helpers._polish_transcript_with_opus(
         transcript_path=transcript, output_path=article, title_hint="标题") is False
     assert calls["n"] == 1
 
     # title_hint 变 -> 重新整理
-    assert pr._polish_transcript_with_opus(
+    assert asr_helpers._polish_transcript_with_opus(
         transcript_path=transcript, output_path=article, title_hint="新标题") is True
     assert calls["n"] == 2
 
     # 转写内容变(模拟重转写出不同文本)-> 重新整理
     transcript.write_text("完全不同的另一段转写内容。", encoding="utf-8")
-    assert pr._polish_transcript_with_opus(
+    assert asr_helpers._polish_transcript_with_opus(
         transcript_path=transcript, output_path=article, title_hint="新标题") is True
     assert calls["n"] == 3
 
@@ -76,20 +79,20 @@ def test_polish_transcript_repolishes_when_article_missing(tmp_path: Path, monke
         calls["n"] += 1
         return _FakeProc("正文")
 
-    monkeypatch.setattr(pr.subprocess, "run", fake_run)
+    monkeypatch.setattr(asr_helpers.subprocess, "run", fake_run)
 
-    assert pr._polish_transcript_with_opus(
+    assert asr_helpers._polish_transcript_with_opus(
         transcript_path=transcript, output_path=article, title_hint="") is True
     article.unlink()  # 删掉成稿,只留 sidecar
-    assert pr._polish_transcript_with_opus(
+    assert asr_helpers._polish_transcript_with_opus(
         transcript_path=transcript, output_path=article, title_hint="") is True
     assert calls["n"] == 2
 
 
 def test_asr_stage_label_accepts_ascii_and_legacy_transcribe_progress():
-    assert pr._asr_stage_label("[OK] 转写: /tmp/job/raw/demo.txt") == "语音转写"
-    assert pr._asr_stage_label("\u2705 转写: /tmp/job/raw/demo.txt") == "语音转写"
-    assert pr._asr_stage_label("[DL] 下载中...") == "下载视频"
+    assert asr_helpers._asr_stage_label("[OK] 转写: /tmp/job/raw/demo.txt") == "语音转写"
+    assert asr_helpers._asr_stage_label("\u2705 转写: /tmp/job/raw/demo.txt") == "语音转写"
+    assert asr_helpers._asr_stage_label("[DL] 下载中...") == "下载视频"
 
 
 def test_call_opus_for_rw_delegates_to_common_call_opus(monkeypatch: pytest.MonkeyPatch):
@@ -100,13 +103,13 @@ def test_call_opus_for_rw_delegates_to_common_call_opus(monkeypatch: pytest.Monk
         captured["kwargs"] = kwargs
         return "ok"
 
-    monkeypatch.setattr(pr, "call_opus", fake_call_opus)
+    monkeypatch.setattr(rw_helpers, "call_opus", fake_call_opus)
 
-    assert pr._call_opus_for_rw("user", "system", "model-x") == "ok"
+    assert rw_helpers._call_opus_for_rw("user", "system", "model-x") == "ok"
     assert captured["prompt"] == "user"
     assert captured["kwargs"]["system_prompt"] == "system"
     assert captured["kwargs"]["model"] == "model-x"
-    assert captured["kwargs"]["timeout_seconds"] == pr.RW_LLM_TIMEOUT_SEC
+    assert captured["kwargs"]["timeout_seconds"] == rw_helpers.RW_LLM_TIMEOUT_SEC
 
 
 def test_rw_model_helpers_assert_known_model_and_mock_short_circuit(
@@ -165,7 +168,7 @@ def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.M
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         Path(target).write_bytes(b"webp")
 
-    monkeypatch.setattr(pr, "_generate_scene_image", fake_generate)
+    monkeypatch.setattr(media_helpers, "_generate_scene_image", fake_generate)
     out = asyncio.run(runner._execute_image(job.job_id))
 
     assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 1)
@@ -188,7 +191,7 @@ def test_execute_image_idempotent_skip(tmp_path: Path, monkeypatch: pytest.Monke
         "image": {},
     })
     monkeypatch.setattr(
-        pr, "_generate_scene_image",
+        media_helpers, "_generate_scene_image",
         lambda **_kwargs: pytest.fail("不应重生已存在的容器图"),
     )
 
@@ -205,7 +208,7 @@ def test_execute_image_all_failed_raises(tmp_path: Path, monkeypatch: pytest.Mon
         "image": {},
     })
     monkeypatch.setattr(
-        pr, "_generate_scene_image",
+        media_helpers, "_generate_scene_image",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
@@ -240,7 +243,7 @@ def test_execute_tts_uses_extracted_run_context(tmp_path: Path, monkeypatch: pyt
             b["audioEnd"] = 1.0
         Path(episode_path).write_text(json.dumps(ep, ensure_ascii=False), encoding="utf-8")
 
-    monkeypatch.setattr(pr, "_run_tts_gen_015", fake_tts)
+    monkeypatch.setattr(media_helpers, "_run_tts_gen_015", fake_tts)
 
     out = asyncio.run(runner._execute_tts(job.job_id))
 
@@ -309,7 +312,7 @@ def test_execute_storyboard_fills_scenes(tmp_path: Path, monkeypatch: pytest.Mon
         "sceneMap": {"1": "s1", "2": "s1", "3": "s2"},
     }, ensure_ascii=False)
 
-    monkeypatch.setattr(pr, "_call_opus_for_rw", lambda *_args, **_kwargs: director_json)
+    monkeypatch.setattr(rw_helpers, "_call_opus_for_rw", lambda *_args, **_kwargs: director_json)
     out = asyncio.run(runner._execute_storyboard(job.job_id))
 
     assert out["scenes_count"] == 2
@@ -333,7 +336,7 @@ def test_execute_rw_uses_extracted_run_context(tmp_path: Path, monkeypatch: pyte
         {"id": "opus", "label": "改写方案 A", "runner": "fake", "model": "fake-a"},
         {"id": "deepseek", "label": "改写方案 B", "runner": "fake", "model": "fake-b"},
     ]
-    monkeypatch.setattr(pr, "MODEL_CANDIDATES", candidates)
+    monkeypatch.setattr(rw_helpers, "MODEL_CANDIDATES", candidates)
 
     async def stub_invoke(cand, user_prompt, system_prompt, on_progress, on_status=None):
         assert "素材正文足够用于改写" in user_prompt
@@ -343,8 +346,8 @@ def test_execute_rw_uses_extracted_run_context(tmp_path: Path, monkeypatch: pyte
         on_progress(f"stub {cand['id']} done")
         return f"```markdown\n# 改写稿 {cand['id']}\n\n正文。\n```"
 
-    monkeypatch.setattr(pr, "_invoke_rw_candidate", stub_invoke)
-    monkeypatch.setattr(pr, "_apply_rw_qc", lambda *a, **k: {"qc": {"verdict": "pass"}})
+    monkeypatch.setattr(rw_helpers, "_invoke_rw_candidate", stub_invoke)
+    monkeypatch.setattr(rw_helpers, "_apply_rw_qc", lambda *a, **k: {"qc": {"verdict": "pass"}})
 
     out = asyncio.run(runner._execute_rw(job.job_id))
 
