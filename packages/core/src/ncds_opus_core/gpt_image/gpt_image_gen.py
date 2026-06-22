@@ -49,10 +49,14 @@ def resolution_for_model(model: str) -> str:
 class ApiHttpError(Exception):
     """携带 HTTP 状态码的 API 错误，供上层判断是否换模型重试。"""
 
-    def __init__(self, code: int, body: str) -> None:
-        super().__init__(f"HTTP {code}: {body}")
+    def __init__(self, code: int, body: str, curl: str = "") -> None:
+        msg = f"HTTP {code}: {body}"
+        if curl:
+            msg = f"{curl}\n{msg}"
+        super().__init__(msg)
         self.code = code
         self.body = body
+        self.curl = curl
 
 
 def fail(message: str, code: int = 1) -> None:
@@ -195,7 +199,8 @@ def request_image_generation(
 
     parsed_url = urllib.parse.urlparse(request_url)
     origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
-    print_debug_curl(request_url, payload, origin)
+    curl_text = build_curl(request_url, payload, origin)
+    print(curl_text, file=sys.stderr)
 
     req = urllib.request.Request(
         request_url,
@@ -218,17 +223,17 @@ def request_image_generation(
     except urllib.error.HTTPError as exc:
         err_body = exc.read().decode("utf-8", errors="replace")
         # 抛出带状态码的异常，由 main 决定是否换模型重试。
-        raise ApiHttpError(exc.code, err_body or exc.reason)
+        raise ApiHttpError(exc.code, err_body or exc.reason, curl=curl_text)
     except urllib.error.URLError as exc:
-        fail(f"Image generation API request failed: {exc.reason}")
+        fail(f"Image generation API request failed: {exc.reason}\n{curl_text}")
     return {}
 
 
-def print_debug_curl(
+def build_curl(
     request_url: str,
     payload: Dict[str, Any],
     origin: str,
-) -> None:
+) -> str:
     lines = [
         "curl -i \\",
         f"  {shlex.quote(request_url)} \\",
@@ -238,8 +243,14 @@ def print_debug_curl(
         f"  -H {shlex.quote(f'User-Agent: {DEFAULT_USER_AGENT}')} \\",
         f"  --data-raw {shlex.quote(json.dumps(payload, ensure_ascii=False))}",
     ]
-    print("Equivalent curl request:", file=sys.stderr)
-    print("\n".join(lines), file=sys.stderr)
+    return "Equivalent curl request:\n" + "\n".join(lines)
+
+def print_debug_curl(
+    request_url: str,
+    payload: Dict[str, Any],
+    origin: str,
+) -> None:
+    print(build_curl(request_url, payload, origin), file=sys.stderr)
 
 
 def save_images_from_response(

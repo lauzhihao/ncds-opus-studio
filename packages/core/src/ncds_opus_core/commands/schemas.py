@@ -51,6 +51,7 @@ PRIMITIVE_SCHEMAS: dict[str, dict[str, Any]] = {
         "fields": [
             _f("prompt", "提示词", "text", required=True),
             _f("size", "尺寸", "string", default="3:4", enum=["3:4", "1:1", "4:3", "9:16", "16:9"]),
+            _f("n", "数量", "int", default=4, help="一次生成几张（1-4）"),
         ],
     },
     "tst": {

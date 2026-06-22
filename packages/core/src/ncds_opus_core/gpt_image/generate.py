@@ -13,8 +13,11 @@ import subprocess
 import sys
 from typing import Any, Dict, List
 
+from ncds_opus_core.common.paths import repo_root
 
-DEFAULT_OUTPUT_ROOT = Path(os.environ.get("NOF_GPT_IMAGE_OUTPUT_DIR", "/tmp/gpt-image"))
+_REPO_ROOT = repo_root()
+_OUTPUT_DIR = os.environ.get("NOF_GPT_IMAGE_OUTPUT_DIR")
+DEFAULT_OUTPUT_ROOT = Path(_OUTPUT_DIR).resolve() if _OUTPUT_DIR else (_REPO_ROOT / "state" / "gpt-image")
 CLEANUP_MAX_AGE_DAYS = 14
 
 
@@ -78,6 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", help="Directory for generated files.")
     parser.add_argument("--timeout", type=int, default=180, help="Image generation timeout in seconds.")
     parser.add_argument("--size", help="Aspect ratio (1:1/3:2/2:3/16:9/21:9/9:16/4:3/3:4).")
+    parser.add_argument("--n", type=int, default=1, help="Number of images (1-4).")
     return parser.parse_args()
 
 
@@ -96,6 +100,8 @@ def main() -> None:
         generate_cmd.extend(["--prompt-file", args.prompt_file])
     if args.size:
         generate_cmd.extend(["--size", args.size])
+    if args.n:
+        generate_cmd.extend(["--n", str(args.n)])
 
     env = os.environ.copy()
     generation = run(generate_cmd, cwd=Path.cwd(), env=env, timeout=args.timeout + 30)

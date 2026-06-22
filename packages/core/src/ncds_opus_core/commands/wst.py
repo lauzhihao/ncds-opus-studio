@@ -32,6 +32,7 @@ def _noop(_text: str) -> None:
 def run(
     prompt: str,
     size: str = "3:4",
+    n: int = 4,
     timeout_seconds: int = DEFAULT_TIMEOUT,
     on_progress: ProgressFn = _noop,
     extra_args: list[str] | None = None,
@@ -45,13 +46,10 @@ def run(
 
     on_progress("正在执行文生图")
     command = [sys.executable, str(IMAGE_GATEWAY), "--prompt", prompt, "--size", size,
-               "--timeout", str(timeout_seconds), *(extra_args or [])]
+               "--n", str(n), "--timeout", str(timeout_seconds), *(extra_args or [])]
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
     if result.returncode != 0:
         _err = (result.stderr or result.stdout or "文生图失败").strip()
-        _m = re.search(r'HTTP (50[0-9])', _err)
-        if _m:
-            raise RuntimeError(f"上游服务错误({_m.group(1)})")
         raise RuntimeError(_err)
 
     payload = json.loads(result.stdout or "{}")

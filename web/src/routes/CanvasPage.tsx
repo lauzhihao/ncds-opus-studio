@@ -26,6 +26,11 @@ const CARD_PAD = 12;
 interface CardSize { w: number; h: number }
 interface CardPos { x: number; y: number }
 
+interface ImageCandidate {
+  src: string;
+  path: string;
+}
+
 interface CanvasImageItem {
   id: string;
   src: string;
@@ -38,12 +43,16 @@ interface CanvasImageItem {
   error?: string;
   interrupted?: boolean;
   messages?: ChatMessage[];
+  candidates?: ImageCandidate[];
+  selectedIdx?: number;
 }
 
 interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
+  taskId?: string;
   img?: string;
+  imgs?: string[];
   prompt?: string;
   ratio?: string;
 }
@@ -68,6 +77,9 @@ function ResizableImageCard({
   onDetail,
   taskId,
   interrupted,
+  candidates,
+  selectedIdx,
+  onPick,
 }: {
   src: string;
   loading?: boolean;
@@ -77,6 +89,9 @@ function ResizableImageCard({
   index: number;
   taskId?: string;
   interrupted?: boolean;
+  candidates?: ImageCandidate[];
+  selectedIdx?: number;
+  onPick?: (idx: number) => void;
   onRemove: () => void;
   onEdit: () => void;
   onStop: () => void;
@@ -162,7 +177,7 @@ function ResizableImageCard({
 
   return (
     <div className="canvas-image-card" style={{ width: size.w + CARD_PAD * 2, left: pos.x, top: pos.y }}>
-      <div className="canvas-image-photo" style={{ height: size.h }} onClick={src && !loading ? onDetail : undefined}>
+      <div className="canvas-image-photo" style={{ height: size.h }} onClick={onDetail}>
         {interrupted ? (
           <div className="canvas-image-interrupted">已停止</div>
         ) : loading ? (
@@ -176,6 +191,19 @@ function ResizableImageCard({
           <img src={src} alt="" draggable={false} />
         )}
       </div>
+      {candidates && candidates.length > 1 && (
+        <div className="canvas-image-candidates">
+          {candidates.map((c, i) => (
+            <button
+              key={i}
+              className={`canvas-image-cand${i === selectedIdx ? ' active' : ''}`}
+              onClick={(e) => { e.stopPropagation(); onPick?.(i); }}
+            >
+              <img src={c.src} alt={`候选 ${i + 1}`} />
+            </button>
+          ))}
+        </div>
+      )}
       <div className="canvas-image-bar" onMouseDown={onMoveStart}>
         {loading ? (
           <>
@@ -192,6 +220,9 @@ function ResizableImageCard({
             <button type="button" className="canvas-image-bar-btn" onClick={(e) => { e.stopPropagation(); onRetry(); }} aria-label="重试" title="重新生成">
               <RotateCcw size={13} strokeWidth={1.7} />
             </button>
+            <button type="button" className="canvas-image-bar-btn" onClick={(e) => { e.stopPropagation(); onRemove(); }} aria-label="删除" title="删除">
+              <Trash2 size={13} strokeWidth={1.7} />
+            </button>
           </>
         ) : error ? (
           <>
@@ -202,6 +233,10 @@ function ResizableImageCard({
               <Copy size={13} strokeWidth={1.7} />
             </button>
             {copied && <span className="copy-feedback"><span className="check">✓</span> Copied</span>}
+            <span className="spacer" />
+            <button type="button" className="canvas-image-bar-btn" onClick={(e) => { e.stopPropagation(); onRemove(); }} aria-label="删除" title="删除">
+              <Trash2 size={13} strokeWidth={1.7} />
+            </button>
           </>
         ) : (
           <>
@@ -244,13 +279,11 @@ export function CanvasPage() {
   const RATIOS = ['3:4', '1:1', '4:3', '9:16', '16:9'] as const;
   const MAX_CONCURRENT = 5;
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState<'chat' | 'detail'>('chat');
   const [cmdPrefix, setCmdPrefix] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [ratio, setRatio] = useState('3:4');
   const [concurrentCount, setConcurrentCount] = useState(0);
-  const [detailImageId, setDetailImageId] = useState<string | null>(null);
   const [images, setImages] = useState<CanvasImageItem[]>(() => loadImages());
   const [dragOver, setDragOver] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -274,30 +307,21 @@ export function CanvasPage() {
     return images.find((i) => i.id === id);
   }
 
-  function openDrawerFor(prefix: string, prefill?: string, editId?: string) {
-    setDetailImageId(null);
+  function openDrawerFor(prefix: string, prefill?: string, editId?: string, initialMessages?: ChatMessage[]) {
     setCmdPrefix(prefix);
     setInput(prefill || '');
-    setMessages([]);
+    setMessages(initialMessages || []);
     setEditingId(editId || null);
-    setDrawerMode('chat');
     setDrawerOpen(true);
   }
 
   function openDetailDrawer(id: string) {
-    setDetailImageId(id);
-    setCmdPrefix('');
-    setInput('');
-    setMessages([]);
-    setEditingId(null);
-    setDrawerMode('detail');
-    setDrawerOpen(true);
+    const item = findItem(id);
+    openDrawerFor('/wst', '', undefined, item?.messages || []);
   }
 
   function closeDrawer() {
     setDrawerOpen(false);
-    setDrawerMode('chat');
-    setDetailImageId(null);
     setCmdPrefix('');
     setInput('');
     setEditingId(null);
@@ -313,21 +337,27 @@ export function CanvasPage() {
 
   async function pollTask(taskId: string, itemId: string, prompt: string, r: string, existingMessages: ChatMessage[]) {
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 60; i++) {
       await wait(5000);
       if (cancelledRef.current.has(taskId)) return;
       try {
         const detail = await api.getTask(taskId);
+        if (cancelledRef.current.has(taskId)) return;
         if (detail.status === 'cancelled') {
           removeItem(itemId);
           return;
         }
         if (detail.status === 'completed' && detail.result?.images?.length) {
-          const serverPath = detail.result.images[0];
-          const artifactUrl = detail.artifacts?.[0]?.url || `/artifacts/files/${serverPath}`;
-          const doneMsg: ChatMessage = { role: 'assistant', text: '生成完成', img: artifactUrl, prompt, ratio: r };
+          const imgs = detail.result.images;
+          const candidates: ImageCandidate[] = imgs.map((p: string, i: number) => ({
+            path: p,
+            src: detail.artifacts?.[i]?.url || `/artifacts/files/${p}`,
+          }));
+          const pick = candidates[0];
+          const allSrcs = candidates.map((c) => c.src);
+          const doneMsg: ChatMessage = { role: 'assistant', text: '生成完成', img: pick.src, imgs: allSrcs, taskId, prompt, ratio: r };
           const updated = [...existingMessages, doneMsg];
-          updateItem(itemId, { src: artifactUrl, path: serverPath, loading: false, messages: updated });
+          updateItem(itemId, { src: pick.src, path: pick.path, loading: false, candidates, selectedIdx: 0, messages: updated });
           return;
         }
         if (detail.status === 'failed') {
@@ -350,14 +380,14 @@ export function CanvasPage() {
   async function submitTask(cmd: string, prompt: string, size: string, itemId: string, refPath?: string, existingMessages?: ChatMessage[]) {
     let taskId: string;
     if (cmd === '/wst') {
-      const res = await api.submitTask('wst', { prompt, size });
+      const res = await api.submitTask('wst', { prompt, size, n: 4 });
       taskId = res.task_id;
     } else if (cmd === '/tst') {
       if (!refPath) throw new Error('参考图不可用');
       const res = await api.submitTask('tst', { prompt, reference_images: [refPath], size });
       taskId = res.task_id;
     } else throw new Error(`未知命令: ${cmd}`);
-    const submitMsg: ChatMessage = { role: 'assistant', text: `任务已提交 (${taskId.slice(0, 8)})` };
+    const submitMsg: ChatMessage = { role: 'assistant', text: `任务已提交`, taskId };
     const msgs = [...(existingMessages || []), submitMsg];
     updateItem(itemId, { taskId, messages: msgs });
     setMessages((prev) => [...prev, submitMsg]);
@@ -372,7 +402,7 @@ export function CanvasPage() {
     const existingMsgs = item.messages || [];
     const retryMsg: ChatMessage = { role: 'user', text: `[重新生成] ${item.prompt}` };
     const msgs = [...existingMsgs, retryMsg];
-    updateItem(itemId, { loading: true, error: undefined, src: '', interrupted: false, messages: msgs });
+    updateItem(itemId, { loading: true, error: undefined, src: '', interrupted: false, candidates: undefined, selectedIdx: undefined, messages: msgs });
     try {
       await submitTask(cmd, item.prompt, item.ratio, itemId, refPath, msgs);
     } catch (err) {
@@ -404,9 +434,11 @@ export function CanvasPage() {
     const item = findItem(itemId);
     if (item?.taskId) {
       cancelledRef.current.add(item.taskId);
-      try { await api.cancelTask(item.taskId); } catch { /* ignore */ }
     }
     updateItem(itemId, { loading: false, interrupted: true });
+    if (item?.taskId) {
+      try { await api.cancelTask(item.taskId); } catch { /* ignore */ }
+    }
   }
 
   async function send() {
@@ -505,6 +537,12 @@ export function CanvasPage() {
               onDetail={() => openDetailDrawer(item.id)}
               taskId={item.taskId}
               interrupted={item.interrupted}
+              candidates={item.candidates}
+              selectedIdx={item.selectedIdx}
+              onPick={(idx) => {
+                const c = item.candidates?.[idx];
+                if (c) updateItem(item.id, { src: c.src, path: c.path, selectedIdx: idx });
+              }}
             />
           ))
         )}
@@ -521,7 +559,7 @@ export function CanvasPage() {
         onCancel={() => setPendingDelete(null)}
       />
 
-      {drawerOpen && drawerMode === 'chat' && (
+      {drawerOpen && (
         <>
           <div className="drawer-backdrop" onClick={closeDrawer} />
           <aside className="drawer chat-drawer" role="dialog" aria-modal aria-label="AI 对话">
@@ -544,21 +582,47 @@ export function CanvasPage() {
               {messages.map((msg, i) => (
                 <div key={i} className={`chat-msg role-${msg.role}`}>
                   <div className="chat-bubble">
-                    {msg.text}
-                    {msg.img && <img src={msg.img} alt="" className="chat-thumb" />}
+                    {msg.taskId ? (
+                      <div className="chat-title-row">
+                        <span>{msg.text}</span>
+                        <code className="task-id">{msg.taskId}</code>
+                        <button
+                          className="chat-copy-btn"
+                          onClick={() => navigator.clipboard.writeText(msg.taskId!)}
+                          aria-label="复制任务ID"
+                          title="复制任务ID"
+                        >
+                          <Copy size={12} strokeWidth={1.6} />
+                        </button>
+                      </div>
+                    ) : msg.imgs && msg.imgs.length > 0 ? (
+                      <>
+                        <div className="chat-title-row">
+                          <span>{msg.text}</span>
+                          <button
+                            className="chat-copy-btn"
+                            onClick={() => navigator.clipboard.writeText(
+                              `提示词: ${msg.prompt}\n尺寸: ${msg.ratio || ''}`
+                            )}
+                            aria-label="复制图片信息"
+                            title="复制图片信息"
+                          >
+                            <Copy size={12} strokeWidth={1.6} />
+                          </button>
+                        </div>
+                        <div className="chat-grid">
+                          {msg.imgs.map((src, j) => (
+                            <img key={j} src={src} alt={`图 ${j + 1}`} loading="lazy" />
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {msg.text}
+                        {msg.img && <img src={msg.img} alt="" className="chat-thumb" />}
+                      </>
+                    )}
                   </div>
-                  {msg.role === 'assistant' && msg.prompt && (
-                    <button
-                      className="chat-copy-btn"
-                      onClick={() => navigator.clipboard.writeText(
-                        `提示词: ${msg.prompt}\n尺寸: ${msg.ratio || ''}`
-                      )}
-                      aria-label="复制图片信息"
-                      title="复制图片信息"
-                    >
-                      <Copy size={12} strokeWidth={1.6} />
-                    </button>
-                  )}
                 </div>
               ))}
               <div ref={bottomRef} />
@@ -589,65 +653,6 @@ export function CanvasPage() {
           </aside>
         </>
       )}
-
-      {drawerOpen && drawerMode === 'detail' && (() => {
-        const detailItem = findItem(detailImageId || '');
-        if (!detailItem) return null;
-        const detailMsgs = detailItem.messages || [];
-        return (
-          <>
-            <div className="drawer-backdrop" onClick={closeDrawer} />
-            <aside className="drawer chat-drawer" role="dialog" aria-modal aria-label="图片详情">
-              <div className="head">
-                <div className="titles">
-                  <h3 className="title">图片详情</h3>
-                  <div className="subtitle">{detailItem.prompt.slice(0, 60)}</div>
-                </div>
-                <button className="btn sm icon-only ghost" onClick={closeDrawer} title="关闭" aria-label="关闭">
-                  <X size={14} strokeWidth={1.6} />
-                </button>
-              </div>
-              <div className="body chat-body">
-                {detailMsgs.length === 0 ? (
-                  <div className="chat-hint dim-mono">暂无对话记录</div>
-                ) : (
-                  detailMsgs.map((msg, i) => (
-                    <div key={i} className={`chat-msg role-${msg.role}`}>
-                      <div className="chat-bubble">
-                        {msg.text}
-                        {msg.img && <img src={msg.img} alt="" className="chat-thumb" />}
-                      </div>
-                      {msg.role === 'assistant' && msg.prompt && (
-                        <button
-                          className="chat-copy-btn"
-                          onClick={() => navigator.clipboard.writeText(
-                            `提示词: ${msg.prompt}\n尺寸: ${msg.ratio || ''}`
-                          )}
-                          aria-label="复制图片信息"
-                          title="复制图片信息"
-                        >
-                          <Copy size={12} strokeWidth={1.6} />
-                        </button>
-                      )}
-                    </div>
-                  ))
-                )}
-                <div ref={bottomRef} />
-              </div>
-              {detailItem.src && !detailItem.loading && !detailItem.error && (
-                <div className="chat-detail-footer">
-                  <button className="btn sm ghost" onClick={() => downloadImage(detailItem.src, detailItem.prompt)}>
-                    <Download size={13} strokeWidth={1.6} /> 下载
-                  </button>
-                  <button className="btn sm ghost" onClick={() => { closeDrawer(); resubmit(detailItem.id); }}>
-                    <RotateCcw size={13} strokeWidth={1.6} /> 重新生成
-                  </button>
-                </div>
-              )}
-            </aside>
-          </>
-        );
-      })()}
     </div>
   );
 }

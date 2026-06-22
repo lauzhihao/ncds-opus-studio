@@ -587,9 +587,6 @@
   position: relative;
 }
 .chat-copy-btn {
-  position: absolute;
-  right: -4px;
-  top: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -600,24 +597,55 @@
   background: var(--bg-surface);
   color: var(--ink-3);
   cursor: pointer;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
-.chat-msg.role-assistant:hover .chat-copy-btn {
+.chat-msg.role-assistant:not(:has(.chat-title-row)) .chat-copy-btn {
+  position: absolute;
+  right: -4px;
+  top: 0;
+  opacity: 0;
+}
+.chat-msg.role-assistant:not(:has(.chat-title-row)):hover .chat-copy-btn {
   opacity: 1;
 }
 .chat-copy-btn:hover {
   color: var(--accent);
   border-color: var(--accent);
 }
-
-/* Detail drawer footer: action buttons row */
-.chat-detail-footer {
+.chat-title-row {
   display: flex;
+  align-items: center;
   gap: var(--s-2);
-  padding: var(--s-3) var(--s-5);
-  border-top: 1px solid var(--border);
+}
+.chat-title-row .task-id {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.chat-title-row .chat-copy-btn {
   flex-shrink: 0;
+  position: static;
+  opacity: 1;
+  margin-left: auto;
+}
+.chat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: var(--s-2);
+}
+.chat-grid img {
+  display: block;
+  width: 100%;
+  border-radius: var(--r-2);
 }
 
 /* Concurrent count badge in drawer subtitle */
