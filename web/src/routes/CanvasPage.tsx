@@ -79,7 +79,7 @@ function ResizableImageCard({
   onEdit: () => void;
   onStop: () => void;
   onRetry: () => void;
-  onDownload: (src: string) => void;
+  onDownload: (src: string, prompt?: string) => void;
 }) {
   const [size, setSize] = useState<CardSize>(() => ratioToSize(ratio));
   const [pos, setPos] = useState<CardPos>(() => ({
