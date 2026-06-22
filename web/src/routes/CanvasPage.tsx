@@ -4,6 +4,7 @@ import { ArrowLeft, Copy, Download, Loader2, Pencil, Plus, RotateCcw, SendHorizo
 import { api } from '../api/client';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
+import { useToast } from '../components/Toast';
 
 const MODE_LABEL: Record<string, string> = { gen: '图片生成' };
 const LS_KEY = 'ncds:canvas:images';
@@ -60,6 +61,41 @@ interface ChatMessage {
 function ratioToSize(ratio: string, width = DEFAULT_SIZE): CardSize {
   const [rw, rh] = ratio.split(':').map(Number);
   return { w: width, h: width * rh / rw };
+}
+
+function extFromImage(type: string, src: string): string {
+  const t = type.toLowerCase();
+  if (t.includes('png')) return 'png';
+  if (t.includes('webp')) return 'webp';
+  if (t.includes('gif')) return 'gif';
+  if (t.includes('avif')) return 'avif';
+  if (t.includes('jpeg') || t.includes('jpg')) return 'jpg';
+  try {
+    const m = new URL(src, window.location.href).pathname.match(/\.(png|jpe?g|webp|gif|avif)$/i);
+    if (m) return m[1].toLowerCase().replace('jpeg', 'jpg');
+  } catch {
+    // ignore: fall back to jpg below
+  }
+  return 'jpg';
+}
+
+function downloadName(prompt: string | undefined, ext: string): string {
+  const stem = (prompt || 'image')
+    .trim()
+    .slice(0, 30)
+    .replace(/[^a-zA-Z0-9\u4e00-\u9fa5]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'image';
+  return `${stem}.${ext}`;
+}
+
+function clickDownload(href: string, name: string) {
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 function ResizableImageCard({
@@ -159,6 +195,8 @@ function ResizableImageCard({
   }, [size]);
 
   const onMoveStart = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button,a,input,textarea,select,[role="button"]')) return;
     e.preventDefault(); e.stopPropagation();
     moveRef.current = { startX: e.clientX, startY: e.clientY, startPX: pos.x, startPY: pos.y };
     const onMove = (ev: MouseEvent) => {
@@ -275,6 +313,7 @@ function genId() { return String(++idCounter); }
 export function CanvasPage() {
   const { mode } = useParams<{ mode: string }>();
   const nav = useNavigate();
+  const { showToast } = useToast();
   const label = (mode && MODE_LABEL[mode]) || '画布';
   const RATIOS = ['3:4', '1:1', '4:3', '9:16', '16:9'] as const;
   const MAX_CONCURRENT = 5;
@@ -351,7 +390,7 @@ export function CanvasPage() {
           const imgs = detail.result.images;
           const candidates: ImageCandidate[] = imgs.map((p: string, i: number) => ({
             path: p,
-            src: detail.artifacts?.[i]?.url || `/artifacts/files/${p}`,
+            src: detail.artifacts?.find((a) => a.path === p)?.url || detail.artifacts?.[i]?.url || p,
           }));
           const pick = candidates[0];
           const allSrcs = candidates.map((c) => c.src);
@@ -412,21 +451,31 @@ export function CanvasPage() {
   }
 
   async function downloadImage(src: string, prompt?: string) {
+    if (!src) {
+      showToast('图片还没有生成完成');
+      return;
+    }
     try {
-      const res = await fetch(src);
+      const isDataUrl = src.startsWith('data:');
+      const parsed = isDataUrl ? null : new URL(src, window.location.href);
+      if (parsed && parsed.origin !== window.location.origin) {
+        clickDownload(parsed.href, downloadName(prompt, extFromImage('', parsed.href)));
+        showToast('已打开原图下载', 'info');
+        return;
+      }
+      const res = await fetch(src, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
-      const ext = blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg';
-      const name = (prompt || 'image').slice(0, 30).replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_') + '.' + ext;
+      if (blob.size === 0) throw new Error('empty image');
+      const ext = extFromImage(blob.type, src);
+      const name = downloadName(prompt, ext);
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      clickDownload(url, name);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast('已开始下载', 'success');
     } catch (e) {
       console.error('下载失败', e);
+      showToast('下载失败：图片文件不可访问');
     }
   }
 
