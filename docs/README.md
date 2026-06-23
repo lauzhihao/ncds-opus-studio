@@ -57,7 +57,7 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 - **`/instances` 是可用的后端 driver API**，目前主要由测试与内部迁移使用，尚未替代 web/app 前端主路径。
 - 测试基线不要沿用历史文档里的 passed 数字；执行任务当天以 `pytest --collect-only` / `pytest` 的真实结果为准。
 
-下一步按 backlog task-3 系列收敛：先处理文档记忆与运行时事实对齐（task-3.10），再按 owner 决策推进运行时收口、god-object 拆分与单一真源。
+下一步按 backlog task-3 系列继续推进运行时收口、god-object 拆分与单一真源。
 ⚠️ 护城河：web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉它。
 
 ## 活文档（current）
@@ -68,6 +68,4 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 | [FRONTEND-API.md](FRONTEND-API.md) | 对外 HTTP API 契约：当前 `/jobs`=web 主路径、`/tasks`=app 主路径、`/instances`=engine 后端 driver API |
 
 ## [archive/](archive/) —— 历史/已作废，**不要当现状读**
-三包对等拆分系列（MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS}）、CONVERGENCE-DESIGN、MIGRATION（旧
-历史 bot listener→factory 合并）。仅留作"为什么走到今天"的证据；其中 MONOREPO-SPLIT-DESIGN §9.x 是
-**P1 抽 core 的 as-built 记录**，要追 P1 细节时可查。
+仅保留少量早期收敛设计作为演进证据；当前架构以本目录 active 文档为准。

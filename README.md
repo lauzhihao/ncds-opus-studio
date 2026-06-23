@@ -119,7 +119,7 @@ curl http://localhost:8810/tasks/t_1779600315677_e3874132
 
 ## 状态
 
-迁移进行中。`docs/MIGRATION.md` 跟踪进度。
+早期迁移记录已退场；当前状态以 `docs/README.md` 与 `docs/PRODUCTION-ENGINE-DESIGN.md` 为准。
 
 ## Git 推送说明
 

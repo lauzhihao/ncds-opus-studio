@@ -1,8 +1,7 @@
 # 统一生产引擎设计（core → 生产引擎 → 两视图）
 
 > 状态：**v1 DESIGN（2026-06-13），实现快照补充到 2026-06-22。用户已拍板方向、范围、首步路径，本文档是权威设计。**
-> **取代**已归档的三包拆分系列（[archive/](archive/)：MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS} +
-> CONVERGENCE-DESIGN）——三包对等拆分作废、转历史；**P1 抽 core 的成果全部保留**。
+> **取代**早期三包拆分方向——三包对等拆分作废；**P1 抽 core 的成果全部保留**。
 > 产出方式：grounded 研究工作流（4 路逐块分类 web/app 现状 + 合成）。历史 passed 数只作考古线索；执行任务时以当天 `pytest --collect-only` / `pytest` 真实结果为准。
 
 ## 当前实现快照（2026-06-22）
@@ -392,7 +391,7 @@ storyboard/image/render running 态进度冻结）。
 ## 12. 与既有成果的关系
 
 - **P1（抽 core，6 primitive + runners + pipelines(DAG 类型) + 模板015 + registry/cli 二分）全部保留**——core 在本架构里是最底层能力，且 `build_full_registry()` 直接成为引擎的晚绑定派发表。
-- **MONOREPO-SPLIT 三包对等拆分作废**（P2+ 不做）；那三份文档转历史，本文档接任权威设计。
+- **三包对等拆分作废**（P2+ 不做）；本文档接任权威设计。
 - **测试基线以执行当天为准**；每个 E-期退出标准含"不掉绿"，不要复用历史 passed 数作为当前事实。
 - **操作安全网**：`main` 有 web 旧画布可跑副本；本 branch `claude/gallant-hellman-27de2a` 做重做，**不并 main**。
 

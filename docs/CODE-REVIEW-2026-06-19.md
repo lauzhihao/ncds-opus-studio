@@ -44,8 +44,8 @@
 |---|---|---|---|---|
 | A1 | P1 | 三套运行时并存，engine 被塞进 PipelineRunner 当内核，TaskRunner 老轨未迁 | `pipeline_runner.py` / `task_runner.py` / `engine/` | task-3.1 |
 | A2 | P1 | 同一份 015 逻辑在 legacy `_execute_*` 与 engine `run_*_step` 各一份，已漂移（lines/storyboard 加了 JSON 重试+domain_image_style，legacy 没有） | `pipeline_runner.py:1457-2440` ↔ `pipeline_performers_015.py` | task-3.1 |
-| A3 | P1 | "改写"能力多套实现、输入语义/质检口径各异 | `commands/liuyong.py` / `_execute_rw` / `run_rw_step` | task-3.4 |
-| A4 | P1 | "采集"能力 3 套：collect_one 快采 vs video_pipeline 全量，靠 `!= "asr"` 一行 guard 掩盖；engine `run_asr_step` 是死代码 | `_execute_asr_collect` / `run_asr_step` / `:1306` | task-3.4 |
+| A3 | P1 | "改写"能力多套实现、输入语义/质检口径各异 | `commands/liuyong.py` / `_execute_rw` / `run_rw_step` | 已拆分处理 |
+| A4 | P1 | "采集"能力 3 套：collect_one 快采 vs video_pipeline 全量，靠 `!= "asr"` 一行 guard 掩盖；engine `run_asr_step` 是死代码 | `_execute_asr_collect` / `run_asr_step` / `:1306` | 已拆分处理 |
 | A5 | P1 | rw 默认走 engine → 丢逐模型实时增量进度面板（产物不变，仅 UX 退化，设计已知接受） | `pipeline_performers_015.py:316,397` | task-3.3（决策） |
 | A6 | P2 | `/instances` engine HTTP 层 + app `TaskRunner` 都未真正进迁移；`/instances` 前端零调用 | `routes/instances.py` | task-3.1 |
 | A7 | P2 | `/jobs/*` 的 26 个业务端点散在名为 `pipelines.py` 的文件，`jobs.py` 只剩 2 个文件 CRUD，命名误导 | `routes/pipelines.py` / `routes/jobs.py` | task-3.2 |
@@ -68,7 +68,7 @@
 
 | ID | 严重度 | 标题 | 关键位置 | 归属 task |
 |---|---|---|---|---|
-| S1 | P1 | 生产媒体管线曾大量使用非 ASCII 日志前缀，违反「日志只用 ASCII」 | `skills/video-pipeline/scripts/*` | task-3.6 |
+| S1 | P1 | 生产媒体管线曾大量使用非 ASCII 日志前缀，违反「日志只用 ASCII」 | `skills/video-pipeline/scripts/*` | 已拆分处理 |
 | S2 | P1 | 启动日志非 ASCII `→`（**已修 E2**） | `app.py:114` | 已修 |
 | S3 | P2 | `nof-worker` 裸 `await asyncio.Event().wait()`，无 SIGTERM/graceful shutdown | `server/worker.py:76` | task-3.9 |
 | S4 | P2 | `Dockerfile:33` 用全局 `pip install`（docker 已弃用，留作回滚） | `Dockerfile:33` | task-3.8（低优） |
