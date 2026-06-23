@@ -59,9 +59,16 @@
     }
   }
 
-  // 预生成图片路径：pictures/<scene-id>.webp，scene-id 本身就是索引（如 S1-001）
+  // 预生成图片路径：新链路默认全片共用 pictures/background.webp；
+  // 老 episode 没有 image.background 时仍回退 pictures/<scene-id>.webp。
   const PIC_DIR = ASSET_ROOT + '/pictures';
   function picSrcFor(sceneId) {
+    const def = scenes[sceneId] || {};
+    const bg = (EP.image && EP.image.background) || {};
+    const explicit = def.imageFile || def.backgroundImage || bg.imageFile;
+    if (explicit) {
+      return bustedUrl(ASSET_ROOT + '/' + String(explicit).replace(/^\/+/, ''));
+    }
     return bustedUrl(PIC_DIR + '/' + sceneId + '.webp');
   }
   // 简笔画图片路径：pictures/<scene-id>-sk<n>.webp（n 从 1）

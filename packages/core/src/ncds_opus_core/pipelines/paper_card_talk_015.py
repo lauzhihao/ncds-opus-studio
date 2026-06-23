@@ -10,8 +10,8 @@ DAG 形态（线性 10 节点）：
 - rw         : 多模型多风格改写，只产口播稿件 draft.md（不碰画面）
 - lines      : 调 opus 把 draft.md 结构化成 beats[]（≤18 字字幕切分），用户在抽屉逐句编辑
 - storyboard : 「分镜」—— 独立 director agent（whisper-reel 心理学家+导演人格）读 beats，
-               切分子场景 + 产出每个场景的容器图 prompt 与 1-6 幅简笔画设计（scenes{}）。
-- image      : 按 scenes[].prompt 出容器图 + 遍历 sketches 出白底简笔画（gpt-image-2），落 03_image/
+               产出全片统一背景 + 切分子场景 + 设计前景素材（scenes[].sketches）。
+- image      : 出 1 张全片背景 + 遍历 sketches 出白底前景素材（gpt-image-2），落 03_image/
 - tts        : 按最终 beats[].scene 整段合成配音，落 04_tts/scene-<sid>.mp3 + 字级时间戳
 - preview    : iframe 全屏 HTML（edit-mode + Inspector + Tweaks 抽屉），回写 02_rw/episode.json
 - render     : render_015 命令 → 1920x1080 MP4
@@ -70,7 +70,7 @@ PIPELINE = PipelineDef(
             cmd="",
             deps=("lines",),
             out_dir="03b_storyboard",
-            description="导演 agent 分镜：子场景 + 简笔画设计",
+            description="导演 agent 分镜：背景 + 子场景 + 前景素材设计",
             position=NodePosition(0, 560),
         ),
         PipelineNode(

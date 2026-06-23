@@ -1,8 +1,8 @@
 // 吴道子「视觉方案」入口：先完成视觉准备，再展示 / 微调 director agent 产出的视觉层。
 //
-// 数据源：02_rw/episode.json 的 scenes{}（director 产出，含每个子场景的容器图 prompt
-//         与 sketches[]）+ beats[].scene（子场景归属）。本面板按 scene.group 分段展示，
-//         允许就地编辑容器 prompt / 简笔画 prompt / pos / at.match，防抖整份回写 episode。
+// 数据源：02_rw/episode.json 的 scenes{}（director 产出，含每个子场景的视觉意图
+//         与前景素材 sketches[]）+ beats[].scene（子场景归属）。本面板按 scene.group 分段展示，
+//         允许就地编辑 scene 视觉意图 / 前景素材 prompt / pos / at.match，防抖整份回写 episode。
 // 顶部右：生成视觉方案 / 停止 / 重新执行；底部右：确认视觉方案 → runNode('image') 生成画面资产。
 //
 // 风格对齐 BEATS/TTS：panel-hint banner + proc-rows 状态行 + section-h loading。
@@ -78,7 +78,7 @@ function friendlyStoryboardProgress(progress: string | null | undefined): string
   const msg = (progress ?? '').trim();
   if (!msg) return null;
   if (/切换备用通道/.test(msg)) return '当前通道未成功，正在切换备用通道...';
-  if (/视觉方案生成完成|个子场景|幅简笔画/.test(msg)) return msg;
+  if (/视觉方案生成完成|个子场景|幅简笔画|个前景素材/.test(msg)) return msg.replace(/幅简笔画/g, '个前景素材');
   if (/director agent|分镜|beats|Opus|opus|AGY|DeepSeek|SCodex|模型/.test(msg)) {
     return '正在生成视觉方案...';
   }
@@ -297,7 +297,7 @@ export function StoryboardPanel({
       return (
         <button
           className="btn primary sm"
-          title="重做视觉方案（会覆盖 scenes 与下游状态）"
+          title="重做视觉方案（会覆盖背景、scenes 与下游状态）"
           disabled={actionBusy}
           onClick={() => setPendingRerun(true)}
         >
@@ -329,7 +329,7 @@ export function StoryboardPanel({
   if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
   } else if (status === 'idle') {
-    hint = { tone: 'info', text: '吴道子会把成稿转成视觉方案：子场景、容器图提示词与简笔画设计。' };
+    hint = { tone: 'info', text: '吴道子会把成稿转成视觉方案：全片背景、子场景与前景素材设计。' };
   }
 
   if (!preflightReady) {
@@ -428,7 +428,7 @@ export function StoryboardPanel({
           <ProcStatusRow
             row={{
               id: 'storyboard',
-              label: '视觉方案（子场景 + 提示词 + 简笔画设计）',
+              label: '视觉方案（背景 + 子场景 + 前景素材设计）',
               status: status === 'done' ? 'done' : status === 'failed' ? 'failed' : 'running',
             }}
             runningText="设计中"
@@ -441,7 +441,7 @@ export function StoryboardPanel({
           className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
           style={{ margin: 0, flex: 1 }}
         >
-          视觉方案 · {scenesCount} 子场景 · {sketchesCount} 简笔画{statusBadge}
+          视觉方案 · {scenesCount} 子场景 · {sketchesCount} 前景素材{statusBadge}
           {hasPending && (
             <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
               · 保存中…
@@ -468,12 +468,12 @@ export function StoryboardPanel({
                   <article key={id} className="sb-scene">
                     <div className="sb-scene-head">
                       <span className="image-card-id mono">{id}</span>
-                      <span className="dim-mono">{(scene.sketches?.length ?? 0)} 简笔画</span>
+                      <span className="dim-mono">{(scene.sketches?.length ?? 0)} 前景素材</span>
                     </div>
                     <textarea
                       className="field sb-container-prompt"
                       value={scene.prompt}
-                      placeholder="容器图 prompt（暖纸底 + 稀疏背景）"
+                      placeholder="子场景视觉意图（不再逐场景生成背景）"
                       rows={5}
                       spellCheck={false}
                       onChange={(e) => patchScene(id, (sc) => { sc.prompt = e.target.value; })}
@@ -513,7 +513,7 @@ export function StoryboardPanel({
       <ConfirmDialog
         open={pendingRerun}
         title="重做视觉方案？"
-        message={<>会重新切子场景并覆盖 scenes{'{}'}、画面提示词与简笔画设计，同时重置下游声音和画面资产。</>}
+        message={<>会重新生成全片背景、切子场景并覆盖 scenes{'{}'} 与前景素材设计，同时重置下游声音和画面资产。</>}
         confirmLabel="重新执行"
         danger
         onConfirm={async () => {
@@ -542,7 +542,7 @@ function SketchRow({
         <textarea
           className="field sb-sketch-prompt"
           value={sketch.prompt}
-          placeholder="简笔画单格内容（english，圣经自动前置）"
+          placeholder="前景素材单格内容（english，圣经自动前置）"
           rows={5}
           spellCheck={false}
           onChange={(e) => onPatch((sk) => { sk.prompt = e.target.value; })}

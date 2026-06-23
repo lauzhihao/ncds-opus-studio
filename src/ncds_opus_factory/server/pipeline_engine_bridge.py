@@ -86,4 +86,9 @@ class PipelineEngineBridgeMixin:
             asr_out = (asr_node.outputs or {}) if asr_node else {}
             si["asr_items"] = list(asr_out.get("collected") or asr_out.get("items") or [])
             # 体裁 profile 已废；写作 domain 由引擎从实例 inputs 透传给 performer，无需在此装配。
+        elif node_name == "image":
+            si["outputs_patch"] = (
+                lambda key, value, jid=job.job_id, n=node_name:
+                    self._push_outputs_patch(jid, n, key, value)
+            )
         return si

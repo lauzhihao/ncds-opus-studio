@@ -13,14 +13,14 @@ POST   /jobs                                     创建作品（body: pipeline_i
 GET    /jobs                                     列表
 GET    /jobs/{job_id}                            作品详情（节点状态 + 用户位置）
 DELETE /jobs/{job_id}                            删除作品（含工作目录）
-GET    /jobs/{job_id}/cover                      作品封面（成片首帧 → 首场景容器图 → 404）
+GET    /jobs/{job_id}/cover                      作品封面（成片首帧 → 全片背景/首场景图 → 404）
 POST   /jobs/{job_id}/nodes/{node}/run           跑某节点（会 reset 自身 + 下游）
 POST   /jobs/{job_id}/nodes/{node}/cancel        取消正在跑的节点
 PUT    /jobs/{job_id}/nodes/{node}/position      更新节点画布位置
 POST   /jobs/{job_id}/nodes/rw/rewrite/{model}   单模型重写 rw draft
 POST   /jobs/{job_id}/nodes/rw/refine/{model}    按 rubric 建议优化某模型 draft
 PUT    /jobs/{job_id}/nodes/rw/select            选某模型 draft 为定稿
-POST   /jobs/{job_id}/nodes/image/regen/{scene}  重生某 scene 容器图
+POST   /jobs/{job_id}/nodes/image/regen/{scene}  重生背景图或旧 scene 图
 POST   /jobs/{job_id}/nodes/tts/regen-scene/{s}  重生某 scene 音频
 PUT    /jobs/{job_id}/inputs                     更新 input 节点（urls/raw_text/shares）
 PUT    /jobs/{job_id}/title                      改作品标题
@@ -162,7 +162,7 @@ async def pipeline_cover(pipeline_id: str) -> FileResponse:
 
 @router.get("/jobs/{job_id}/cover")
 async def job_cover(job_id: str) -> FileResponse:
-    """作品封面：成片首帧优先，回退首场景容器图；都没有 404（前端回退 marker）。"""
+    """作品封面：成片首帧优先，回退全片背景/首场景图；都没有 404（前端回退 marker）。"""
     try:
         PIPELINE_RUNNER.get_job(job_id)
     except KeyError:
@@ -284,7 +284,7 @@ async def select_rw_model(job_id: str, body: SelectModelBody) -> dict[str, Any]:
 
 @router.post("/jobs/{job_id}/nodes/image/regen/{scene_id}")
 async def regen_image_scene(job_id: str, scene_id: str) -> dict[str, Any]:
-    """重生 image 节点下某个 scene 的图片，不影响其他场景和下游节点。"""
+    """重生 image 节点下的背景图或旧 scene 图片，不影响下游节点。"""
     try:
         await PIPELINE_RUNNER.regen_image_scene(job_id, scene_id)
     except KeyError as e:
@@ -308,7 +308,7 @@ async def select_image_variant(job_id: str, body: SelectImageVariantBody) -> dic
 
 @router.post("/jobs/{job_id}/nodes/image/regen-sketch/{scene_id}/{n}")
 async def regen_image_sketch(job_id: str, scene_id: str, n: int) -> dict[str, Any]:
-    """重生 image 节点下某个 scene 的第 n 幅简笔画（1-based），不影响容器图和其他简笔画。"""
+    """重生 image 节点下某个 scene 的第 n 个前景素材（1-based），不影响背景和其他素材。"""
     try:
         rel = await PIPELINE_RUNNER.regen_image_sketch(job_id, scene_id, n)
     except KeyError as e:

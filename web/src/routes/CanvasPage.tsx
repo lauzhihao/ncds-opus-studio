@@ -460,6 +460,16 @@ export function CanvasPage() {
     window.addEventListener('pointercancel', onEnd);
   }
 
+  function nudgeChatDrawerWidth(delta: number) {
+    setChatDrawerWidth((width) => clamp(width + delta, CHAT_DRAWER_MIN_WIDTH, maxChatDrawerWidth()));
+  }
+
+  function handleDrawerResizeKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    nudgeChatDrawerWidth(e.key === 'ArrowRight' ? 32 : -32);
+  }
+
   function startInputResize(e: React.PointerEvent<HTMLDivElement>) {
     e.preventDefault();
     inputRef.current?.focus();
@@ -819,7 +829,9 @@ export function CanvasPage() {
               role="separator"
               aria-orientation="vertical"
               aria-label="调整抽屉宽度"
+              tabIndex={0}
               onPointerDown={startDrawerResize}
+              onKeyDown={handleDrawerResizeKey}
             />
             <div className="head">
               <div className="titles">

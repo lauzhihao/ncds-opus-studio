@@ -4,9 +4,8 @@
 --------
 - rw / lines 只负责脚本：把源稿改写、结构化成逐句字幕 beats[]（zh/en）。
 - 本模块对应的 director agent 只负责**视觉层**：读已敲定的 beats，
-  把脚本切成子场景（每个叙事段落 2-3 个子场景），再为每个子场景产出
-    1) 容器图 prompt（稀疏背景底图，主体交给简笔画）
-    2) 1-6 幅简笔画 sketch（单格黑剪影元素，含位置 / 入场动效 / 跟哪句台词关键词飞入）
+  先为全片产出 1 张统一背景图 prompt，再把脚本切成子场景（每个叙事段落 2-3 个子场景），
+  为每个子场景产出 1-6 幅前景素材 sketch（单格黑剪影元素，含位置 / 入场动效 / 跟哪句台词关键词飞入）
 - 出图代码拿本模块解析后的 scenes{} 机械调 gpt-image-2，不做任何创意决策。
 
 人格 = whisper-reel 技能的「心理学家 + 极简动画导演」。这里只取它的**导演方法论**
@@ -16,11 +15,15 @@
 输出契约（director 必须严格返回的 JSON）
 ----------------------------------------
 {
+  "background": {
+    "prompt": "全片统一背景图中文 prompt：暖纸底 + 极简舞台/留白，不含主体",
+    "imageFit": "cover"
+  },
   "sceneMap": { "1": "S1-01a", "2": "S1-01a", "3": "S1-01b", ... },  # beat 序号(1-based) -> 子场景 id
   "scenes": {
     "S1-01a": {
       "group": "S1-01",                 # 同一叙事段落的 2-3 子场景共享前缀，纯展示分组
-      "prompt": "容器图中文 prompt：暖纸底 + 稀疏场景背景，主体留给简笔画",
+      "prompt": "子场景视觉意图中文短句：只描述本段情绪/构图，不用于逐场景生成背景",
       "imageFit": "contain",
       "motion": { "enter": "fade", "duration": 700 },
       "sketches": [
@@ -62,7 +65,7 @@ SKETCH_ENTERS = [
 DIRECTOR_SYSTEM_PROMPT = (
     "你是一名极简主义动画导演，深谙人类心理学。你只用最干净的黑色剪影和最大的留白，"
     "让每个画面只讲一件事。现在脚本（逐句字幕）已经写好，你**不改一个字**，只负责把它"
-    "导成画面：切子场景 + 为每个子场景设计容器底图和叠在上面的简笔画。"
+    "导成画面：一张全片统一背景 + 切子场景 + 为每个子场景设计叠在上面的前景素材。"
     "只输出一个合法 JSON 对象，禁止代码块或任何额外文本。"
 )
 
@@ -115,7 +118,7 @@ def build_director_prompt(
     lines: list[str] = []
     lines.append("把下面这条短视频的脚本（逐句字幕）导成分镜，输出视觉层 JSON。")
     lines.append("")
-    lines.append("【角色边界】脚本已敲定，你不改字。你只切子场景 + 设计容器底图与简笔画。")
+    lines.append("【角色边界】脚本已敲定，你不改字。你只设计全片统一背景、切子场景、设计前景素材。")
     lines.append("")
     lines.append("【切分规则】")
     lines.append(
@@ -125,8 +128,10 @@ def build_director_prompt(
     lines.append("- 子场景 id 形如 S1-01a / S1-01b（同段落共享前缀，写进 group 字段）；")
     lines.append("- sceneMap 必须覆盖每一条 beat（按其 index 映射到一个子场景 id），不漏不重。")
     lines.append("")
-    lines.append("【容器图 prompt（中文）】")
-    lines.append("- 暖纸纸质底 + 稀疏场景背景/留白，主体元素留给简笔画，不要画满；")
+    lines.append("【全片统一背景 background.prompt（中文）】")
+    lines.append("- 只生成 1 张全片共用背景，像 PPT 背景 / 舞台布景 / 纸卡底图；")
+    lines.append("- 暖纸纸质底 + 稀疏场景背景/留白，主体元素留给前景素材，不要画满；")
+    lines.append("- 背景应能承载整条片子，不能跟某一句台词绑定，不能出现人物主体；")
     if container_guide:
         lines.append(f"- 额外约束：{container_guide}")
     if palette:
@@ -135,34 +140,35 @@ def build_director_prompt(
     # 只在 domain_image_style 非空时注入，否则行为与无领域时完全一致。
     if domain_image_style:
         lines.append(f"- 【本片领域视觉调性】（仅供参考，叠加在上述风格之外）：{domain_image_style}")
-    lines.append("- prompt 里不要出现任何文字 / 数字。")
+    lines.append("- background.prompt 里不要出现任何文字 / 数字。")
     lines.append("")
     lines.append(
-        f"【简笔画 sketches（每个子场景 {sketches_per_sub_scene[0]}-"
+        f"【前景素材 sketches（每个子场景 {sketches_per_sub_scene[0]}-"
         f"{sketches_per_sub_scene[1]} 幅）】"
     )
     lines.append(
-        "- 每幅 sketch 是一个白底黑剪影元素，叠在容器图上。下面这段风格圣经会在出图时"
+        "- 每幅 sketch 是一个白底黑剪影元素，叠在全片背景上。下面这段风格圣经会在出图时"
         "自动前置到每条 sketch.prompt，你写单格内容时**默认它已存在**，不要重复写画风："
     )
     lines.append(f"  「{style_bible}」")
     lines.extend(_shot_prompt_spec())
     lines.append("")
     lines.append("【pos / size / motion / at】")
-    lines.append("- pos {x,y}：简笔画在容器内的百分比位置（0-100，左上原点）；size：宽度占容器百分比；")
+    lines.append("- pos {x,y}：前景素材在画面内的百分比位置（0-100，左上原点）；size：宽度占画面百分比；")
     lines.append(f"- motion.enter 从这些里选：{', '.join(SKETCH_ENTERS)}；duration 400-700ms；")
     lines.append(
-        "- at.match：填该子场景内某条 beat.zh 里的一个关键词（2-6 字），简笔画会在台词读到"
+        "- at.match：填该子场景内某条 beat.zh 里的一个关键词（2-6 字），前景素材会在台词读到"
         "这个词时飞入；不需要跟台词触发的（如背景陪衬）可省略 at（子场景切入即显）。"
     )
     lines.append("")
     lines.append("【输出格式】只输出一个 JSON 对象，结构严格如下，不要代码块、不要解释：")
     lines.append("{")
+    lines.append('  "background": { "prompt": "全片统一背景图中文 prompt", "imageFit": "cover" },')
     lines.append('  "sceneMap": { "1": "S1-01a", "2": "S1-01a", "3": "S1-01b" },')
     lines.append('  "scenes": {')
     lines.append('    "S1-01a": {')
     lines.append('      "group": "S1-01",')
-    lines.append('      "prompt": "容器图中文 prompt",')
+    lines.append('      "prompt": "子场景视觉意图中文短句",')
     lines.append('      "imageFit": "contain",')
     lines.append('      "motion": { "enter": "fade", "duration": 700 },')
     lines.append('      "sketches": [')
@@ -254,6 +260,7 @@ def parse_director_output(
     - scene_by_beat_index: {1-based beat index -> scene_id}，已补全所有 beat
       （sceneMap 缺的 beat 沿用前一条的 scene；首条缺则用第一个出现的 scene）。
     - scenes: 规整后的 scenes{}，每个含 prompt / imageFit / motion / overlays[] / sketches[]。
+    - background: 全片统一背景图描述，旧输出缺失时从第一个 scene.prompt 兜底。
 
     解析失败 / 结构非法时 raise RuntimeError / ValueError。
     """
@@ -291,6 +298,17 @@ def parse_director_output(
             "sketches": sketches,
         }
 
+    bg_in = parsed.get("background") if isinstance(parsed.get("background"), dict) else {}
+    bg_prompt = str(bg_in.get("prompt") or "").strip()
+    if not bg_prompt:
+        bg_prompt = next((str(sc.get("prompt") or "").strip() for sc in scenes.values()
+                          if str(sc.get("prompt") or "").strip()), "")
+    background = {
+        "prompt": bg_prompt or "暖纸纸质底，极简留白背景，细腻纸张纹理，无文字，无数字。",
+        "imageFit": bg_in.get("imageFit") if bg_in.get("imageFit") in ("cover", "contain", "fill") else "cover",
+        "imageFile": "pictures/background.webp",
+    }
+
     # sceneMap → 按 beat index 落实 scene；缺失沿用前值
     total = len(beats)
     raw_by_idx: dict[int, str] = {}
@@ -319,4 +337,4 @@ def parse_director_output(
         scene_by_beat[i] = sid
         prev = sid
 
-    return scene_by_beat, scenes
+    return scene_by_beat, scenes, background

@@ -80,7 +80,7 @@ export const AGENTS: AgentDef[] = [
     id: 'wudaozi',
     name: '吴道子',
     role: '画面',
-    description: '负责视觉方案、分镜提示词、简笔画设计与画面资产检查。',
+    description: '负责视觉方案、全片背景、前景素材设计与画面资产检查。',
     icon: Palette,
     // lines 是 storyboard 所需的隐藏视觉准备，不再作为用户主入口暴露。
     preflight: [{ node: 'lines', label: '视觉准备' }],

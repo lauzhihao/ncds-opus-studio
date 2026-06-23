@@ -332,21 +332,21 @@ def test_run_image_step_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.
 
     monkeypatch.setattr(perf, "_gen_scene_image", _fake_gen)
     out = perf.run_image_step(_noop, job_dir=str(jd))
-    assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 1)   # s1 ok / s2 空→fail
+    assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 0)
     assert out["sketch_ok"] == 1
     assert "ch1" not in calls                       # 章节卡不出图
-    assert "s1" in calls and "s1-sk1" in calls      # 容器图 + 简笔画
-    assert (jd / "03_image" / "s1.webp").is_file()
+    assert "background" in calls and "s1-sk1" in calls and "s1" not in calls
+    assert (jd / "03_image" / "background.webp").is_file()
     assert (jd / "03_image" / "s1-sk1.webp").is_file()
 
 
 def test_run_image_step_idempotent_skip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     jd = tmp_path / "job"
     (jd / "03_image").mkdir(parents=True)
-    (jd / "03_image" / "s1.webp").write_bytes(b"existing")     # 预先存在 → 跳过、不重生
+    (jd / "03_image" / "background.webp").write_bytes(b"existing")     # 预先存在 → 跳过、不重生
     _seed_episode(jd, {"beats": [{"scene": "s1"}], "scenes": {"s1": {"prompt": "场景一"}}, "image": {"n": 1}})
     monkeypatch.setattr(perf, "_gen_scene_image",
-                        lambda **k: pytest.fail("不应重生已存在的容器图"))
+                        lambda **k: pytest.fail("不应重生已存在的背景图"))
     out = perf.run_image_step(_noop, job_dir=str(jd))
     assert (out["ok"], out["skipped"], out["failed"]) == (0, 1, 0)
 
@@ -405,12 +405,15 @@ def test_run_image_step_captures_generation_failure(tmp_path: Path, monkeypatch:
     jd = tmp_path / "job"
     _seed_episode(jd, {
         "beats": [{"scene": "s1"}, {"scene": "s2"}],
-        "scenes": {"s1": {"prompt": "好场景"}, "s2": {"prompt": "坏场景"}},
+        "scenes": {
+            "s1": {"prompt": "好场景"},
+            "s2": {"prompt": "坏场景", "sketches": [{"prompt": "坏素材"}]},
+        },
         "image": {"retries": 0},
     })
 
     def _gen(*, scene_id, prompt, size, quality, target, job_id, n=1):
-        if scene_id == "s2":
+        if scene_id == "s2-sk1":
             raise RuntimeError("gpt-image boom")
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         Path(target).write_bytes(b"webp")
@@ -418,9 +421,9 @@ def test_run_image_step_captures_generation_failure(tmp_path: Path, monkeypatch:
 
     monkeypatch.setattr(perf, "_gen_scene_image", _gen)
     out = perf.run_image_step(_noop, job_dir=str(jd))
-    assert (out["ok"], out["failed"]) == (1, 1)          # s1 成、s2 异常被捕获，run 仍返回
+    assert (out["ok"], out["failed"], out["sketch_failed"]) == (1, 0, 1)
     s2 = next(it for it in out["items"] if it["scene_id"] == "s2")
-    assert s2["image_relpath"] is None and "图片生成失败" in s2["error"]
+    assert "图片生成失败" in s2["sketches"][0]["error"]
 
 
 def test_run_image_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -432,7 +435,7 @@ def test_run_image_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.Mo
     })
     monkeypatch.setattr(perf, "_gen_scene_image",
                         lambda **k: (_ for _ in ()).throw(RuntimeError("boom")))
-    with pytest.raises(RuntimeError, match="所有画面资产都生成失败"):
+    with pytest.raises(RuntimeError, match="画面背景生成失败"):
         perf.run_image_step(_noop, job_dir=str(jd))
 
 

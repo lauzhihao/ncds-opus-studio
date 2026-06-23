@@ -97,6 +97,88 @@
   scrollbar-width: none; /* Firefox */
   &::-webkit-scrollbar { display: none; } /* WebKit */
 }
+.drawer-width-resize,
+.chat-drawer-resize {
+  position: absolute;
+  top: 0;
+  right: -8px;
+  bottom: 0;
+  z-index: 5;
+  width: 16px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.drawer-width-resize::before,
+.chat-drawer-resize::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 7px;
+  width: 2px;
+  background: var(--border-strong);
+  opacity: 0.45;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    width var(--dur-fast) var(--ease-out);
+}
+.drawer-width-resize::after,
+.chat-drawer-resize::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 10px;
+  height: 56px;
+  transform: translateY(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 2px,
+      var(--border-strong) 2px 3px,
+      transparent 3px 5px
+    ),
+    var(--bg-surface);
+  opacity: 0.72;
+  box-shadow: var(--shadow-1);
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.drawer-width-resize:hover::before,
+.drawer-width-resize:focus-visible::before,
+.chat-drawer-resize:hover::before,
+.chat-drawer-resize:focus-visible::before {
+  width: 3px;
+  background: var(--accent);
+  opacity: 1;
+}
+.drawer-width-resize:hover::after,
+.drawer-width-resize:focus-visible::after,
+.chat-drawer-resize:hover::after,
+.chat-drawer-resize:focus-visible::after {
+  border-color: var(--accent);
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 2px,
+      var(--accent) 2px 3px,
+      transparent 3px 5px
+    ),
+    var(--bg-surface);
+  opacity: 1;
+}
+.drawer-width-resize:focus-visible,
+.chat-drawer-resize:focus-visible {
+  outline: none;
+}
+.drawer.fullscreen .drawer-width-resize {
+  display: none;
+}
 
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slide-in {
@@ -462,33 +544,6 @@
 .chat-drawer {
   display: flex;
   flex-direction: column;
-}
-.chat-drawer-resize {
-  position: absolute;
-  top: 0;
-  right: -6px;
-  bottom: 0;
-  z-index: 3;
-  width: 12px;
-  cursor: ew-resize;
-  touch-action: none;
-}
-.chat-drawer-resize::after {
-  content: '';
-  position: absolute;
-  top: var(--s-4);
-  right: 5px;
-  bottom: var(--s-4);
-  width: 1px;
-  background: transparent;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-.chat-drawer-resize:hover::after,
-.chat-drawer-resize:focus-visible::after {
-  background: var(--accent);
-}
-.chat-drawer-resize:focus-visible {
-  outline: none;
 }
 .chat-drawer .body.chat-body {
   flex: 1 1 0;

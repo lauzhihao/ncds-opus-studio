@@ -110,11 +110,12 @@ export interface LinesOutputs {
   beats_count: number;
 }
 
-// IMAGE 节点 outputs.items[].sketches 中的一条；与 _execute_image 简笔画产物对齐。
+// IMAGE 节点 outputs.items[].sketches 中的一条；与 _execute_image 前景素材产物对齐。
 export interface ImageSketchItem {
   index: number;
   prompt: string;
   image_relpath: string | null;
+  status?: 'queued' | 'running' | 'done' | 'failed' | 'skipped';
   variants?: ImageVariantItem[];
   error?: string | null;
 }
@@ -127,14 +128,27 @@ export interface ImageVariantItem {
 
 // IMAGE 节点 outputs.items 中的一条；与 pipeline_runner._execute_image 对齐。
 // image_relpath 为 null 时表示未生成（mock 模式或单图重生中）。
-// sketches：该 scene 的简笔画层产物（白底黑剪影，渲染层 multiply 抠白）。
+// sketches：该 scene 的前景素材产物（白底黑剪影，渲染层 multiply 抠白）。
 export interface ImageItem {
   scene_id: string;
   prompt: string;
   image_relpath: string | null;
+  background_relpath?: string | null;
+  status?: 'queued' | 'running' | 'done' | 'failed' | 'skipped';
   variants?: ImageVariantItem[];
   selected_variant_relpath?: string | null;
   sketches?: ImageSketchItem[];
+  error?: string | null;
+}
+
+export interface ImageBackgroundItem {
+  id: string;
+  prompt: string;
+  image_relpath: string | null;
+  status?: 'queued' | 'running' | 'done' | 'failed' | 'skipped';
+  variants?: ImageVariantItem[];
+  selected_variant_relpath?: string | null;
+  error?: string | null;
 }
 
 // STORYBOARD（分镜）节点 outputs；与 pipeline_runner._execute_storyboard 对齐。
@@ -144,6 +158,7 @@ export interface StoryboardOutputs {
   sketches_count: number;
   groups_count: number;
   beats_count: number;
+  background_count?: number;
 }
 
 // TTS 节点 outputs.items 中的一条；与 pipeline_runner._mock_outputs("tts") 对齐。
@@ -390,7 +405,7 @@ export interface Scene {
   imageFit?: 'cover' | 'contain' | 'fill';
   motion?: { enter: string; duration?: number };
   overlays?: Overlay[];
-  // 简笔画层：director agent 设计、IMAGE 节点出图，渲染层叠在容器图上（multiply 抠白）
+  // 前景素材层：director agent 设计、IMAGE 节点出图，渲染层叠在全片背景上（multiply 抠白）
   sketches?: Sketch[];
   num?: string;
   type?: string;

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import filecmp
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -93,13 +94,17 @@ class PipelineImageRun:
     no_text_hint: str = field(init=False)
     sketch_size: str = field(init=False)
     sketch_prefix: str = field(init=False)
+    background_cfg: dict[str, Any] = field(init=False)
+    background: dict[str, Any] = field(init=False)
     out_dir: Path = field(init=False)
     image_sem: asyncio.Semaphore = field(init=False)
     items: list[dict[str, Any]] = field(default_factory=list)
+    item_by_scene: dict[str, dict[str, Any]] = field(default_factory=dict)
     ok: int = 0
     skipped: int = 0
     failed: int = 0
     sketch_ok: int = 0
+    sketch_skipped: int = 0
     sketch_failed: int = 0
 
     def __post_init__(self) -> None:
@@ -148,10 +153,16 @@ class PipelineImageRun:
             hi=30.0,
         )
         self.no_text_hint = self.image_cfg.get("noTextHint") or ""
-        # 简笔画：白底黑剪影方图，圣经前置 + 通用零文字负面后置；渲染层用
-        # mix-blend-mode:multiply 抠掉白底，所以出图链路与容器图完全一样（不需透明）。
+        # 前景素材：白底黑剪影方图，圣经前置 + 通用零文字负面后置；渲染层用
+        # mix-blend-mode:multiply 抠掉白底，所以仍复用同一条文生图能力（不需透明）。
         self.sketch_size = self.image_cfg.get("sketchSize") or "1024x1024"
         self.sketch_prefix = str(self.image_cfg.get("sketchStylePrefix") or "").strip()
+        raw_bg = self.image_cfg.get("background") if isinstance(self.image_cfg.get("background"), dict) else {}
+        self.background_cfg = dict(raw_bg or {})
+        self.background_cfg.setdefault("imageFile", "pictures/background.webp")
+        if not str(self.background_cfg.get("prompt") or "").strip():
+            self.background_cfg["prompt"] = self._fallback_background_prompt()
+        self.background = {}
 
         self.out_dir = self.job_dir / "03_image"
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -164,34 +175,131 @@ class PipelineImageRun:
     def on_progress(self, text: str) -> None:
         self.runner._push_progress(self.job_id, "image", text)
 
+    def patch_output(self, key: str, value: Any) -> None:
+        patch = getattr(self.runner, "_push_outputs_patch", None)
+        if callable(patch):
+            patch(self.job_id, "image", key, value)
+
+    def patch_snapshot(self) -> None:
+        self.patch_output("background", self.background)
+        self.patch_output("items", self.items)
+        self.patch_output("asset_summary", self.asset_summary())
+
+    def asset_summary(self) -> dict[str, Any]:
+        total_sketches = sum(len(it.get("sketches") or []) for it in self.items)
+        ready_sketches = sum(
+            1 for it in self.items for sk in (it.get("sketches") or []) if sk.get("image_relpath")
+        )
+        failed_sketches = sum(
+            1 for it in self.items for sk in (it.get("sketches") or []) if sk.get("error")
+        )
+        return {
+            "background_total": 1,
+            "background_ready": 1 if self.background.get("image_relpath") else 0,
+            "foreground_total": total_sketches,
+            "foreground_ready": ready_sketches,
+            "foreground_failed": failed_sketches,
+        }
+
+    def _fallback_background_prompt(self) -> str:
+        for sid in self.scene_order:
+            sc = self.scenes_def.get(sid) or {}
+            prompt = str(sc.get("prompt") or "").strip()
+            if prompt:
+                return f"{prompt}，统一暖纸背景，大面积留白，无文字，无数字。"
+        return "暖纸纸质底，极简留白背景，细腻纸张纹理，无文字，无数字。"
+
+    def _write_episode_background(self) -> None:
+        image_cfg = self.episode.get("image") if isinstance(self.episode.get("image"), dict) else {}
+        image_cfg = dict(image_cfg or {})
+        bg = image_cfg.get("background") if isinstance(image_cfg.get("background"), dict) else {}
+        bg = {**dict(bg or {}), **self.background_cfg}
+        bg["imageFile"] = "pictures/background.webp"
+        image_cfg["background"] = bg
+        self.episode["image"] = image_cfg
+        ep_path = self.job_dir / "02_rw" / "episode.json"
+        if ep_path.parent.is_dir():
+            ep_path.write_text(json.dumps(self.episode, ensure_ascii=False, indent=2), encoding="utf-8")
+
     async def run(self) -> dict[str, Any]:
+        self._write_episode_background()
+        self.items = self.build_placeholders()
+        self.item_by_scene = {str(it.get("scene_id")): it for it in self.items}
+        self.background = self.build_background_placeholder()
+        self.patch_snapshot()
+
+        total_sketches = sum(len(it.get("sketches") or []) for it in self.items)
         self.on_progress(
-            f"image 开始：{len(self.eligible)} 个场景 · {self.size} n={self.container_n} · "
+            f"image 开始：1 张背景 · {total_sketches} 个前景素材 · {self.size} n={self.container_n} · "
             f"并发 {self.workers}"
         )
-        tasks = [
+        tasks = [asyncio.create_task(self.generate_background())] + [
             asyncio.create_task(self.process_scene(i, sid))
             for i, sid in enumerate(self.scene_order, start=1)
         ]
-        self.items = await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
 
-        if self.ok == 0 and self.failed > 0:
-            raise RuntimeError("所有画面资产都生成失败，请稍后重试；详细错误已写入服务日志。")
+        if not self.background.get("image_relpath"):
+            raise RuntimeError("画面背景生成失败，请稍后重试；详细错误已写入服务日志。")
 
         self.on_progress(
-            f"image 完成：容器 ok={self.ok} skipped={self.skipped} failed={self.failed} · "
-            f"简笔画 ok={self.sketch_ok} failed={self.sketch_failed}"
+            f"image 完成：背景 ok={self.ok} skipped={self.skipped} failed={self.failed} · "
+            f"前景素材 ok={self.sketch_ok} skipped={self.sketch_skipped} failed={self.sketch_failed}"
         )
+        self.patch_snapshot()
         return {
+            "background": self.background,
             "items": self.items,
             "pictures_dir": str(self.out_dir),
-            "pictures_count": self.ok + self.skipped,
+            "pictures_count": self.asset_summary()["background_ready"] + self.asset_summary()["foreground_ready"],
             "ok": self.ok,
             "skipped": self.skipped,
             "failed": self.failed,
             "sketch_ok": self.sketch_ok,
+            "sketch_skipped": self.sketch_skipped,
             "sketch_failed": self.sketch_failed,
+            "asset_summary": self.asset_summary(),
         }
+
+    def build_background_placeholder(self) -> dict[str, Any]:
+        target = self.out_dir / "background.webp"
+        variants = self._existing_variants("background", target, self.container_n)
+        selected = self._selected_variant_relpath(target, variants)
+        return {
+            "id": "background",
+            "prompt": str(self.background_cfg.get("prompt") or ""),
+            "image_relpath": self._rel(target) if target.is_file() else None,
+            "variants": [
+                {**variant, "selected": variant.get("image_relpath") == selected}
+                for variant in variants
+            ],
+            "selected_variant_relpath": selected,
+            "status": "done" if target.is_file() else "queued",
+        }
+
+    def build_placeholders(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for sid in self.scene_order:
+            sc = self.scenes_def.get(sid) or {}
+            sketch_items: list[dict[str, Any]] = []
+            for n, skd in enumerate(sc.get("sketches") or [], start=1):
+                sp = str((skd or {}).get("prompt") or "").strip()
+                stgt = self.out_dir / f"{sid}-sk{n}.webp"
+                sketch_items.append({
+                    "index": n,
+                    "prompt": sp,
+                    "image_relpath": self._rel(stgt) if stgt.is_file() else None,
+                    "status": "done" if stgt.is_file() else "queued",
+                })
+            items.append({
+                "scene_id": sid,
+                "prompt": str(sc.get("prompt") or "").strip(),
+                "image_relpath": None,
+                "background_relpath": "03_image/background.webp",
+                "sketches": sketch_items,
+                "status": "skipped" if sid.startswith("ch") else "queued",
+            })
+        return items
 
     def _rel(self, path: Path) -> str:
         return path.relative_to(self.job_dir).as_posix()
@@ -223,58 +331,38 @@ class PipelineImageRun:
                     continue
         return str(variants[0].get("image_relpath") or "") or None
 
-    async def process_scene(self, i: int, sid: str) -> dict[str, Any]:
-        sc = self.scenes_def.get(sid) or {}
-        prompt = str(sc.get("prompt") or "").strip()
-        if sid.startswith("ch"):
-            return {"scene_id": sid, "prompt": prompt, "image_relpath": None,
-                    "skipped_reason": "chapter card", "sketches": []}
-        if not prompt:
-            self.failed += 1
-            return {"scene_id": sid, "prompt": "", "image_relpath": None,
-                    "skipped_reason": "empty prompt", "sketches": []}
-
-        # 容器图（背景底图）
-        container_rel, variants, container_err = await self.generate_container(i, sid, prompt)
-        # 简笔画层（白底黑剪影，逐幅出；容器失败也照出，渲染层各管各的）
-        sketch_items = await self.generate_sketches(i, sid, sc.get("sketches") or [])
-
-        item: dict[str, Any] = {"scene_id": sid, "prompt": prompt,
-                                "image_relpath": container_rel, "sketches": sketch_items}
-        if variants:
-            selected_variant = self._selected_variant_relpath(self.out_dir / f"{sid}.webp", variants)
-            item["variants"] = [
-                {**variant, "selected": variant.get("image_relpath") == selected_variant}
-                for variant in variants
-            ]
-            item["selected_variant_relpath"] = selected_variant
-        if container_err:
-            item["error"] = container_err
-        return item
-
-    async def generate_container(
-        self,
-        i: int,
-        sid: str,
-        prompt: str,
-    ) -> tuple[str | None, list[dict[str, Any]], str | None]:
-        target = self.out_dir / f"{sid}.webp"
+    async def generate_background(self) -> None:
+        target = self.out_dir / "background.webp"
         if target.is_file():
-            variants = self._existing_variants(sid, target, self.container_n)
+            variants = self._existing_variants("background", target, self.container_n)
             if self.container_n <= 1 or len(variants) >= self.container_n:
                 self.skipped += 1
-                self.on_progress(f"[{i}/{self.n_scenes}] {sid} 容器图候选已存在，跳过")
-                return self._rel(target), variants, None
-            self.on_progress(f"[{i}/{self.n_scenes}] {sid} 容器图候选不足，补生成 n={self.container_n}…")
+                selected = self._selected_variant_relpath(target, variants)
+                self.background.update({
+                    "image_relpath": self._rel(target),
+                    "variants": [
+                        {**variant, "selected": variant.get("image_relpath") == selected}
+                        for variant in variants
+                    ],
+                    "selected_variant_relpath": selected,
+                    "status": "done",
+                })
+                self.patch_snapshot()
+                self.on_progress("背景图候选已存在，跳过")
+                return
+            self.on_progress(f"背景图候选不足，补生成 n={self.container_n}…")
 
+        prompt = str(self.background_cfg.get("prompt") or "").strip()
         full_prompt = f"{prompt} {self.no_text_hint}".strip() if self.no_text_hint else prompt
-        self.on_progress(f"[{i}/{self.n_scenes}] {sid} 容器图生成中 n={self.container_n}…")
+        self.background["status"] = "running"
+        self.patch_output("background", self.background)
+        self.on_progress(f"背景图生成中 n={self.container_n}…")
         try:
             paths = await self.generate_with_retries(
-                i=i,
-                sid=sid,
-                label="容器图",
-                scene_id=sid,
+                i=0,
+                sid="background",
+                label="背景图",
+                scene_id="background",
                 prompt=full_prompt,
                 size=self.size,
                 quality=self.quality,
@@ -286,15 +374,43 @@ class PipelineImageRun:
                 {"index": index, "image_relpath": self._rel(path)}
                 for index, path in enumerate(paths, start=1)
             ]
-            return self._rel(target), variants, None
+            selected = self._selected_variant_relpath(target, variants)
+            self.background.update({
+                "image_relpath": self._rel(target),
+                "variants": [
+                    {**variant, "selected": variant.get("image_relpath") == selected}
+                    for variant in variants
+                ],
+                "selected_variant_relpath": selected,
+                "status": "done",
+            })
+            self.patch_snapshot()
         except _cancel.TaskCancelled:
             raise
         except Exception as exc:  # noqa: BLE001
             friendly = _friendly_image_error(exc)
-            logger.warning("[pipeline] image scene %s failed: %s", sid, friendly)
-            self.on_progress(f"[{i}/{self.n_scenes}] {sid} 容器图失败：{friendly}")
+            logger.warning("[pipeline] image background failed: %s", friendly)
+            self.on_progress(f"背景图失败：{friendly}")
+            self.background.update({"status": "failed", "error": friendly})
+            self.patch_snapshot()
             self.failed += 1
-            return None, [], friendly
+
+    async def process_scene(self, i: int, sid: str) -> dict[str, Any]:
+        item = self.item_by_scene.get(sid)
+        if item is None:
+            item = {"scene_id": sid, "prompt": "", "image_relpath": None, "sketches": []}
+            self.items.append(item)
+            self.item_by_scene[sid] = item
+        if sid.startswith("ch"):
+            item["status"] = "skipped"
+            item["skipped_reason"] = "chapter card"
+            self.patch_output("items", self.items)
+            return item
+
+        await self.generate_sketches(i, sid, self.scenes_def.get(sid, {}).get("sketches") or [])
+        item["status"] = "done"
+        self.patch_snapshot()
+        return item
 
     async def generate_with_retries(
         self,
@@ -339,8 +455,9 @@ class PipelineImageRun:
                 if attempt < attempts and _is_retryable_image_error(exc):
                     delay = self.retry_backoff_seconds * attempt
                     suffix = f"{delay:g}s 后" if delay > 0 else ""
+                    prefix = "" if sid == "background" else f"[{i}/{self.n_scenes}] {sid} "
                     self.on_progress(
-                        f"[{i}/{self.n_scenes}] {sid} {label}暂时失败，{suffix}重试 "
+                        f"{prefix}{label}暂时失败，{suffix}重试 "
                         f"{attempt}/{self.retries}：{friendly}"
                     )
                     if delay > 0:
@@ -352,23 +469,34 @@ class PipelineImageRun:
     async def generate_sketches(
         self, i: int, sid: str, sketches_def: list[Any],
     ) -> list[dict[str, Any]]:
-        sketch_items: list[dict[str, Any]] = []
+        item = self.item_by_scene[sid]
+        sketch_items: list[dict[str, Any]] = list(item.get("sketches") or [])
         for n, skd in enumerate(sketches_def, start=1):
             sp = str((skd or {}).get("prompt") or "").strip()
             if not sp:
                 continue
             srel = f"03_image/{sid}-sk{n}.webp"
             stgt = self.out_dir / f"{sid}-sk{n}.webp"
+            existing = next((sk for sk in sketch_items if sk.get("index") == n), None)
             if stgt.is_file():
-                sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel})
+                if existing is None:
+                    sketch_items.append({"index": n, "prompt": sp, "image_relpath": srel, "status": "done"})
+                else:
+                    existing.update({"prompt": sp, "image_relpath": srel, "status": "done"})
+                self.sketch_skipped += 1
+                item["sketches"] = sketch_items
+                self.patch_snapshot()
                 continue
             sfull = " ".join(p for p in (self.sketch_prefix, sp, self.no_text_hint) if p)
-            self.on_progress(f"[{i}/{self.n_scenes}] {sid} 简笔画 {n}/{len(sketches_def)} 生成中…")
+            if existing is not None:
+                existing.update({"status": "running", "error": None})
+                self.patch_output("items", self.items)
+            self.on_progress(f"[{i}/{self.n_scenes}] {sid} 前景素材 {n}/{len(sketches_def)} 生成中…")
             try:
                 paths = await self.generate_with_retries(
                     i=i,
                     sid=sid,
-                    label=f"简笔画 {n}",
+                    label=f"前景素材 {n}",
                     scene_id=f"{sid}-sk{n}",
                     prompt=sfull,
                     size=self.sketch_size,
@@ -377,20 +505,32 @@ class PipelineImageRun:
                     n=self.sketch_n,
                 )
                 item: dict[str, Any] = {"index": n, "prompt": sp, "image_relpath": srel}
+                item["status"] = "done"
                 if self.sketch_n > 1:
                     item["variants"] = [
                         {"index": index, "image_relpath": self._rel(path)}
                         for index, path in enumerate(paths, start=1)
                     ]
-                sketch_items.append(item)
+                if existing is not None:
+                    existing.update(item)
+                else:
+                    sketch_items.append(item)
                 self.sketch_ok += 1
+                self.item_by_scene[sid]["sketches"] = sketch_items
+                self.patch_snapshot()
             except _cancel.TaskCancelled:
                 raise
             except Exception as exc:  # noqa: BLE001
                 friendly = _friendly_image_error(exc)
                 logger.warning("[pipeline] sketch %s-sk%d failed: %s", sid, n, friendly)
-                self.on_progress(f"[{i}/{self.n_scenes}] {sid} 简笔画 {n} 失败：{friendly}")
-                sketch_items.append({"index": n, "prompt": sp, "image_relpath": None,
-                                     "error": friendly})
+                self.on_progress(f"[{i}/{self.n_scenes}] {sid} 前景素材 {n} 失败：{friendly}")
+                failed_item = {"index": n, "prompt": sp, "image_relpath": None,
+                               "error": friendly, "status": "failed"}
+                if existing is not None:
+                    existing.update(failed_item)
+                else:
+                    sketch_items.append(failed_item)
                 self.sketch_failed += 1
+                self.item_by_scene[sid]["sketches"] = sketch_items
+                self.patch_snapshot()
         return sketch_items

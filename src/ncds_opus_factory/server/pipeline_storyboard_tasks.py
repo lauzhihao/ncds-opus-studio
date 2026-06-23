@@ -56,7 +56,7 @@ class PipelineStoryboardRun:
             container_guide=self.container_guide,
             palette=self.palette,
         )
-        scene_by_beat, scenes = await asyncio.to_thread(
+        scene_by_beat, scenes, background = await asyncio.to_thread(
             structure_json_with_model_fallback,
             user_prompt,
             system_prompt,
@@ -75,12 +75,16 @@ class PipelineStoryboardRun:
             b["scene"] = scene_by_beat.get(i, b.get("scene") or "")
         self.episode["beats"] = self.beats_raw
         self.episode["scenes"] = scenes
+        image_cfg = self.episode.get("image") if isinstance(self.episode.get("image"), dict) else {}
+        image_cfg = dict(image_cfg or {})
+        image_cfg["background"] = background
+        self.episode["image"] = image_cfg
         self.episode_path.write_text(json.dumps(self.episode, ensure_ascii=False, indent=2), encoding="utf-8")
 
         sketch_total = sum(len(s.get("sketches") or []) for s in scenes.values())
         groups = sorted({s.get("group") or sid for sid, s in scenes.items()})
         self.on_progress(
-            f"视觉方案生成完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 幅简笔画"
+            f"视觉方案生成完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 个前景素材"
         )
         return {
             "episode_relpath": "02_rw/episode.json",
@@ -88,4 +92,5 @@ class PipelineStoryboardRun:
             "sketches_count": sketch_total,
             "groups_count": len(groups),
             "beats_count": len(self.beats_raw),
+            "background_count": 1,
         }

@@ -42,6 +42,26 @@ class PipelineRegenOperationsMixin:
         self._save(state)
         self._emit_node_status(job_id, "image", img)
 
+    def _update_image_background(
+        self,
+        job_id: str,
+        mutate_background: Callable[[dict[str, Any]], None],
+        *,
+        touch_job: bool = True,
+    ) -> None:
+        state = self._load(job_id)
+        img = state.nodes.get("image")
+        if img is None or not img.outputs:
+            return
+        background = dict(img.outputs.get("background") or {})
+        mutate_background(background)
+        img.outputs["background"] = background
+        img.finished_at = time.time()
+        if touch_job:
+            state.updated_at = time.time()
+        self._save(state)
+        self._emit_node_status(job_id, "image", img)
+
     @staticmethod
     def _put_scene_image(
         items: list[dict[str, Any]],
@@ -58,6 +78,49 @@ class PipelineRegenOperationsMixin:
                 if selected_variant_relpath is not None:
                     it["selected_variant_relpath"] = selected_variant_relpath
                 break
+
+    @staticmethod
+    def _put_background_image(
+        background: dict[str, Any],
+        rel: str,
+        variants: list[dict[str, Any]] | None = None,
+        selected_variant_relpath: str | None = None,
+    ) -> None:
+        background["image_relpath"] = rel
+        background["status"] = "done"
+        background.pop("error", None)
+        if variants is not None:
+            background["variants"] = variants
+        if selected_variant_relpath is not None:
+            background["selected_variant_relpath"] = selected_variant_relpath
+
+    @staticmethod
+    def _is_background_scene(scene_id: str) -> bool:
+        return scene_id in {"background", "__background"}
+
+    def _background_prompt(self, ep: dict[str, Any]) -> str:
+        image_cfg = ep.get("image") if isinstance(ep.get("image"), dict) else {}
+        bg = image_cfg.get("background") if isinstance(image_cfg.get("background"), dict) else {}
+        prompt = str((bg or {}).get("prompt") or "").strip()
+        if prompt:
+            return prompt
+        for sc in (ep.get("scenes") or {}).values():
+            if isinstance(sc, dict) and str(sc.get("prompt") or "").strip():
+                return f"{sc['prompt']}，统一暖纸背景，大面积留白，无文字，无数字。"
+        return "暖纸纸质底，极简留白背景，细腻纸张纹理，无文字，无数字。"
+
+    def _write_background_image_file(self, job_id: str, ep: dict[str, Any]) -> None:
+        image_cfg = ep.get("image") if isinstance(ep.get("image"), dict) else {}
+        image_cfg = dict(image_cfg or {})
+        bg = image_cfg.get("background") if isinstance(image_cfg.get("background"), dict) else {}
+        bg = dict(bg or {})
+        bg["imageFile"] = "pictures/background.webp"
+        if not str(bg.get("prompt") or "").strip():
+            bg["prompt"] = self._background_prompt(ep)
+        image_cfg["background"] = bg
+        ep["image"] = image_cfg
+        ep_path = self.video_jobs_dir / job_id / "02_rw" / "episode.json"
+        ep_path.write_text(json.dumps(ep, ensure_ascii=False, indent=2), encoding="utf-8")
 
     @staticmethod
     def _put_sketch_image(
@@ -88,6 +151,8 @@ class PipelineRegenOperationsMixin:
 
     async def regen_scene_image_from_preview(self, job_id: str, scene_id: str) -> str:
         """preview 抽屉里点「生成图片」时调用，不要求 image 节点 done。"""
+        if self._is_background_scene(scene_id):
+            return await self.regen_background_image(job_id)
         if self._load(job_id).mock:
             return await self._mock_regen_image(job_id, scene_id)
         ep = self.get_episode(job_id)
@@ -139,6 +204,56 @@ class PipelineRegenOperationsMixin:
         )
         return rel
 
+    async def regen_background_image(self, job_id: str) -> str:
+        """重生全片统一背景图。"""
+        if self._load(job_id).mock:
+            return await self._mock_regen_image(job_id, "background")
+        ep = self.get_episode(job_id)
+        if ep is None:
+            raise ValueError("episode.json not found; run rw first")
+        image_cfg = ep.get("image") if isinstance(ep.get("image"), dict) else {}
+        size = image_cfg.get("size") or "1536x1024"
+        quality = image_cfg.get("quality") or "auto"
+        count = self._bounded_image_count(image_cfg.get("n", image_cfg.get("containerN", image_cfg.get("candidates"))))
+        no_text_hint = image_cfg.get("noTextHint") or ""
+        prompt = self._background_prompt(ep)
+        full_prompt = f"{prompt} {no_text_hint}".strip() if no_text_hint else prompt
+
+        rel = "03_image/background.webp"
+        target = self.video_jobs_dir / job_id / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._unlink_scene_candidates(target, count)
+
+        def on_progress(text: str) -> None:
+            self._push_progress(job_id, "image", f"[regen background] {text}")
+
+        on_progress("背景图重生中…")
+        paths = await asyncio.to_thread(
+            media_helpers._generate_scene_image,
+            scene_id="background",
+            prompt=full_prompt,
+            size=size,
+            quality=quality,
+            target=target,
+            job_id=job_id,
+            n=count,
+        )
+        variants = [
+            {"index": index, "image_relpath": self._rel_to_job(job_id, path), "selected": index == 1}
+            for index, path in enumerate(paths, start=1)
+        ]
+        self._write_background_image_file(job_id, ep)
+        self._update_image_background(
+            job_id,
+            lambda bg: self._put_background_image(
+                bg,
+                rel,
+                variants,
+                variants[0]["image_relpath"] if variants else rel,
+            ),
+        )
+        return rel
+
     @staticmethod
     def _bounded_image_count(value: Any) -> int:
         try:
@@ -165,6 +280,8 @@ class PipelineRegenOperationsMixin:
         img = state.nodes.get("image")
         if img is None or not img.outputs:
             raise ValueError("image node has no outputs")
+        if self._is_background_scene(scene_id):
+            return self._select_background_variant(job_id, image_relpath)
         items = list(img.outputs.get("items") or [])
         item = next((it for it in items if it.get("scene_id") == scene_id), None)
         if item is None:
@@ -201,6 +318,44 @@ class PipelineRegenOperationsMixin:
         self._emit_node_status(job_id, "image", img)
         return main_rel
 
+    def _select_background_variant(self, job_id: str, image_relpath: str) -> str:
+        state = self._load(job_id)
+        img = state.nodes.get("image")
+        if img is None or not img.outputs:
+            raise ValueError("image node has no outputs")
+        background = dict(img.outputs.get("background") or {})
+        rel = image_relpath.strip().lstrip("/")
+        candidates = [str(v.get("image_relpath") or "") for v in background.get("variants") or []]
+        if rel not in candidates and rel != background.get("image_relpath"):
+            raise ValueError(f"image is not a candidate for background: {rel}")
+
+        job_dir = self.video_jobs_dir / job_id
+        src = (job_dir / rel).resolve()
+        root = job_dir.resolve()
+        if root not in src.parents or not src.is_file():
+            raise ValueError(f"candidate image not found: {rel}")
+
+        main_rel = "03_image/background.webp"
+        main = job_dir / main_rel
+        main.parent.mkdir(parents=True, exist_ok=True)
+        if src != main.resolve():
+            shutil.copyfile(src, main)
+
+        background["image_relpath"] = main_rel
+        background["selected_variant_relpath"] = rel
+        variants = list(background.get("variants") or [])
+        for v in variants:
+            v["selected"] = v.get("image_relpath") == rel
+        background["variants"] = variants
+        background["status"] = "done"
+
+        img.outputs["background"] = background
+        img.finished_at = time.time()
+        state.updated_at = time.time()
+        self._save(state)
+        self._emit_node_status(job_id, "image", img)
+        return main_rel
+
     async def regen_image_scene(self, job_id: str, scene_id: str) -> None:
         """重生 image 节点里指定 scene 的图片。不动其他场景，不动下游节点状态。"""
         state = self._load(job_id)
@@ -209,6 +364,9 @@ class PipelineRegenOperationsMixin:
             raise KeyError("image node not found")
         if n.status != "done":
             raise ValueError("image node not done; run image first")
+        if self._is_background_scene(scene_id):
+            await self.regen_background_image(job_id)
+            return
         items = list((n.outputs or {}).get("items") or [])
         if not any(it.get("scene_id") == scene_id for it in items):
             raise ValueError(f"unknown scene: {scene_id}")
@@ -254,7 +412,7 @@ class PipelineRegenOperationsMixin:
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "image", f"[regen {scene_id}-sk{n}] {text}")
 
-        on_progress("简笔画重生中…")
+        on_progress("前景素材重生中…")
         await asyncio.to_thread(
             media_helpers._generate_scene_image,
             scene_id=f"{scene_id}-sk{n}", prompt=full, size=sketch_size,
@@ -317,7 +475,7 @@ class PipelineRegenOperationsMixin:
         self._emit_node_status(job_id, "tts", n)
 
     async def _mock_regen_image(self, job_id: str, scene_id: str) -> str:
-        """mock：从 015 素材拷该 scene 容器图到 03_image/{scene_id}.webp。"""
+        """mock：从 015 素材拷背景图或旧 scene 图到 03_image/{scene_id}.webp。"""
         from ncds_opus_factory.server import mock as mock_mod
         await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
         rel = f"03_image/{scene_id}.webp"
@@ -335,7 +493,7 @@ class PipelineRegenOperationsMixin:
         return rel
 
     async def _mock_regen_sketch(self, job_id: str, scene_id: str, n: int) -> str:
-        """mock：源素材一般无简笔画文件，有则拷、没有用容器图占位。"""
+        """mock：源素材一般无前景素材文件，有则拷、没有用 scene 图占位。"""
         from ncds_opus_factory.server import mock as mock_mod
         await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
         rel = f"03_image/{scene_id}-sk{n}.webp"

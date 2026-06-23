@@ -4,7 +4,7 @@
 // 切 tab，跨 agent 的下一步打开下一个 agent。各成员面板（InputPanel/ShenkuoCollectPanel/...）原样复用，
 // 它们内部的 runNode 仍打到底层 engine 节点——"agent 调现成 performer"。
 
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { X } from 'lucide-react';
 
 import type { JobState, NodeState, NodeStatus, PipelineDef, PipelineNodeDef } from '../api/types';
@@ -64,6 +64,26 @@ const STATUS_DOT_ZH: Record<NodeStatus, string> = {
   failed: '失败',
 };
 
+const DRAWER_MIN_WIDTH = 420;
+const DRAWER_DEFAULT_WIDTH = 560;
+const DRAWER_WIDE_WIDTH = 806;
+const DRAWER_VIEWPORT_PAD = 32;
+
+function initialDrawerWidth(agentId: AgentId): number {
+  if (typeof window === 'undefined') {
+    return agentId === 'guiguzi' ? DRAWER_WIDE_WIDTH : DRAWER_DEFAULT_WIDTH;
+  }
+  const preferred = agentId === 'guiguzi' ? DRAWER_WIDE_WIDTH : DRAWER_DEFAULT_WIDTH;
+  const max = maxDrawerWidth();
+  const min = Math.min(DRAWER_MIN_WIDTH, max);
+  return Math.min(max, Math.max(min, preferred));
+}
+
+function maxDrawerWidth(): number {
+  if (typeof window === 'undefined') return DRAWER_WIDE_WIDTH;
+  return Math.max(280, window.innerWidth - DRAWER_VIEWPORT_PAD);
+}
+
 export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClose, onAdvanceAgent, onTopicConfirmed, onReconnectSSE }: Props) {
   const { members } = agent;
   const Icon = agent.icon;
@@ -79,6 +99,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
   };
   const [active, setActive] = useState(computeFocus);
   const manualRef = useRef(false);
+  const [drawerWidth, setDrawerWidth] = useState(() => initialDrawerWidth(agent.id));
 
   // SSE 推新状态时，未手动切过 tab 则跟随聚焦。
   useEffect(() => {
@@ -121,6 +142,47 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
       e.preventDefault();
       first.focus();
     }
+  }
+
+  function startDrawerResize(e: ReactPointerEvent<HTMLDivElement>) {
+    if (isFullscreen) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = drawerWidth;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: PointerEvent) => {
+      const max = maxDrawerWidth();
+      const min = Math.min(DRAWER_MIN_WIDTH, max);
+      setDrawerWidth(Math.max(min, Math.min(max, startWidth + ev.clientX - startX)));
+    };
+    const onEnd = () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
+  }
+
+  function nudgeDrawerWidth(delta: number) {
+    if (isFullscreen) return;
+    const max = maxDrawerWidth();
+    const min = Math.min(DRAWER_MIN_WIDTH, max);
+    setDrawerWidth((width) => Math.max(min, Math.min(max, width + delta)));
+  }
+
+  function handleResizeKey(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    nudgeDrawerWidth(e.key === 'ArrowRight' ? 32 : -32);
   }
 
   // 推进：从某底层节点完成 -> 引擎真实 NEXT 链决定去哪。
@@ -246,11 +308,23 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
       <aside
         ref={asideRef}
         className={`drawer${isFullscreen ? ' fullscreen' : ''}${agent.id === 'guiguzi' ? ' wide' : ''}`}
+        style={isFullscreen ? undefined : { width: drawerWidth }}
         role="dialog"
         aria-modal
         aria-labelledby="agent-drawer-title"
         onKeyDown={trapFocus}
       >
+        {!isFullscreen && (
+          <div
+            className="drawer-width-resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整抽屉宽度"
+            tabIndex={0}
+            onPointerDown={startDrawerResize}
+            onKeyDown={handleResizeKey}
+          />
+        )}
         <div className="head">
           <div className="icon-frame">
             <Icon size={18} strokeWidth={1.6} />

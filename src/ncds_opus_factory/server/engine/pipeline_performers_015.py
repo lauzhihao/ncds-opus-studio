@@ -71,11 +71,20 @@ _invoke_rw = _invoke_rw_candidate
 class _ProgressFacade:
     """Tiny runner-compatible facade for task contexts used by engine performers."""
 
-    def __init__(self, on_progress: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        on_progress: Callable[[str], None],
+        on_outputs_patch: Callable[[str, Any], None] | None = None,
+    ) -> None:
         self._on_progress = on_progress
+        self._on_outputs_patch = on_outputs_patch
 
     def _push_progress(self, _job_id: str, _node_name: str, text: str) -> None:
         self._on_progress(text)
+
+    def _push_outputs_patch(self, _job_id: str, _node_name: str, key: str, value: Any) -> None:
+        if self._on_outputs_patch is not None:
+            self._on_outputs_patch(key, value)
 
 
 def _episode_path(job_dir: Path) -> Path:
@@ -344,7 +353,7 @@ def run_storyboard_step(
         palette=palette,
         domain_image_style=domain_image_style,
     )
-    scene_by_beat, scenes = structure_json_with_model_fallback(
+    scene_by_beat, scenes, background = structure_json_with_model_fallback(
         user_prompt,
         system_prompt,
         on_progress,
@@ -363,17 +372,22 @@ def run_storyboard_step(
         b["scene"] = scene_by_beat.get(i, b.get("scene") or "")
     ep["beats"] = beats_raw
     ep["scenes"] = scenes
+    image_cfg = ep.get("image") if isinstance(ep.get("image"), dict) else {}
+    image_cfg = dict(image_cfg or {})
+    image_cfg["background"] = background
+    ep["image"] = image_cfg
     ep_path.write_text(json.dumps(ep, ensure_ascii=False, indent=2), encoding="utf-8")
 
     sketch_total = sum(len(s.get("sketches") or []) for s in scenes.values())
     groups = sorted({s.get("group") or sid for sid, s in scenes.items()})
-    on_progress(f"视觉方案生成完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 幅简笔画")
+    on_progress(f"视觉方案生成完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 个前景素材")
     return {
         "episode_relpath": "02_rw/episode.json",
         "scenes_count": len(scenes),
         "sketches_count": sketch_total,
         "groups_count": len(groups),     # 与 web StoryboardOutputs 契约对齐（types.ts 非可选）
         "beats_count": len(beats_raw),
+        "background_count": 1,
     }
 
 
@@ -397,10 +411,16 @@ def run_tts_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) 
     ).run())
 
 
-def run_image_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) -> dict[str, Any]:
-    """IMAGE：按 ``episode.scenes[].prompt`` 逐 scene 调 gpt-image-2 出容器图 + 简笔画 → WebP。
-    复刻 ``_execute_image`` 编排（出场序去重、跳 ch* 章节卡、幂等、容器+简笔画分层），复用
-    ``_generate_scene_image``。``job_id`` 仅供出图临时目录命名，取 job_dir 末段。
+def run_image_step(
+    on_progress: Callable[[str], None],
+    *,
+    job_dir: str,
+    outputs_patch: Callable[[str, Any], None] | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """IMAGE：生成 1 张全片背景 + 遍历 ``episode.scenes[].sketches`` 出前景素材 → WebP。
+    复用 ``_generate_scene_image``，运行中通过 outputs_patch 回推占位与已完成素材。
+    ``job_id`` 仅供出图临时目录命名，取 job_dir 末段。
     """
     jd = Path(job_dir)
     job_id = jd.name
@@ -408,7 +428,7 @@ def run_image_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any
     if ep is None:
         raise ValueError("episode.json not found; run rw/lines first")
     return asyncio.run(PipelineImageRun(
-        runner=_ProgressFacade(on_progress),
+        runner=_ProgressFacade(on_progress, outputs_patch),
         job_id=job_id,
         job_dir=jd,
         episode=ep,

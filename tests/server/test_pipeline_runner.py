@@ -639,11 +639,11 @@ def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(media_helpers, "_generate_scene_image", fake_generate)
     out = asyncio.run(runner._execute_image(job.job_id))
 
-    assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 1)
+    assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 0)
     assert out["sketch_ok"] == 1
     assert "ch1" not in calls
-    assert "s1" in calls and "s1-sk1" in calls
-    assert (tmp_path / job.job_id / "03_image" / "s1.webp").is_file()
+    assert "background" in calls and "s1-sk1" in calls and "s1" not in calls
+    assert (tmp_path / job.job_id / "03_image" / "background.webp").is_file()
     assert (tmp_path / job.job_id / "03_image" / "s1-sk1.webp").is_file()
 
 
@@ -652,7 +652,7 @@ def test_execute_image_idempotent_skip(tmp_path: Path, monkeypatch: pytest.Monke
     job = runner.create_job("paper_card_talk_015", "t", {})
     img_dir = tmp_path / job.job_id / "03_image"
     img_dir.mkdir(parents=True)
-    (img_dir / "s1.webp").write_bytes(b"existing")
+    (img_dir / "background.webp").write_bytes(b"existing")
     runner.write_episode(job.job_id, {
         "beats": [{"scene": "s1"}],
         "scenes": {"s1": {"prompt": "场景一"}},
@@ -660,7 +660,7 @@ def test_execute_image_idempotent_skip(tmp_path: Path, monkeypatch: pytest.Monke
     })
     monkeypatch.setattr(
         media_helpers, "_generate_scene_image",
-        lambda **_kwargs: pytest.fail("不应重生已存在的容器图"),
+        lambda **_kwargs: pytest.fail("不应重生已存在的背景图"),
     )
 
     out = asyncio.run(runner._execute_image(job.job_id))
@@ -672,9 +672,9 @@ def test_execute_image_skip_preserves_selected_variant(tmp_path: Path, monkeypat
     job = runner.create_job("paper_card_talk_015", "t", {})
     img_dir = tmp_path / job.job_id / "03_image"
     img_dir.mkdir(parents=True)
-    (img_dir / "s1-v1.webp").write_bytes(b"variant-one")
-    (img_dir / "s1-v2.webp").write_bytes(b"variant-two")
-    (img_dir / "s1.webp").write_bytes(b"variant-two")
+    (img_dir / "background-v1.webp").write_bytes(b"variant-one")
+    (img_dir / "background-v2.webp").write_bytes(b"variant-two")
+    (img_dir / "background.webp").write_bytes(b"variant-two")
     runner.write_episode(job.job_id, {
         "beats": [{"scene": "s1"}],
         "scenes": {"s1": {"prompt": "场景一"}},
@@ -687,11 +687,11 @@ def test_execute_image_skip_preserves_selected_variant(tmp_path: Path, monkeypat
 
     out = asyncio.run(runner._execute_image(job.job_id))
 
-    item = out["items"][0]
     assert (out["ok"], out["skipped"], out["failed"]) == (0, 1, 0)
-    assert item["image_relpath"] == "03_image/s1.webp"
-    assert item["selected_variant_relpath"] == "03_image/s1-v2.webp"
-    assert [v["selected"] for v in item["variants"]] == [False, True]
+    bg = out["background"]
+    assert bg["image_relpath"] == "03_image/background.webp"
+    assert bg["selected_variant_relpath"] == "03_image/background-v2.webp"
+    assert [v["selected"] for v in bg["variants"]] == [False, True]
 
 
 def test_execute_image_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -707,7 +707,7 @@ def test_execute_image_all_failed_raises(tmp_path: Path, monkeypatch: pytest.Mon
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
-    with pytest.raises(RuntimeError, match="所有画面资产都生成失败"):
+    with pytest.raises(RuntimeError, match="画面背景生成失败"):
         asyncio.run(runner._execute_image(job.job_id))
 
 
@@ -771,11 +771,11 @@ def test_execute_image_failure_progress_is_friendly(
     monkeypatch.setattr(media_helpers, "_generate_scene_image", fake_generate)
     monkeypatch.setattr(runner, "_push_progress", lambda _job_id, _node, text: progress.append(text))
 
-    with pytest.raises(RuntimeError, match="所有画面资产都生成失败"):
+    with pytest.raises(RuntimeError, match="画面背景生成失败"):
         asyncio.run(runner._execute_image(job.job_id))
 
     joined = "\n".join(progress)
-    assert "容器图失败：图片服务响应超时，请稍后重试。" in joined
+    assert "背景图失败：图片服务响应超时，请稍后重试。" in joined
     assert "File " not in joined
     assert "TimeoutError" not in joined
 
