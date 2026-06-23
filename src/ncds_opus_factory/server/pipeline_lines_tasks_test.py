@@ -29,7 +29,7 @@ def test_lines_fallback_tries_next_model_after_error() -> None:
 
     assert called == ["agy", "ds"]
     assert parsed["beats"][0]["zh"] == "第一句"
-    assert any("AGY 结构化失败" in item for item in progress)
+    assert any("正在切换备用通道" in item for item in progress)
 
 
 def test_lines_fallback_uses_friendly_error_after_all_fail() -> None:
@@ -50,5 +50,5 @@ def test_lines_fallback_uses_friendly_error_after_all_fail() -> None:
         )
 
     msg = str(excinfo.value)
-    assert "台词结构化暂时失败" in msg
+    assert "视觉方案准备暂时失败" in msg
     assert "raw launcher stack" not in msg

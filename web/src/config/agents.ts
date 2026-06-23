@@ -81,8 +81,8 @@ export const AGENTS: AgentDef[] = [
     role: '画面',
     description: '负责视觉方案、分镜提示词、简笔画设计与画面资产检查。',
     icon: Palette,
-    // lines 是 storyboard 所需的结构化准备，不再作为用户主入口暴露。
-    preflight: [{ node: 'lines', label: '台词结构' }],
+    // lines 是 storyboard 所需的隐藏视觉准备，不再作为用户主入口暴露。
+    preflight: [{ node: 'lines', label: '视觉准备' }],
     members: [
       { node: 'storyboard', label: '视觉方案' },
       { node: 'image', label: '画面资产' },
@@ -226,7 +226,6 @@ export function agentStatus(
 function wudaoziStatus(jobNodes: Record<string, NodeState> | undefined): NodeStatus {
   const rwNode = jobNodes?.rw;
   const linesNode = jobNodes?.lines;
-  const rw = rwNode?.status ?? 'idle';
   const lines = linesNode?.status ?? 'idle';
   const storyboard = jobNodes?.storyboard?.status ?? 'idle';
   const tts = jobNodes?.tts?.status ?? 'idle';
@@ -250,9 +249,9 @@ function wudaoziStatus(jobNodes: Record<string, NodeState> | undefined): NodeSta
   // 第一版 backend DAG 仍是 storyboard -> tts -> image。视觉方案完成后先把当前阶段
   // 交给伯牙；伯牙完成后再回到吴道子补齐画面资产。
   if (storyboard === 'done' && tts !== 'done') return 'done';
-  if (storyboard === 'done' && tts === 'done') return 'running';
-  if (lines === 'done') return 'running';
-  return rw === 'done' && rwSelected ? 'running' : 'idle';
+  if (storyboard === 'done' && tts === 'done') return 'idle';
+  if (lines === 'done') return 'idle';
+  return 'idle';
 }
 
 // —— 作品列表的「设计进度灯」——
@@ -321,7 +320,23 @@ export function agentProgressText(
   for (const m of [...(agent.preflight ?? []), ...agent.members]) {
     if (m.virtual) continue;
     const ns = jobNodes?.[m.node];
-    if (ns && ns.status === 'running') return ns.progress || '执行中…';
+    if (ns && ns.status === 'running') {
+      if (agent.id === 'wudaozi' && m.node === 'lines') {
+        return wudaoziPreflightProgress(ns.progress);
+      }
+      return ns.progress || '执行中…';
+    }
   }
   return '';
+}
+
+function wudaoziPreflightProgress(progress: string | null | undefined): string {
+  const msg = (progress ?? '').trim();
+  if (!msg) return '正在准备视觉方案...';
+  if (/结构化失败|尝试下一个模型|切换备用通道/.test(msg)) return '正在切换备用通道...';
+  if (/结构化完成|条 beats|scenes 待分镜|视觉方案准备完成/.test(msg)) return '视觉方案准备完成';
+  if (/台词结构|结构化为 beats|beats|Opus|opus|AGY|DeepSeek|SCodex|模型/.test(msg)) {
+    return '正在准备视觉方案...';
+  }
+  return msg;
 }

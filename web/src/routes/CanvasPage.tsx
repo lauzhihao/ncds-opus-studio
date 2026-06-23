@@ -113,6 +113,11 @@ function downloadName(prompt: string | undefined, ext: string): string {
   return `${stem}.${ext}`;
 }
 
+function promptTextDownloadName(imageName: string): string {
+  const stem = imageName.replace(/\.[^.]+$/, '') || 'image';
+  return `${stem}图片提示词.txt`;
+}
+
 function clickDownload(href: string, name: string) {
   const a = document.createElement('a');
   a.href = href;
@@ -121,6 +126,13 @@ function clickDownload(href: string, name: string) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+function downloadPromptText(prompt: string | undefined, imageName: string) {
+  const blob = new Blob([prompt?.trim() || ''], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  clickDownload(url, promptTextDownloadName(imageName));
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function ResizableImageCard({
@@ -555,8 +567,10 @@ export function CanvasPage() {
       const isDataUrl = src.startsWith('data:');
       const parsed = isDataUrl ? null : new URL(src, window.location.href);
       if (parsed && parsed.origin !== window.location.origin) {
-        clickDownload(parsed.href, downloadName(prompt, extFromImage('', parsed.href)));
-        showToast('已打开原图下载', 'info');
+        const name = downloadName(prompt, extFromImage('', parsed.href));
+        clickDownload(parsed.href, name);
+        downloadPromptText(prompt, name);
+        showToast('已开始下载图片和提示词', 'info');
         return;
       }
       const res = await fetch(src, { credentials: 'same-origin' });
@@ -567,8 +581,9 @@ export function CanvasPage() {
       const name = downloadName(prompt, ext);
       const url = URL.createObjectURL(blob);
       clickDownload(url, name);
+      downloadPromptText(prompt, name);
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      showToast('已开始下载', 'success');
+      showToast('已开始下载图片和提示词', 'success');
     } catch (e) {
       console.error('下载失败', e);
       showToast('下载失败：图片文件不可访问');

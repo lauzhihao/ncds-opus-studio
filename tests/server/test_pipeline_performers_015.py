@@ -1,9 +1,9 @@
 """E1-b2 slice-1：015 step-performer + 引擎驱动真实 015 链端到端验证（hermetic）。
 
-- lines/storyboard：真实复用 PipelineRunner 的 opus 结构化算法（opus 调用注入桩）。
+- lines：复用 shared fallback 边界（LLM 调用注入桩）；storyboard：复用 director 结构化算法。
 - e2e：引擎按真实 015 拓扑（含 content_edit 闸门）驱动 lines/storyboard 真实 performer
   + 重步骤桩（asr/rw/tts/image/render），经共享 02_rw/episode.json 耦合，端到端出 mp4。
-  不依赖 015 样例素材 / 真 opus / node / ffmpeg。
+  不依赖 015 样例素材 / 真 LLM / node / ffmpeg。
 """
 
 from __future__ import annotations
@@ -57,11 +57,16 @@ def _fake_opus(user_prompt: str, system_prompt: str, model_id: str = "claude-opu
     return _LINES_JSON if "脚本结构化" in system_prompt else _DIRECTOR_JSON
 
 
+def _fake_lines_fallback(user_prompt: str, system_prompt: str, on_progress, **_: Any) -> Any:
+    on_progress("正在准备视觉方案...")
+    return json.loads(_LINES_JSON)
+
+
 # --------------------------------------------------------------------------- #
-# B1) lines performer：真实算法 + opus 桩 → 写出 beats 的 episode.json
+# B1) lines performer：真实编排 + LLM fallback 桩 → 写出 beats 的 episode.json
 # --------------------------------------------------------------------------- #
 def test_run_lines_step_structures_beats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(perf, "_opus_structure", _fake_opus)
+    monkeypatch.setattr(perf, "structure_lines_json_with_fallback", _fake_lines_fallback)
     jd = tmp_path / "job"
     (jd / "02_rw").mkdir(parents=True)
     (jd / "02_rw" / "draft.md").write_text("# 草稿\n\n正文若干。", encoding="utf-8")
@@ -81,39 +86,38 @@ def test_run_lines_step_missing_draft_raises(tmp_path: Path):
         perf.run_lines_step(_noop, job_dir=str(tmp_path / "job"))
 
 
-# 缺逗号 → json.loads 抛 "Expecting ',' delimiter"（复刻线上 opus 偶发的非法 JSON）
-_BAD_LINES_JSON = '{"meta": {"title": "x"}, "beats": [{"zh": "第一句" "en": ""}]}'
+def test_run_lines_step_passes_progress_to_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    progress: list[str] = []
+    prompts: dict[str, str] = {}
 
+    def fake_fallback(user_prompt: str, system_prompt: str, on_progress, **_: Any) -> Any:
+        prompts["user"] = user_prompt
+        prompts["system"] = system_prompt
+        on_progress("正在准备视觉方案...")
+        return json.loads(_LINES_JSON)
 
-def test_run_lines_step_retries_bad_json_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """opus 第一次出非法 JSON，带纠正提示重试后出合法 JSON → lines 成功。"""
-    calls = {"n": 0}
-
-    def flaky_opus(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-7") -> str:
-        calls["n"] += 1
-        return _BAD_LINES_JSON if calls["n"] == 1 else _LINES_JSON
-
-    monkeypatch.setattr(perf, "_opus_structure", flaky_opus)
+    monkeypatch.setattr(perf, "structure_lines_json_with_fallback", fake_fallback)
     jd = tmp_path / "job"
     (jd / "02_rw").mkdir(parents=True)
     (jd / "02_rw" / "draft.md").write_text("# 草稿\n\n正文。", encoding="utf-8")
 
-    out = perf.run_lines_step(_noop, job_dir=str(jd))
-    assert calls["n"] == 2                       # 确实重试了一次
+    out = perf.run_lines_step(progress.append, job_dir=str(jd))
+    assert "脚本结构化助手" in prompts["system"]
+    assert "正文。" in prompts["user"]
+    assert progress == ["正在准备视觉方案...", "视觉方案准备完成：3 句"]
     assert out["beats_count"] == 3
 
 
-def test_run_lines_step_raises_after_max_attempts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """opus 始终出非法 JSON → 重试耗尽抛 RuntimeError（带 tail 便于排查）。"""
-    monkeypatch.setattr(
-        perf, "_opus_structure",
-        lambda u, s, m="claude-opus-4-7": _BAD_LINES_JSON,
-    )
+def test_run_lines_step_propagates_fallback_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def fail_fallback(user_prompt: str, system_prompt: str, on_progress, **_: Any) -> Any:
+        raise RuntimeError("视觉方案准备暂时失败：备用通道都没有成功，请稍后重试。")
+
+    monkeypatch.setattr(perf, "structure_lines_json_with_fallback", fail_fallback)
     jd = tmp_path / "job"
     (jd / "02_rw").mkdir(parents=True)
     (jd / "02_rw" / "draft.md").write_text("# 草稿\n\n正文。", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="重试 3 次仍失败"):
+    with pytest.raises(RuntimeError, match="视觉方案准备暂时失败"):
         perf.run_lines_step(_noop, job_dir=str(jd))
 
 
@@ -224,6 +228,7 @@ _RECIPE_015E2E = Recipe(
 
 
 def test_engine_drives_real_015_chain_to_mp4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(perf, "structure_lines_json_with_fallback", _fake_lines_fallback)
     monkeypatch.setattr(perf, "_opus_structure", _fake_opus)
     registry = {
         "asr_stub": _asr_stub, "rw_stub": _rw_stub,

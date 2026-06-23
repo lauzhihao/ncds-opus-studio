@@ -65,7 +65,7 @@ class PipelineLinesRun:
 
         ep_path = self.job_dir / "02_rw" / "episode.json"
         ep_path.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
-        self._on_progress(f"完成：{beats_count} 条 beats（scenes 待分镜产出）")
+        self._on_progress(f"视觉方案准备完成：{beats_count} 句")
         return {
             "episode_relpath": "02_rw/episode.json",
             "beats_count": beats_count,
@@ -104,12 +104,11 @@ def structure_lines_json_with_fallback(
     failures: list[str] = []
     for cand in LINES_MODEL_FALLBACKS:
         model_key = cand["id"]
-        label = cand["label"]
         try:
-            on_progress(f"调 {label} 结构化为 beats…")
+            on_progress("正在准备视觉方案...")
             raw = _call_lines_model(cand, user_prompt, system_prompt, callers=callers)
             parsed = _parse_lines_json(raw)
-            on_progress(f"{label} 结构化完成")
+            on_progress("视觉方案准备完成")
             return parsed
         except Exception as exc:  # noqa: BLE001 - fallback boundary, full stack goes to logs
             failures.append(f"{model_key}: {exc}")
@@ -117,11 +116,11 @@ def structure_lines_json_with_fallback(
                 "[lines] model %s failed while structuring draft; falling back",
                 model_key,
             )
-            on_progress(f"{label} 结构化失败，尝试下一个模型…")
+            on_progress("当前通道未成功，正在切换备用通道...")
 
     logger.error("[lines] all fallback models failed: %s", " | ".join(failures))
     raise RuntimeError(
-        "台词结构化暂时失败：备用模型都没有成功，请稍后重试或检查模型配置；详细错误已写入服务日志。"
+        "视觉方案准备暂时失败：备用通道都没有成功，请稍后重试。"
     )
 
 

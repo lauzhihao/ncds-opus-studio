@@ -1,4 +1,4 @@
-// 吴道子「视觉方案」入口：先隐藏准备台词结构，再展示 / 微调 director agent 产出的视觉层。
+// 吴道子「视觉方案」入口：先完成视觉准备，再展示 / 微调 director agent 产出的视觉层。
 //
 // 数据源：02_rw/episode.json 的 scenes{}（director 产出，含每个子场景的容器图 prompt
 //         与 sketches[]）+ beats[].scene（子场景归属）。本面板按 scene.group 分段展示，
@@ -45,13 +45,33 @@ function isMissingDraftError(error: string | null | undefined): boolean {
 function friendlyPreflightError(error: string | null | undefined): string {
   const msg = (error ?? '').trim();
   if (!msg) return '未知错误';
-  const friendly = '台词结构化暂时失败';
+  if (isMissingDraftError(msg)) return '请先在柳永选择一版定稿。';
+  const friendly = '视觉方案准备暂时失败';
   const idx = msg.indexOf(friendly);
   if (idx >= 0) return msg.slice(idx);
-  if (/launcher exited|Traceback|RuntimeError: engine step lines/.test(msg)) {
-    return '台词结构化暂时失败：备用模型都没有成功，请稍后重试或检查模型配置；详细错误已写入服务日志。';
+  if (/台词结构化暂时失败|launcher exited|Traceback|RuntimeError: engine step lines|raw launcher stack/.test(msg)) {
+    return '视觉方案准备暂时失败：备用通道都没有成功，请稍后重试。';
   }
-  return msg.replace(/^(?:RuntimeError|ValueError|Exception):\s*/g, '');
+  const cleaned = msg.replace(/^(?:RuntimeError|ValueError|Exception):\s*/g, '');
+  if (/beats|Opus|opus|AGY|DeepSeek|SCodex|模型|结构化/.test(cleaned)) {
+    return '视觉方案准备暂时失败：请稍后重试。';
+  }
+  return cleaned;
+}
+
+function friendlyPreflightProgress(progress: string | null | undefined): string | null {
+  const msg = (progress ?? '').trim();
+  if (!msg) return null;
+  if (/结构化失败|尝试下一个模型|切换备用通道/.test(msg)) {
+    return '当前通道未成功，正在切换备用通道...';
+  }
+  if (/结构化完成|条 beats|scenes 待分镜|视觉方案准备完成/.test(msg)) {
+    return '视觉方案准备完成';
+  }
+  if (/台词结构|结构化为 beats|beats|Opus|opus|AGY|DeepSeek|SCodex|模型/.test(msg)) {
+    return '正在准备视觉方案...';
+  }
+  return msg;
 }
 
 function hasLineOutputs(node: NodeState): boolean {
@@ -63,7 +83,7 @@ function hasLineOutputs(node: NodeState): boolean {
 function isLineStale(lines: NodeState, rw: NodeState): boolean {
   if (lines.status !== 'done' || rw.status !== 'done') return false;
   if (!hasLineOutputs(lines)) return true;
-  // 当前 job state 没有源版本号；第一版用 finished_at 判断柳永定稿是否晚于台词结构。
+  // 当前 job state 没有源版本号；第一版用 finished_at 判断柳永定稿是否晚于视觉准备。
   return !!(rw.finished_at && lines.finished_at && lines.finished_at < rw.finished_at);
 }
 
@@ -127,7 +147,7 @@ export function StoryboardPanel({
     } catch (e) {
       const msg = (e as Error).message;
       setPreflightRunErr(msg);
-      showToast('准备视觉前置结构失败，请稍后重试');
+      showToast('准备视觉方案失败，请稍后重试');
       console.error('[StoryboardPanel] preflight failed', e);
     } finally {
       setPreflightBusy(false);
@@ -302,7 +322,9 @@ export function StoryboardPanel({
 
   if (!preflightReady) {
     const lineStatus = lineState.status;
-    const preflightError = friendlyPreflightError(lineState.error || preflightRunErr);
+    const rawPreflightError = lineState.error || preflightRunErr;
+    const preflightError = rawPreflightError ? friendlyPreflightError(rawPreflightError) : '';
+    const preflightProgress = friendlyPreflightProgress(lineState.progress);
     const waitingForRw = !rwReady;
     const waitingForDraftSelection = !waitingForRw && missingSelectedDraft;
     const rowStatus: ProcStatus =
@@ -311,13 +333,19 @@ export function StoryboardPanel({
         : lineStatus === 'failed' ? 'failed'
           : preflightActive || preflightBusy ? 'running'
             : 'pending';
+    const failedText = preflightError.startsWith('视觉方案准备')
+      ? preflightError
+      : `视觉方案准备失败：${preflightError || '未知错误'}`;
+    const launchFailedText = preflightError.startsWith('视觉方案准备')
+      ? preflightError
+      : `视觉方案准备启动失败：${preflightError || '未知错误'}`;
     const readyText =
-      waitingForRw ? '先完成柳永成稿，吴道子会自动准备视觉结构。'
-        : waitingForDraftSelection ? '柳永已经产出候选稿；请先选择一版定稿，再交给吴道子准备视觉结构。'
-          : preflightRunErr ? `视觉前置准备启动失败：${preflightError}`
-            : lineStatus === 'failed' ? `视觉前置准备失败：${preflightError}`
-              : linesStale ? '柳永成稿已更新，正在重新准备视觉前置结构。'
-                : '正在准备台词结构，完成后进入视觉方案工作台。';
+      waitingForRw ? '先完成柳永成稿，再进入吴道子。'
+        : waitingForDraftSelection ? '柳永已经产出候选稿；请先选择一版定稿，再交给吴道子。'
+          : preflightRunErr ? launchFailedText
+            : lineStatus === 'failed' ? failedText
+              : linesStale ? '柳永成稿已更新，正在重新准备视觉方案。'
+                : '正在准备视觉方案，完成后进入工作台。';
     const canRetry = canPreparePreflight && !preflightActive && !preflightBusy;
 
     return (
@@ -330,16 +358,16 @@ export function StoryboardPanel({
           <ProcStatusRow
             row={{
               id: 'wudaozi-preflight',
-              label: '视觉前置准备（台词结构）',
+              label: '视觉方案准备',
               status: rowStatus,
-              detail: preflightError || lineState.progress || undefined,
+              detail: preflightError || preflightProgress || undefined,
             }}
             runningText="准备中"
           />
         </div>
 
-        {(preflightActive || preflightBusy) && lineState.progress && (
-          <div className="dim-mono">{lineState.progress}</div>
+        {(preflightActive || preflightBusy) && preflightProgress && (
+          <div className="dim-mono">{preflightProgress}</div>
         )}
 
         <div className="rw-panel-header">
@@ -361,7 +389,7 @@ export function StoryboardPanel({
               ) : (
                 <Play size={12} strokeWidth={2} fill="currentColor" />
               )}
-              {lineStatus === 'failed' ? '重试准备' : '准备结构'}
+              {lineStatus === 'failed' ? '重试准备' : '重新准备'}
             </button>
           ) : null}
         </div>
@@ -377,7 +405,7 @@ export function StoryboardPanel({
         <ProcStatusRow
           row={{
             id: 'wudaozi-preflight',
-            label: `台词结构已准备 · ${(lineState.outputs?.beats_count as number | undefined) ?? 0} 句`,
+            label: `视觉方案准备完成 · ${(lineState.outputs?.beats_count as number | undefined) ?? 0} 句`,
             status: 'done',
           }}
         />

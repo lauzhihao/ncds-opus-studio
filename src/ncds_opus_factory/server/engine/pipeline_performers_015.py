@@ -352,7 +352,7 @@ def run_lines_step(
     ep_path = _episode_path(jd)
     ep_path.parent.mkdir(parents=True, exist_ok=True)
     ep_path.write_text(json.dumps(episode, ensure_ascii=False, indent=2), encoding="utf-8")
-    on_progress(f"完成：{beats_count} 条 beats（scenes 待分镜产出）")
+    on_progress(f"视觉方案准备完成：{beats_count} 句")
     return {"episode_relpath": "02_rw/episode.json", "beats_count": beats_count}
 
 
