@@ -5,7 +5,7 @@ douyin-downloader skill(`skills/douyin-downloader/scripts/douyin_download.py`)�
 并把作品列表整理成 `all_posts.json`(鬼谷子 guiguzi 吃的精简格式:aweme_id/desc/digg/comment/share/collect/create)。
 
 token 只在项目内解析:优先环境变量 TIKHUB_API_TOKEN,其次仓库根 .env(已 gitignore,
-模板见 .env.example)——不读 ~/.openclaw 等仓库外配置。本模块不碰飞书、不依赖项目其它部分。
+模板见 .env.example)——不读 ~/.openclaw 等仓库外配置。
 """
 
 from __future__ import annotations

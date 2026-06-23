@@ -147,7 +147,7 @@ def generate_tree(dir_path: Path, prefix: str, extra: list[str]) -> list[str]:
 
 # ----- 摘要提取 -----
 
-# 主要 primitive 命令。core primitive 真身在 ncds_opus_core;asr/rw 真身在 factory。
+# 主要 primitive 命令。core primitive 真身在 ncds_opus_core;asr 真身在 factory。
 PRIMITIVES = [
     ("/wst", "文生图(gpt-image-2)", "packages/core/src/ncds_opus_core/commands/wst.py", "core"),
     ("/tst", "图生图(gpt-image-2 edit)", "packages/core/src/ncds_opus_core/commands/tst.py", "core"),
@@ -155,8 +155,7 @@ PRIMITIVES = [
     ("/tts", "批量 TTS(DashScope CosyVoice)", "packages/core/src/ncds_opus_core/commands/tts.py", "core"),
     ("/render", "离线录屏 + ffmpeg 合成 MP4", "packages/core/src/ncds_opus_core/commands/render.py", "core"),
     ("/render_015", "015 纸卡模板渲染", "packages/core/src/ncds_opus_core/commands/render_015.py", "core"),
-    ("/asr", "多链路并行转写 + 爆款精华分析", "src/ncds_opus_factory/commands/asr.py", "factory 专属"),
-    ("/rw",  "文档内容改写 + 本地 manifest/lark-cli 文档冒泡", "src/ncds_opus_factory/commands/rw.py", "factory 专属"),
+    ("/asr", "本地媒体下载 + ASR 转写", "src/ncds_opus_factory/commands/asr.py", "factory 专属"),
 ]
 
 # 6 个 agent(决策/编排层,经 nof <agent> 或 POST /tasks 调度)。
@@ -218,7 +217,7 @@ def extract_runtime_summary() -> list[str]:
         labels = {
             "runner": "Runners (spawned by Python commands)",
             "worker": "Workers (long-running job processors)",
-            "adapter": "Adapters (lark-cli compatibility wrappers)",
+            "adapter": "Adapters",
             "lib": "Shared libs",
             "tool": "Tooling",
         }

@@ -5,9 +5,7 @@
 
 消费者（均在 factory，皆单向依赖 core）：
 - `commands/liuyong.py`：spawn-by-path `content_rewrite_runner.mjs`（用本定位器）。
-- `scripts/rewrite_command_runner.mjs`：跨包 ESM import `content_rewrite_runner.mjs`。
-- `scripts/video_job_worker.mjs`：跨包 ESM import `video_rewrite_runner.mjs`。
-注：studio 的 rw 节点已改走内联 4 模型并行，不再 spawn 本链（pipeline_runner._execute_rw）。
+注：studio 的 rw 节点已改走内联 4 模型并行，不再 spawn 独立 rewrite runner。
 """
 
 from pathlib import Path

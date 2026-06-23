@@ -41,8 +41,8 @@ You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** �
 
 **边界规则（红线）**：
 - 新业务逻辑默认加在对应的 `commands/*.py` 或它 spawn 的 Node runner 里。
-- **不直连飞书**：项目代码不出现任何飞书 SDK / OpenAPI 调用；飞书 IO 一律走 `lark-cli`，由调用方负责（改造记录见 `docs/FEISHU-REFACTOR.md`）。
-- 进度回调由调用方传入：命令只通过 `on_progress(text)` 吐状态，不假设回调到哪去（飞书 / 终端 / 文件 / noop）。
+- **不包含外部协作文档/消息平台交互**：项目代码不保留相关 SDK / OAuth / 文档或消息交付链路。
+- 进度回调由调用方传入：命令只通过 `on_progress(text)` 吐状态，不假设回调到哪去（终端 / 文件 / noop）。
 
 ## 3. Script Guidelines
 - **Python** (`.py`)：主程序、命令实现、pipeline、工具脚本。
@@ -86,7 +86,7 @@ You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** �
 **L2 — 强制 PLAN，等 "Go"**
 - 跨 ≥ 2 个文件
 - 新增 / 删除 / 重命名模块或目录
-- 改动涉及 secrets / 外部 API 契约 / 飞书 IO 边界
+- 改动涉及 secrets / 外部 API 契约 / 外部交付边界
 - 删除 > 30 行代码
 - 方案本身有 ≥ 2 种可行路径且难以取舍
 

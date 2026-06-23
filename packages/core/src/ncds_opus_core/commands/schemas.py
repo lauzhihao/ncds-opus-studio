@@ -4,7 +4,7 @@
 （``POST /tasks/{cmd}`` 仍原样 spread 给 ``run(**params)``）。
 
 归属（§9.4）：core 严格 **6 个 primitive**（wst/tst/vid/tts/render/render_015）。
-asr/rw 虽 UI ``group="primitive"`` 但命令归 **factory**，其 schema 不在此（在
+asr 虽 UI ``group="primitive"`` 但命令归 **factory**，其 schema 不在此（在
 ``ncds_opus_factory.server.command_schemas`` 的 AGENT_SCHEMAS 里）。factory 的
 AGENT_SCHEMAS 复用本模块的 ``_f`` helper，并由 factory ``get_schema()`` 合并
 PRIMITIVE + AGENT 暴露全集给 ``/commands``。

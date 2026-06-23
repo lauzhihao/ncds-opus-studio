@@ -9,16 +9,15 @@
 | `/wst <提示词>` | 文生图（gpt-image-2） | `ncds_opus_core.commands.wst` |
 | `/tst <参考图> <提示词>` | 图生图（gpt-image-2 edit） | `ncds_opus_core.commands.tst` |
 | `/vid [-秒数] <提示词>` | 视频生成（DashScope HappyHorse），可附参考图 | `ncds_opus_core.commands.vid` |
-| `/asr <抖音/媒体链接>` | 多链路并行转写 + 爆款精华分析（Node runner + Whisper/Tingwu + 本地产物 / lark-cli 文档冒泡） | `ncds_opus_factory.commands.asr` |
-| `/rw <精华文档URL>` | 文档内容改写（Node runner + 本地 manifest + lark-cli 文档冒泡） | `ncds_opus_factory.commands.rw` |
+| `/asr <抖音/媒体链接>` | 本地媒体下载 + ASR 转写（产物落 `video-jobs/<job_id>/`） | `ncds_opus_factory.commands.asr` |
 | `/tts <beats>` | 批量 TTS（DashScope CosyVoice，paper-card-talk 模板用） | `ncds_opus_factory.commands.tts` |
 | `/render <html_url + audio_dir>` | 离线录屏 + ffmpeg 合成 MP4（headless Chrome） | `ncds_opus_core.commands.render` |
 
 ## 设计原则
 
-- **不接入飞书 API**。所有飞书 IO（发消息、下载图片、读写文档）由调用方通过 `lark-cli` 完成；本项目代码不直接 import 任何飞书 SDK，也不直调飞书开放平台端点。
-- **命令 = 独立可调用单元**。core primitive 走 `ncds_opus_core.commands.*`，factory 专属命令（asr/rw/agents）走 `ncds_opus_factory.commands.*`。
-- **进度回调由调用方传入**。命令本身不知道"发飞书消息"，只通过 `on_progress(text)` 回调把状态吐给调用方。
+- **不包含外部协作文档/消息平台交互**。生产产物只落本地工作区。
+- **命令 = 独立可调用单元**。core primitive 走 `ncds_opus_core.commands.*`，factory 专属命令（asr/agents）走 `ncds_opus_factory.commands.*`。
+- **进度回调由调用方传入**。命令本身只通过 `on_progress(text)` 回调把状态吐给调用方。
 
 ## 目录
 
@@ -26,7 +25,7 @@
 src/ncds_opus_factory/
 ├── cli.py                  # 统一 CLI 入口
 ├── commands/
-│   ├── wst.py · tst.py · vid.py · asr.py · rw.py · tts.py · render.py
+│   ├── asr.py · shenkuo.py · guiguzi.py · liuyong.py · wudaozi.py · boya.py · wolong.py
 │   └── render_runner.mjs   # render.py 调用的 generic node runner
 ├── common/                 # 公共：媒体上传到公网、Whisper、yt-dlp 等
 ├── server/                 # HTTP 包装层（详见下文 "HTTP server" 章节）
@@ -35,10 +34,10 @@ src/ncds_opus_factory/
 └── templates/
     └── paper_card_talk/    # 009 风格视频模板（beats.js 驱动 + AI 管线）
 
-scripts/                    # /asr /rw 的 Node runner（spawn 自 Python wrapper）
+scripts/                    # 本地工具脚本与部署脚本
 gpt_image/                  # gpt-image-2 网关 Python 脚本（generate.py / generate_edit.py）
 pipelines/                  # video_pipeline.py + douyin_processing 等 ASR pipeline
-skills/                     # 各 skill 的 SKILL.md 说明（asr / rewrite / video-pipeline / ...）
+skills/                     # 各 skill 的 SKILL.md 说明（asr / video-pipeline / ...）
 configs/                    # openclaw.example.json 等
 state/                      # 任务产物（gitignored）
 ```
@@ -111,8 +110,8 @@ curl http://localhost:8810/tasks/t_1779600315677_e3874132
 
 | 文件/目录 | 旧位置 |
 |---|---|
-| `packages/core/src/ncds_opus_core/commands/wst.py · tst.py` | `~/lark-bot-listener/image_service.py` |
-| `packages/core/src/ncds_opus_core/commands/vid.py` | `~/lark-bot-listener/video_service.py` |
+| `packages/core/src/ncds_opus_core/commands/wst.py · tst.py` | 历史图像服务 |
+| `packages/core/src/ncds_opus_core/commands/vid.py` | 历史视频服务 |
 | `scripts/*.mjs` | `~/.openclaw/workspaces/xiaozhua/scripts/` |
 | `pipelines/` | `~/.openclaw/workspaces/xiaozhua/skills/video-pipeline/` + `douyin_processing/` |
 | `gpt_image/` | `~/.codex/skills/gpt-image/scripts/` |

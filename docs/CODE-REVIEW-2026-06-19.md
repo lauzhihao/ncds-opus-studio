@@ -9,7 +9,7 @@
 
 ## 1. 一句话结论
 
-**真正的债不是分散的，而是高度集中**：一个 3172 行的 god-object（`server/pipeline_runner.py`）+ 三套并存执行运行时（legacy `pipeline_runner` / `task_runner` / 新 `engine/`），导致同一份业务逻辑（采集/选题/改写/质检）被写了 2~4 遍并已开始漂移。工程红线（secrets / 飞书 / core 反向依赖 / shell / 测试契约）**基本全合规**；编码纪律（裸 except、`os.path` 滥用、web `any`）**比预期好**。所以"整理"的收益 80% 来自**收敛运行时 + 拆 god-object + 统一单一真源**，其余是零散卫生。
+**真正的债不是分散的，而是高度集中**：一个 3172 行的 god-object（`server/pipeline_runner.py`）+ 三套并存执行运行时（legacy `pipeline_runner` / `task_runner` / 新 `engine/`），导致同一份业务逻辑（采集/选题/改写/质检）被写了 2~4 遍并已开始漂移。工程红线（secrets / core 反向依赖 / shell / 测试契约）**基本全合规**；编码纪律（裸 except、`os.path` 滥用、web `any`）**比预期好**。所以"整理"的收益 80% 来自**收敛运行时 + 拆 god-object + 统一单一真源**，其余是零散卫生。
 
 ---
 
@@ -44,7 +44,7 @@
 |---|---|---|---|---|
 | A1 | P1 | 三套运行时并存，engine 被塞进 PipelineRunner 当内核，TaskRunner 老轨未迁 | `pipeline_runner.py` / `task_runner.py` / `engine/` | task-3.1 |
 | A2 | P1 | 同一份 015 逻辑在 legacy `_execute_*` 与 engine `run_*_step` 各一份，已漂移（lines/storyboard 加了 JSON 重试+domain_image_style，legacy 没有） | `pipeline_runner.py:1457-2440` ↔ `pipeline_performers_015.py` | task-3.1 |
-| A3 | P1 | "改写"能力 4 套实现、输入语义/质检口径各异 | `commands/rw.py` / `commands/liuyong.py` / `_execute_rw` / `run_rw_step` | task-3.4 |
+| A3 | P1 | "改写"能力多套实现、输入语义/质检口径各异 | `commands/liuyong.py` / `_execute_rw` / `run_rw_step` | task-3.4 |
 | A4 | P1 | "采集"能力 3 套：collect_one 快采 vs video_pipeline 全量，靠 `!= "asr"` 一行 guard 掩盖；engine `run_asr_step` 是死代码 | `_execute_asr_collect` / `run_asr_step` / `:1306` | task-3.4 |
 | A5 | P1 | rw 默认走 engine → 丢逐模型实时增量进度面板（产物不变，仅 UX 退化，设计已知接受） | `pipeline_performers_015.py:316,397` | task-3.3（决策） |
 | A6 | P2 | `/instances` engine HTTP 层 + app `TaskRunner` 都未真正进迁移；`/instances` 前端零调用 | `routes/instances.py` | task-3.1 |
@@ -68,12 +68,12 @@
 
 | ID | 严重度 | 标题 | 关键位置 | 归属 task |
 |---|---|---|---|---|
-| S1 | P1 | 生产媒体管线大量 emoji（video_pipeline.py 22 处 / asr_service 7 / tingwu 17 / douyin_download），且 worker.mjs 用 emoji 前缀做协议匹配，违反「日志只用 ASCII」 | `skills/video-pipeline/scripts/*` `video_job_worker.mjs:830` | task-3.6 |
+| S1 | P1 | 生产媒体管线曾大量使用非 ASCII 日志前缀，违反「日志只用 ASCII」 | `skills/video-pipeline/scripts/*` | task-3.6 |
 | S2 | P1 | 启动日志非 ASCII `→`（**已修 E2**） | `app.py:114` | 已修 |
 | S3 | P2 | `nof-worker` 裸 `await asyncio.Event().wait()`，无 SIGTERM/graceful shutdown | `server/worker.py:76` | task-3.9 |
 | S4 | P2 | `Dockerfile:33` 用全局 `pip install`（docker 已弃用，留作回滚） | `Dockerfile:33` | task-3.8（低优） |
 | S5 | P2 | `edit-server.py` kebab-case 违反 Python snake_case | `templates/…/.015-draft-assets/edit-server.py` | task-3.8（低优） |
-| — | ✅ | **合规**：secrets 无硬编码 / 无飞书 SDK 直连 / core 不反向依赖 factory / shell `set -euo pipefail` / 测试契约 / venv py3.12 未污染 | — | — |
+| — | ✅ | **合规**：secrets 无硬编码 / core 不反向依赖 factory / shell `set -euo pipefail` / 测试契约 / venv py3.12 未污染 | — | — |
 
 ### 4.4 死代码 / 旧实现（可清理）
 
@@ -94,7 +94,7 @@
 | **DEC-1** | rw 是否恢复逐模型实时进度面板？(A5) | **回退 rw 走 legacy**（`:1306` 改 `node_name not in ("asr","rw")`）—— 1 行、可逆、纯 UX 优化（你允许的"优化"），legacy/engine 共享全部 rw 内部逻辑无维护分叉 | 这改的是**当前在生产跑通的 rw 活路径**（engine→legacy），属"动活路径"，外出期不冒此风险。详见 task-3.3 |
 | **DEC-2** | 是否删 6 个 legacy `_execute_*` 冷藏路径？(A2) | **暂不删**，留作 `NOF_ENGINE_NODES=legacy` 回退护城河，直到 engine 路径再跑通几个生产周期 | >30 行删除不可逆 + 放弃回退能力，需你确认运维不再依赖 |
 | **DEC-3** | 是否删吴道子/伯牙旧 figure_talk 冷链？(D2) | **暂不物理删**，但标记为"冷链/重写时直接替换不必兼容"（与你"不为旧实现搞兼容屎山"一致）；真要删须**连 app catalog tile 一起删**（否则破坏 app UI） | reachable from app `/tasks` + catalog，删会改 app UI（违背"不破坏 UI"），且属产品节奏决策 |
-| **DEC-4** | 废弃 `commands/liuyong.py` + `commands/rw.py`（TaskRunner 老轨化石）？(A3) | **先核实 app `/tasks` 与 CLI 是否仍在用**；若否则废弃并从 command_schemas/label_store/mock_agents 摘除 | 仍被 registry/CLI 引用，删可能断 app 派单 + CLI，需确认使用面 |
+| **DEC-4** | 是否继续收敛 `commands/liuyong.py` 与 web rw performer？(A3) | **先核实 app `/tasks` 与 CLI 是否仍在用**；若否则从 command_schemas/label_store/mock_agents 摘除 | 仍被 registry/CLI 引用，需确认使用面 |
 | **DEC-5** | god-object 拆分分期方案 | **三步**：先抽 3 类 agent 后台（enrich/refresh/guiguzi）→ 再把 engine 桥接收进 adapter → 最后随漂移收敛删 legacy 执行体 | L 级跨文件重构，blast radius 大，需对齐边界与分期才动手（task-3.2） |
 
 ---

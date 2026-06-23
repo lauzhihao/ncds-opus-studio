@@ -1,7 +1,6 @@
 """/tst —— 图生图（gpt-image-2 edit）。
 
 调用 gpt_image/generate_edit.py 网关。参考图可以是本地路径或公网 URL。
-飞书发送由调用方走 lark-cli；如果参考图来自飞书消息，调用方需要先用 common.lark_cli.download_message_image 下载好再传进来。
 """
 
 from __future__ import annotations

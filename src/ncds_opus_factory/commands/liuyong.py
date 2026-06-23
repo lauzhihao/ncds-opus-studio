@@ -3,7 +3,7 @@
 输入一个"选题"(一句话想法)，按 douyin_cog 内核(爆款骨架 v2 + 选题公式 + 反模式)
 从零创作一条不糙的认知口播脚本。
 
-复用 ncds_opus_core.runners 的 content_rewrite_runner.mjs(双模型 + profile 编排)，不碰飞书：
+复用 ncds_opus_core.runners 的 content_rewrite_runner.mjs(双模型 + profile 编排)，
 直接喂 sourceText=选题、targetProfile=douyin_cog，本地产出 draft。
 """
 

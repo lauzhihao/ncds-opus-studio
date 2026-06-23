@@ -1,6 +1,6 @@
 """解析一个"自带全局 fetch"的 node 可执行文件。
 
-背景：commands/*.py spawn 的若干 Node runner（content_rewrite / rw / asr）内部用全局
+背景：commands/*.py spawn 的若干 Node runner（content_rewrite / render）内部用全局
 `fetch`。global fetch 是 Node 18 才引入的；而本机 nvm 下同时装着 v16/v17 等老版本，
 当服务端（launchd / 非交互 shell）的 PATH 恰好把老 node 排在前面时，runner 会直接
 `ReferenceError: fetch is not defined` 失败。

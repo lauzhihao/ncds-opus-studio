@@ -2,8 +2,6 @@
 
 输入：prompt + 可选 ref_image_urls（公网 URL，1 张走 i2v，多张走 r2v）+ duration。
 输出：本地视频文件路径（mp4）。
-
-飞书发送由调用方走 lark-cli，本模块不接入飞书。
 """
 
 from __future__ import annotations

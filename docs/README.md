@@ -66,9 +66,8 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 | **[PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)** | **权威设计**：目标架构、核心抽象、步骤生命周期/介入点、多配方、E0–E5 迁移分期 |
 | [WOLONG-DESIGN.md](WOLONG-DESIGN.md) | 卧龙子系统实装（调度/闸门/离线学习）——在新架构里=app driver + 自治神经层的规格 |
 | [FRONTEND-API.md](FRONTEND-API.md) | 对外 HTTP API 契约：当前 `/jobs`=web 主路径、`/tasks`=app 主路径、`/instances`=engine 后端 driver API |
-| [FEISHU-REFACTOR.md](FEISHU-REFACTOR.md) | 飞书 IO → lark-cli 边界的改造记录（设计原则：命令不直调飞书） |
 
 ## [archive/](archive/) —— 历史/已作废，**不要当现状读**
 三包对等拆分系列（MONOREPO-SPLIT-{DESIGN,HANDOFF,PATHS}）、CONVERGENCE-DESIGN、MIGRATION（旧
-lark-bot-listener→factory 合并）。仅留作"为什么走到今天"的证据；其中 MONOREPO-SPLIT-DESIGN §9.x 是
+历史 bot listener→factory 合并）。仅留作"为什么走到今天"的证据；其中 MONOREPO-SPLIT-DESIGN §9.x 是
 **P1 抽 core 的 as-built 记录**，要追 P1 细节时可查。

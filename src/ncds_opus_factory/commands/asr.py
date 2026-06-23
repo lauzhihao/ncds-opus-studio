@@ -1,9 +1,7 @@
-"""/asr —— 多链路并行转写 + 爆款精华分析。
+"""/asr —— 本地媒体下载 + ASR 转写 pipeline。
 
-Python 薄包装：spawn `scripts/asr_command_runner.mjs`，由 Node runner 调度
-yt-dlp / Whisper / Tingwu / DashScope，落本地产物并按调用方 payload 冒泡通知。
-所有飞书 IO 都经 `scripts/feishu_sdk_adapter.mjs` 委托 `lark-cli` 子进程完成，
-不直连飞书 OpenAPI。详见 docs/FEISHU-REFACTOR.md。
+本命令只负责把媒体链接交给本地 Python pipeline，产物落在
+``video-jobs/{job_id}/``。不包含任何聊天平台、文档平台或外部消息交付逻辑。
 """
 
 from __future__ import annotations
@@ -11,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -18,11 +17,10 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ncds_opus_factory.common.node_runtime import resolve_node
-
 ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE_DIR = ROOT
-ASR_RUNNER = ROOT / "scripts" / "asr_command_runner.mjs"
+VIDEO_PIPELINE = ROOT / "skills" / "video-pipeline" / "scripts" / "video_pipeline.py"
+SUPPORTED_MEDIA_URL = re.compile(r"https?://[^\s\]）)>]+", re.IGNORECASE)
 
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("NOF_ASR_TIMEOUT", "3600"))
 
@@ -34,28 +32,24 @@ def _noop(_text: str) -> None:
 
 
 def _build_job_id() -> str:
-    return f"vj_{int(time.time() * 1000)}_{secrets.token_hex(4)}"
+    return f"asr_{int(time.time() * 1000)}_{secrets.token_hex(4)}"
 
 
-def build_payload(
-    text: str,
-    job_id: str | None = None,
-    chat_id: str | None = None,
-    sender_open_id: str | None = None,
-    channel: str = "feishu",
-    provider: str = "feishu",
-    message_id: str | None = None,
-    chat_type: str = "direct",
-) -> dict[str, Any]:
+def extract_urls(text: str) -> list[str]:
+    urls: list[str] = []
+    for item in SUPPORTED_MEDIA_URL.findall(text or ""):
+        cleaned = item.rstrip(".,;!?)]}")
+        if cleaned and cleaned not in urls:
+            urls.append(cleaned)
+    return urls
+
+
+def build_payload(text: str, job_id: str | None = None, urls: list[str] | None = None) -> dict[str, Any]:
+    inputs = list(urls) if urls is not None else extract_urls(text)
     return {
         "jobId": job_id or _build_job_id(),
         "text": text,
-        "chatId": chat_id,
-        "senderOpenId": sender_open_id,
-        "channel": channel,
-        "provider": provider,
-        "messageId": message_id,
-        "chatType": chat_type,
+        "inputs": inputs,
     }
 
 
@@ -65,64 +59,58 @@ def run(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     on_progress: ProgressFn = _noop,
 ) -> dict[str, Any]:
-    """同步执行 ASR runner，返回 {job_id, trace_log, exit_code}。"""
-    if not ASR_RUNNER.exists():
-        raise RuntimeError(f"ASR runner 未就绪: {ASR_RUNNER}")
+    """同步执行本地 video pipeline，返回 job 目录和本地产物路径。"""
+    if not VIDEO_PIPELINE.exists():
+        raise RuntimeError(f"ASR pipeline 未就绪: {VIDEO_PIPELINE}")
+
     asr_payload = dict(payload) if payload else build_payload(text=text)
     asr_payload.setdefault("text", text)
     if not asr_payload.get("jobId"):
         asr_payload["jobId"] = _build_job_id()
-    job_id = asr_payload["jobId"]
-    trace_log = WORKSPACE_DIR / "video-jobs" / job_id / "trace.log"
+    inputs = asr_payload.get("inputs") or asr_payload.get("urls") or extract_urls(asr_payload.get("text", ""))
+    if not isinstance(inputs, list) or not inputs:
+        raise ValueError("ASR 输入中没有可处理的媒体 URL")
+
+    job_id = str(asr_payload["jobId"])
+    job_dir = WORKSPACE_DIR / "video-jobs" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
-    env.setdefault("LARK_CLI_NO_PROXY", "1")
-    env.setdefault("NO_PROXY", "localhost,127.0.0.1,.local,.feishu.cn,.larksuite.com,.larksuite.cn")
-    env.setdefault("no_proxy", env["NO_PROXY"])
     env.setdefault("OPENCLAW_WORKSPACE_DIR", str(WORKSPACE_DIR))
 
-    on_progress(f"启动 ASR runner（job={job_id}）")
-    command = [resolve_node(), str(ASR_RUNNER), "--sync", json.dumps(asr_payload, ensure_ascii=False)]
+    on_progress(f"启动本地 ASR pipeline（job={job_id}）")
+    command = [sys.executable, str(VIDEO_PIPELINE), "-o", str(job_dir), *[str(item) for item in inputs]]
     proc = subprocess.run(
         command,
         cwd=str(WORKSPACE_DIR),
         env=env,
         timeout=timeout_seconds,
         text=True,
+        capture_output=True,
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"ASR runner exited with code {proc.returncode}. trace_log={trace_log}")
-    on_progress("ASR 任务完成")
-    # 冒泡产物约定路径：daoer 等下游通过 ncds /jobs/{job_id}/files/{relpath}
-    # HTTP 端点按 relpath 拉本地产物，无需共享 fs / 无需猜路径。
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(f"ASR pipeline exited with code {proc.returncode}: {detail}")
+
+    result_json = job_dir / "deliverables" / "result.json"
+    on_progress("ASR pipeline 完成")
     return {
         "job_id": job_id,
-        "trace_log": str(trace_log),
         "exit_code": proc.returncode,
-        "deliverables_dir": f"video-jobs/{job_id}/deliverables",
-        "results_json_relpath": "deliverables/results.json",
+        "job_dir": str(job_dir),
+        "deliverables_dir": str(job_dir / "deliverables"),
+        "result_json": str(result_json) if result_json.exists() else None,
     }
 
 
 def _cli(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="nof asr", description="多链路并行转写 + 爆款精华分析")
-    parser.add_argument("--text", required=True, help="包含媒体 URL 或抖音分享文案的整段文本")
-    parser.add_argument("--chat-id", default=None)
-    parser.add_argument("--sender-open-id", default=None)
-    parser.add_argument("--message-id", default=None)
-    parser.add_argument("--chat-type", default="direct")
+    parser = argparse.ArgumentParser(prog="nof asr", description="本地媒体下载 + ASR 转写")
+    parser.add_argument("--text", required=True, help="包含媒体 URL 的文本")
     parser.add_argument("--job-id", default=None)
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     args = parser.parse_args(argv)
 
-    payload = build_payload(
-        text=args.text,
-        job_id=args.job_id,
-        chat_id=args.chat_id,
-        sender_open_id=args.sender_open_id,
-        message_id=args.message_id,
-        chat_type=args.chat_type,
-    )
+    payload = build_payload(text=args.text, job_id=args.job_id)
 
     def on_progress(text: str) -> None:
         print(f"[progress] {text}", file=sys.stderr, flush=True)

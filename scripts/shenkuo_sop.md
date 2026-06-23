@@ -3,7 +3,7 @@
 > 《梦溪笔谈》博物采集、记录见闻 —— 盯对标号,把原料拉回来喂下游。**工厂最上游的供料层**
 > (不在卧龙/鬼谷子/柳永/吴道子/伯牙 五大成片 agent 之内,是它们的上游)。
 
-实现是命令 `commands/shenkuo.py`（`nof shenkuo`）。**不碰飞书**、离线、幂等、可被 cron/watchdog 调度。
+实现是命令 `commands/shenkuo.py`（`nof shenkuo`）。离线、幂等、可被 cron/watchdog 调度。
 
 ## 职责（一拉两拆）
 
@@ -48,7 +48,7 @@ PYTHONPATH=src python3 -m ncds_opus_factory shenkuo --aweme <aweme_id>   # 单�
 ## 复用 / 坑
 
 - 复用:`common/tikhub_client`(下载 + 按作者拉) / `common/capabilities/tingwu.py`(听悟 vendor adapter) / `ffmpeg` / `rembg`。
-- **不用** `commands/asr.py`(它把结果发飞书,违背离线) / `pipelines/douyin_processing/download_and_transcribe.py`(yt-dlp+本地 whisper 老垃圾)。
+- **不用** `commands/asr.py`(整条媒体 pipeline 入口) / `pipelines/douyin_processing/download_and_transcribe.py`(yt-dlp+本地 whisper 老垃圾)。
 - 转写 key:统一由 capabilities 基座读取环境变量 / 主仓库 `.env` 的 `DASHSCOPE_API_KEY`。
 - 抠图依赖:`rembg`+`onnxruntime`(装在 python3,`pip install --break-system-packages`)。
 - 截帧抠图质量:对标号是浅纸背景 + 黑剪影/图标,rembg 抠深色前景质量待验,v0 先跑通。

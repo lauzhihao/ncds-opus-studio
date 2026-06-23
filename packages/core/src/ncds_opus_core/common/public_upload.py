@@ -3,8 +3,6 @@
 DashScope 视频生成的 i2v / r2v 需要参考图是公网可访问的 URL，本模块负责通过 ssh+scp
 把图片落到 vooice.tech 的静态目录，再返回 https URL。
 
-不接入飞书 API。如果参考图来自飞书消息，请先用 common.lark_cli.download_message_image
-下载到本地，再调本模块上传。
 """
 
 from __future__ import annotations
@@ -21,9 +19,9 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-PUBLIC_IMAGE_BASE_URL = os.getenv("NOF_IMAGE_PUBLIC_BASE_URL", "https://vooice.tech/feishu-images").rstrip("/")
+PUBLIC_IMAGE_BASE_URL = os.getenv("NOF_IMAGE_PUBLIC_BASE_URL", "https://vooice.tech/ncds-images").rstrip("/")
 PUBLIC_IMAGE_SSH_TARGET = os.getenv("NOF_IMAGE_UPLOAD_SSH_TARGET", "root@gpt.vooice.tech")
-PUBLIC_IMAGE_REMOTE_DIR = os.getenv("NOF_IMAGE_UPLOAD_REMOTE_DIR", "/var/www/vooice.tech/feishu-images")
+PUBLIC_IMAGE_REMOTE_DIR = os.getenv("NOF_IMAGE_UPLOAD_REMOTE_DIR", "/var/www/vooice.tech/ncds-images")
 UPLOAD_TIMEOUT = int(os.getenv("NOF_IMAGE_UPLOAD_TIMEOUT", "600"))
 DELETE_DELAY_SECONDS = int(os.getenv("NOF_IMAGE_DELETE_DELAY_SECONDS", "180"))
 

@@ -438,7 +438,7 @@ const REWRITE_PROFILES = {
   },
   paper_card_talk: {
     // daoer 画布编辑器消费：直出 Beat[] JSON，import 端点按 schema 校验后
-    // 写入 episode.beats[]。不上传飞书的事情由 daoer 决定；这里只保证本地
+    // 写入 episode.beats[]。这里只保证本地
     // deliverables/beats-{modelId}.json 是合法 JSON。
     id: 'paper_card_talk',
     requiresAnalysis: false,

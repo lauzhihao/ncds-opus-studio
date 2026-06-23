@@ -1,7 +1,6 @@
 """/wst —— 文生图（gpt-image-2）。
 
 调用 gpt_image/generate.py 网关，返回生成图片的本地路径列表。
-飞书发送由调用方走 lark-cli，本模块不接入飞书。
 """
 
 from __future__ import annotations

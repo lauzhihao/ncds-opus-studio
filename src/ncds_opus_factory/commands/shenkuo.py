@@ -8,7 +8,7 @@
 - **薄组合层**:沈括本身只做"编排 + 缓存",底层能力一律调 `common/capabilities`
   (transcribe/separate_audio/extract_frames/cutout) + `common/tikhub_client`(下载/评论)。
   能力的"唯一实现"在那两处,沈括不自带实现,别处要复用直接调 capabilities。
-- **不碰飞书**:不用 commands/asr.py(它把结果发飞书),走 capabilities.transcribe(听悟/Paraformer)。
+- **底层复用**:单作品采集走 capabilities.transcribe(听悟/Paraformer),不复刻 ASR 实现。
 - 幂等 + 缓存:产物按 平台+作品id 落 works 仓库(works_repo),已采的跳过,可反复跑、断点续、跨对标号复用。
 - 离线批处理:`nof shenkuo --author <sec_uid>`,能手动 / 被 cron / watchdog 调度。
 

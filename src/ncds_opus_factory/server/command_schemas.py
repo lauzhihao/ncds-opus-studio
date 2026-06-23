@@ -5,7 +5,7 @@
 
 二分（§9.4）：
 - core ``PRIMITIVE_SCHEMAS`` = wst/tst/vid/tts/render/render_015（在 ncds_opus_core）。
-- factory ``AGENT_SCHEMAS`` = 6 中国风 agent + asr + rw（本文件）。asr/rw UI ``group``
+- factory ``AGENT_SCHEMAS`` = 6 中国风 agent + asr（本文件）。asr UI ``group``
   仍是 "primitive"，但命令归 factory，故 schema 在这边。
 - ``get_schema()`` 合并 AGENT + PRIMITIVE 暴露全集（``/commands`` 不丢字段）。
 
@@ -20,7 +20,7 @@ from typing import Any
 
 from ncds_opus_core.commands.schemas import PRIMITIVE_SCHEMAS, _f
 
-# factory 专属命令 schema（agent 层 + asr/rw）
+# factory 专属命令 schema（agent 层 + asr）
 AGENT_SCHEMAS: dict[str, dict[str, Any]] = {
     # ───────────────────────── 中国风 agent 层 ─────────────────────────
     "guiguzi": {
@@ -96,14 +96,10 @@ AGENT_SCHEMAS: dict[str, dict[str, Any]] = {
             _f("avoid", "已发选题(逗号分隔)", "string", help="留空用脚本内置默认"),
         ],
     },
-    # ───────────────────────── factory primitive(asr/rw) ─────────────────────────
+    # ───────────────────────── factory primitive(asr) ─────────────────────────
     "asr": {
-        "label": "转写", "group": "primitive", "summary": "多链路转写",
+        "label": "转写", "group": "primitive", "summary": "本地媒体下载 + ASR 转写",
         "fields": [_f("text", "输入", "text", required=True)],
-    },
-    "rw": {
-        "label": "改写", "group": "primitive", "summary": "双模型改写",
-        "fields": [_f("docx_url", "文档 URL", "string", required=True)],
     },
 }
 
