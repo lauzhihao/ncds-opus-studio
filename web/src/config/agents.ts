@@ -224,13 +224,26 @@ export function agentStatus(
 }
 
 function wudaoziStatus(jobNodes: Record<string, NodeState> | undefined): NodeStatus {
-  const rw = jobNodes?.rw?.status ?? 'idle';
-  const lines = jobNodes?.lines?.status ?? 'idle';
+  const rwNode = jobNodes?.rw;
+  const linesNode = jobNodes?.lines;
+  const rw = rwNode?.status ?? 'idle';
+  const lines = linesNode?.status ?? 'idle';
   const storyboard = jobNodes?.storyboard?.status ?? 'idle';
   const tts = jobNodes?.tts?.status ?? 'idle';
   const image = jobNodes?.image?.status ?? 'idle';
+  const rwSelected =
+    typeof rwNode?.outputs?.selected_model_id === 'string' &&
+    rwNode.outputs.selected_model_id.trim().length > 0;
+  const linesFailedBeforeDraftSelected =
+    lines === 'failed' &&
+    !rwSelected &&
+    /draft\.md missing|选定稿模型|选模型/.test(String(linesNode?.error ?? ''));
 
-  if ([lines, storyboard, image].some((s) => s === 'failed')) return 'failed';
+  if (
+    (!linesFailedBeforeDraftSelected && lines === 'failed') ||
+    storyboard === 'failed' ||
+    image === 'failed'
+  ) return 'failed';
   if ([lines, storyboard, image].some((s) => s === 'running' || s === 'queued')) return 'running';
   if (image === 'done') return 'done';
 
@@ -239,7 +252,7 @@ function wudaoziStatus(jobNodes: Record<string, NodeState> | undefined): NodeSta
   if (storyboard === 'done' && tts !== 'done') return 'done';
   if (storyboard === 'done' && tts === 'done') return 'running';
   if (lines === 'done') return 'running';
-  return rw === 'done' ? 'running' : 'idle';
+  return rw === 'done' && rwSelected ? 'running' : 'idle';
 }
 
 // —— 作品列表的「设计进度灯」——
@@ -295,9 +308,13 @@ export function agentProgressText(
   jobNodes: Record<string, NodeState> | undefined,
 ): string {
   if (agent.id === 'wudaozi') {
+    const rwSelected =
+      typeof jobNodes?.rw?.outputs?.selected_model_id === 'string' &&
+      jobNodes.rw.outputs.selected_model_id.trim().length > 0;
     const storyboard = jobNodes?.storyboard?.status ?? 'idle';
     const tts = jobNodes?.tts?.status ?? 'idle';
     const image = jobNodes?.image?.status ?? 'idle';
+    if ((jobNodes?.rw?.status ?? 'idle') === 'done' && !rwSelected) return '待柳永定稿';
     if (storyboard === 'done' && tts === 'done' && image === 'idle') return '待生成画面资产';
   }
 

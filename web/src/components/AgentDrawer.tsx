@@ -188,6 +188,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
             nodeState={nodeState}
             rwNodeState={job.nodes.rw ?? defaultIdleState('rw')}
             preflightNodeState={job.nodes.lines ?? defaultIdleState('lines')}
+            onRequestDraftSelection={() => onAdvanceAgent('liuyong')}
             onAdvanced={() => advance('storyboard')}
           />
         );

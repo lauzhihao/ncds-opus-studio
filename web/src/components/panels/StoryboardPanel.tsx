@@ -22,6 +22,7 @@ interface Props {
   nodeState: NodeState;
   rwNodeState: NodeState;
   preflightNodeState: NodeState;
+  onRequestDraftSelection?: () => void;
   onAdvanced?: () => void;
 }
 
@@ -30,6 +31,15 @@ const PREFLIGHT_NODE = 'lines';
 
 function isActive(status: NodeState['status']): boolean {
   return status === 'queued' || status === 'running';
+}
+
+function hasSelectedRwDraft(node: NodeState): boolean {
+  const selected = node.outputs?.selected_model_id;
+  return typeof selected === 'string' && selected.trim().length > 0;
+}
+
+function isMissingDraftError(error: string | null | undefined): boolean {
+  return /draft\.md missing|选定稿模型|选模型/.test(error ?? '');
 }
 
 function hasLineOutputs(node: NodeState): boolean {
@@ -68,6 +78,7 @@ export function StoryboardPanel({
   nodeState,
   rwNodeState,
   preflightNodeState,
+  onRequestDraftSelection,
   onAdvanced,
 }: Props) {
   const { showToast } = useToast();
@@ -87,12 +98,16 @@ export function StoryboardPanel({
   const rwState = rwNodeState;
   const lineState = preflightNodeState;
   const linesStale = isLineStale(lineState, rwState);
+  const rwSelected = hasSelectedRwDraft(rwState);
+  const missingSelectedDraft = rwState.status === 'done' && !rwSelected;
+  const missingDraftFailed = lineState.status === 'failed' && isMissingDraftError(lineState.error);
   const preflightReady = lineState.status === 'done' && !linesStale && hasLineOutputs(lineState);
   const preflightActive = isActive(lineState.status);
   const rwReady = rwState.status === 'done';
+  const canPreparePreflight = rwReady && rwSelected;
 
   const runPreflight = useCallback(async () => {
-    if (!rwReady) return;
+    if (!canPreparePreflight) return;
     setPreflightBusy(true);
     setPreflightRunErr(null);
     try {
@@ -105,17 +120,19 @@ export function StoryboardPanel({
     } finally {
       setPreflightBusy(false);
     }
-  }, [jobId, rwReady, showToast]);
+  }, [canPreparePreflight, jobId, showToast]);
 
   useEffect(() => {
-    if (!rwReady || preflightBusy) return;
+    if (!canPreparePreflight || preflightBusy) return;
     const missingOrIdle = lineState.status === 'idle';
     const staleDone = lineState.status === 'done' && linesStale;
-    if (!missingOrIdle && !staleDone) return;
+    const recoverableFailed = missingDraftFailed;
+    if (!missingOrIdle && !staleDone && !recoverableFailed) return;
 
     const key = [
       jobId,
       rwState.finished_at ?? 'rw',
+      rwState.outputs?.selected_model_id ?? 'unselected',
       lineState.status,
       lineState.finished_at ?? 'none',
       staleDone ? 'stale' : 'fresh',
@@ -123,7 +140,17 @@ export function StoryboardPanel({
     if (autoPreflightKeys.current.has(key)) return;
     autoPreflightKeys.current.add(key);
     void runPreflight();
-  }, [jobId, lineState, linesStale, preflightBusy, runPreflight, rwReady, rwState.finished_at]);
+  }, [
+    canPreparePreflight,
+    jobId,
+    lineState,
+    linesStale,
+    missingDraftFailed,
+    preflightBusy,
+    runPreflight,
+    rwState.finished_at,
+    rwState.outputs,
+  ]);
 
   // 只在 done 时拉 episode（running/idle 时 scenes 还没产出）
   useEffect(() => {
@@ -265,22 +292,25 @@ export function StoryboardPanel({
     const lineStatus = lineState.status;
     const preflightError = lineState.error || preflightRunErr;
     const waitingForRw = !rwReady;
+    const waitingForDraftSelection = !waitingForRw && missingSelectedDraft;
     const rowStatus: ProcStatus =
-      preflightRunErr ? 'failed'
+      waitingForDraftSelection ? 'pending'
+        : preflightRunErr ? 'failed'
         : lineStatus === 'failed' ? 'failed'
           : preflightActive || preflightBusy ? 'running'
             : 'pending';
     const readyText =
-      preflightRunErr ? `视觉前置准备启动失败：${preflightRunErr}`
-        : waitingForRw ? '先完成柳永成稿，吴道子会自动准备视觉结构。'
-          : lineStatus === 'failed' ? `视觉前置准备失败：${lineState.error || '未知错误'}`
-            : linesStale ? '柳永成稿已更新，正在重新准备视觉前置结构。'
-              : '正在准备台词结构，完成后进入视觉方案工作台。';
-    const canRetry = rwReady && !preflightActive && !preflightBusy;
+      waitingForRw ? '先完成柳永成稿，吴道子会自动准备视觉结构。'
+        : waitingForDraftSelection ? '柳永已经产出候选稿；请先选择一版定稿，再交给吴道子准备视觉结构。'
+          : preflightRunErr ? `视觉前置准备启动失败：${preflightRunErr}`
+            : lineStatus === 'failed' ? `视觉前置准备失败：${lineState.error || '未知错误'}`
+              : linesStale ? '柳永成稿已更新，正在重新准备视觉前置结构。'
+                : '正在准备台词结构，完成后进入视觉方案工作台。';
+    const canRetry = canPreparePreflight && !preflightActive && !preflightBusy;
 
     return (
       <div className="rw-panel-root">
-        <div className={`panel-hint ${lineStatus === 'failed' || preflightRunErr ? 'panel-hint-error' : 'panel-hint-info'}`}>
+        <div className={`panel-hint ${!waitingForDraftSelection && (lineStatus === 'failed' || preflightRunErr) ? 'panel-hint-error' : 'panel-hint-info'}`}>
           {readyText}
         </div>
 
@@ -307,6 +337,11 @@ export function StoryboardPanel({
           >
             视觉工作台准备
           </div>
+          {waitingForDraftSelection && onRequestDraftSelection ? (
+            <button className="btn primary sm" onClick={onRequestDraftSelection}>
+              <Play size={12} strokeWidth={2} fill="currentColor" /> 回柳永定稿
+            </button>
+          ) : null}
           {canRetry ? (
             <button className="btn primary sm" disabled={preflightBusy} onClick={() => { void runPreflight(); }}>
               {lineStatus === 'failed' ? (
