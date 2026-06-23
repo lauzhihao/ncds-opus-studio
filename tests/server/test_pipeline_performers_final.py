@@ -1,9 +1,9 @@
-"""E1-b2 slice-1：015 step-performer + 引擎驱动真实 015 链端到端验证（hermetic）。
+"""E1-b2 slice-1：final_preview step-performer + 引擎驱动真实 final_preview 链端到端验证（hermetic）。
 
 - lines：复用 shared fallback 边界（LLM 调用注入桩）；storyboard：复用 director 结构化算法。
-- e2e：引擎按真实 015 拓扑（含 content_edit 闸门）驱动 lines/storyboard 真实 performer
+- e2e：引擎按真实 final_preview 拓扑（含 content_edit 闸门）驱动 lines/storyboard 真实 performer
   + 重步骤桩（asr/rw/tts/image/render），经共享 02_rw/episode.json 耦合，端到端出 mp4。
-  不依赖 015 样例素材 / 真 LLM / node / ffmpeg。
+  不依赖模板样例素材 / 真 LLM / node / ffmpeg。
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from ncds_opus_factory.server import pipeline_llm_fallback as llm_fallback
-from ncds_opus_factory.server.engine import pipeline_performers_015 as perf
+from ncds_opus_factory.server.engine import pipeline_performers_final as perf
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
 from ncds_opus_factory.server.engine.types import Recipe, RecipeStep
@@ -44,13 +44,25 @@ _LINES_JSON = json.dumps({
 }, ensure_ascii=False)
 
 _DIRECTOR_JSON = json.dumps({
-    "scenes": {
-        "s1": {"prompt": "场景一容器图", "group": "g1", "imageFit": "contain",
-               "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
-        "s2": {"prompt": "场景二容器图", "group": "g1", "imageFit": "contain",
-               "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
+    "visual": {
+        "style": "paper_card_talk",
+        "stage": {
+            "background": {"prompt": "统一暖纸舞台背景，无文字", "imageFit": "cover"},
+            "palette": {},
+            "shotRhythm": "one-shot-per-beat",
+        },
+        "shots": [
+            {"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "第一句画面",
+             "layout": "center_icon", "transition": "replace", "motion": {"enter": "fade"},
+             "emphasis": [], "assets": [{"id": "a1", "prompt": "first pictogram", "pos": {"x": 50, "y": 50}, "size": 30}]},
+            {"beatIndex": 2, "shotId": "b002", "group": "g1", "intent": "第二句画面",
+             "layout": "center_icon", "transition": "replace", "motion": {"enter": "fade"},
+             "emphasis": [], "assets": [{"id": "a1", "prompt": "second pictogram", "pos": {"x": 50, "y": 50}, "size": 30}]},
+            {"beatIndex": 3, "shotId": "b003", "group": "g2", "intent": "第三句画面",
+             "layout": "center_icon", "transition": "replace", "motion": {"enter": "fade"},
+             "emphasis": [], "assets": [{"id": "a1", "prompt": "third pictogram", "pos": {"x": 50, "y": 50}, "size": 30}]},
+        ],
     },
-    "sceneMap": {"1": "s1", "2": "s1", "3": "s2"},
 }, ensure_ascii=False)
 
 
@@ -135,7 +147,7 @@ def test_run_lines_step_propagates_fallback_error(tmp_path: Path, monkeypatch: p
 
 
 # --------------------------------------------------------------------------- #
-# B2) storyboard performer：真实算法 + director 桩 → 回填 scene + 写 scenes{}
+# B2) storyboard performer：真实算法 + director 桩 → 写 visual.shots + 回填 TTS scene group
 # --------------------------------------------------------------------------- #
 def test_run_storyboard_step_fills_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(perf, "structure_json_with_model_fallback", _fake_storyboard_fallback)
@@ -151,15 +163,17 @@ def test_run_storyboard_step_fills_scenes(tmp_path: Path, monkeypatch: pytest.Mo
     (jd / "02_rw" / "episode.json").write_text(json.dumps(ep, ensure_ascii=False), encoding="utf-8")
 
     out = perf.run_storyboard_step(_noop, job_dir=str(jd))
-    assert out["scenes_count"] == 2
-    assert out["groups_count"] == 1          # s1/s2 同 group=g1 → 1 段（与 web 契约对齐）
+    assert out["shots_count"] == 3
+    assert out["assets_count"] == 3
+    assert out["groups_count"] == 2
     got = json.loads((jd / "02_rw" / "episode.json").read_text(encoding="utf-8"))
-    assert set(got["scenes"]) == {"s1", "s2"}
-    assert [b["scene"] for b in got["beats"]] == ["s1", "s1", "s2"]   # sceneMap 回填
+    assert got["scenes"] == {}
+    assert [s["shotId"] for s in got["visual"]["shots"]] == ["b001", "b002", "b003"]
+    assert [b["scene"] for b in got["beats"]] == ["g1", "g1", "g2"]
 
 
-# 缺逗号 + 缺 sceneMap → parse_director_output 抛 → 触发重试
-_BAD_DIRECTOR_JSON = '{"scenes": {"s1": {"prompt": "x" "group": "g1"}}}'
+# 缺逗号 + 缺 visual.shots → parse_director_output 抛 → 触发重试
+_BAD_DIRECTOR_JSON = '{"visual": {"shots": [{"beatIndex": 1 "shotId": "b001"}]}}'
 
 
 def test_run_storyboard_step_retries_bad_json_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -184,11 +198,11 @@ def test_run_storyboard_step_retries_bad_json_then_succeeds(tmp_path: Path, monk
 
     out = perf.run_storyboard_step(_noop, job_dir=str(jd))
     assert calls["n"] == 2                       # 确实重试了一次
-    assert out["scenes_count"] == 2
+    assert out["shots_count"] == 3
 
 
 # --------------------------------------------------------------------------- #
-# A) 引擎驱动真实 015 拓扑（含 content_edit 闸门）→ 共享 episode 耦合 → 端到端出 mp4
+# A) 引擎驱动真实 final_preview 拓扑（含 content_edit 闸门）→ 共享 episode 耦合 → 端到端出 mp4
 # --------------------------------------------------------------------------- #
 def _asr_stub(on_progress, **p):
     on_progress("asr stub")
@@ -223,8 +237,8 @@ def _render_stub(on_progress, **p):
     return {"video_relpath": "06_render/output.mp4", "output_path": str(out / "output.mp4")}
 
 
-_RECIPE_015E2E = Recipe(
-    recipe_id="rt015", name="015 perf e2e", template_renderer="paper_card_talk_015",
+_RECIPE_FINAL_E2E = Recipe(
+    recipe_id="rt_final_preview", name="final_preview perf e2e", template_renderer="final_preview",
     steps=[
         RecipeStep(step_id="input", kind="input"),
         RecipeStep(step_id="asr", cmd="asr_stub", deps=["input"]),
@@ -240,7 +254,7 @@ _RECIPE_015E2E = Recipe(
 )
 
 
-def test_engine_drives_real_015_chain_to_mp4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_engine_drives_real_final_preview_chain_to_mp4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(perf, "structure_lines_json_with_fallback", _fake_lines_fallback)
     monkeypatch.setattr(perf, "structure_json_with_model_fallback", _fake_storyboard_fallback)
     registry = {
@@ -250,13 +264,13 @@ def test_engine_drives_real_015_chain_to_mp4(tmp_path: Path, monkeypatch: pytest
     }
     job_dir = tmp_path / "video-jobs" / "j1"
     store = InstanceStore(tmp_path / "instances")
-    runner = InstanceRunner(store, registry=registry, recipes={"rt015": _RECIPE_015E2E})
-    iid = runner.create_instance("rt015").meta.instance_id
+    runner = InstanceRunner(store, registry=registry, recipes={"rt_final_preview": _RECIPE_FINAL_E2E})
+    iid = runner.create_instance("rt_final_preview").meta.instance_id
 
     gated_observed: list[str] = []
 
     async def _drive():
-        for sid in _RECIPE_015E2E.topological_order():
+        for sid in _RECIPE_FINAL_E2E.topological_order():
             st = await runner.run_step(iid, sid, {"job_dir": str(job_dir)})
             if st.status == "awaiting_review":                 # content_edit 闸：人/driver 放行
                 gated_observed.append(sid)
@@ -269,14 +283,15 @@ def test_engine_drives_real_015_chain_to_mp4(tmp_path: Path, monkeypatch: pytest
 
     # 闸门是 load-bearing 断言：真正 fire 的 content_edit 步必须正好 == recipe 声明的那些
     # （删任一 intervention 就会让此断言变红，而非被 if 静默容忍）
-    expected_gates = {s.step_id for s in _RECIPE_015E2E.steps if s.intervention}
+    expected_gates = {s.step_id for s in _RECIPE_FINAL_E2E.steps if s.intervention}
     assert set(gated_observed) == expected_gates == {"rw", "lines", "storyboard", "preview"}
 
-    # 产物链：lines 写 beats → storyboard 回填 scenes → image → tts 标 audioFile → render 出 mp4
+    # 产物链：lines 写 beats → storyboard 写 visual.shots + 回填 TTS group → image → tts → render 出 mp4
     ep = json.loads((job_dir / "02_rw" / "episode.json").read_text(encoding="utf-8"))
     assert len(ep["beats"]) == 3
-    assert all(b["scene"] for b in ep["beats"])        # storyboard 回填了 scene
-    assert set(ep["scenes"]) == {"s1", "s2"}
+    assert all(b["scene"] for b in ep["beats"])        # storyboard 回填了 TTS 粗分组
+    assert ep["scenes"] == {}
+    assert [s["shotId"] for s in ep["visual"]["shots"]] == ["b001", "b002", "b003"]
     assert all(b.get("audioFile") for b in ep["beats"])  # tts 之后共享 episode 仍流通
     assert (job_dir / "06_render" / "output.mp4").is_file()   # 端到端出 mp4
 
@@ -314,11 +329,15 @@ def test_run_tts_step_rebuilds_items(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_run_image_step_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     jd = tmp_path / "job"
     _seed_episode(jd, {
-        "beats": [{"scene": "ch1"}, {"scene": "s1"}, {"scene": "s2"}],
-        "scenes": {
-            "ch1": {"prompt": "章节卡"},                                  # ch* → 跳过出图
-            "s1": {"prompt": "场景一", "sketches": [{"prompt": "简笔画1"}]},
-            "s2": {"prompt": ""},                                         # 空 prompt → fail
+        "beats": [{"scene": "g1"}, {"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [
+                {"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一",
+                 "assets": [{"id": "a1", "prompt": "asset one"}]},
+                {"beatIndex": 2, "shotId": "b002", "group": "g1", "intent": "画面二",
+                 "assets": [{"id": "a1", "prompt": "asset two"}]},
+            ],
         },
         "image": {"size": "1536x1024", "quality": "auto", "sketchStylePrefix": "白底黑剪影"},
     })
@@ -333,25 +352,31 @@ def test_run_image_step_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(perf, "_gen_scene_image", _fake_gen)
     out = perf.run_image_step(_noop, job_dir=str(jd))
     assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 0)
-    assert out["sketch_ok"] == 1
-    assert "ch1" not in calls                       # 章节卡不出图
-    assert "background" in calls and "s1-sk1" in calls and "s1" not in calls
+    assert out["asset_ok"] == 2
+    assert "background" in calls and "b001-a1" in calls and "b002-a1" in calls
     assert (jd / "03_image" / "background.webp").is_file()
-    assert (jd / "03_image" / "s1-sk1.webp").is_file()
+    assert (jd / "03_image" / "b001-a1.webp").is_file()
 
 
 def test_run_image_step_idempotent_skip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     jd = tmp_path / "job"
     (jd / "03_image").mkdir(parents=True)
     (jd / "03_image" / "background.webp").write_bytes(b"existing")     # 预先存在 → 跳过、不重生
-    _seed_episode(jd, {"beats": [{"scene": "s1"}], "scenes": {"s1": {"prompt": "场景一"}}, "image": {"n": 1}})
+    _seed_episode(jd, {
+        "beats": [{"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [{"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一", "assets": []}],
+        },
+        "image": {"n": 1},
+    })
     monkeypatch.setattr(perf, "_gen_scene_image",
                         lambda **k: pytest.fail("不应重生已存在的背景图"))
     out = perf.run_image_step(_noop, job_dir=str(jd))
     assert (out["ok"], out["skipped"], out["failed"]) == (0, 1, 0)
 
 
-def test_run_render_step_invokes_render_015(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_run_render_step_invokes_render_final_preview(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     jd = tmp_path / "job"
     _seed_episode(jd, {})
     (jd / "04_tts").mkdir(parents=True)
@@ -404,16 +429,21 @@ def test_run_render_step_forwards_existing_picture_dir(tmp_path: Path, monkeypat
 def test_run_image_step_captures_generation_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     jd = tmp_path / "job"
     _seed_episode(jd, {
-        "beats": [{"scene": "s1"}, {"scene": "s2"}],
-        "scenes": {
-            "s1": {"prompt": "好场景"},
-            "s2": {"prompt": "坏场景", "sketches": [{"prompt": "坏素材"}]},
+        "beats": [{"scene": "g1"}, {"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [
+                {"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "好画面",
+                 "assets": [{"id": "a1", "prompt": "好素材"}]},
+                {"beatIndex": 2, "shotId": "b002", "group": "g1", "intent": "坏画面",
+                 "assets": [{"id": "a1", "prompt": "坏素材"}]},
+            ],
         },
         "image": {"retries": 0},
     })
 
     def _gen(*, scene_id, prompt, size, quality, target, job_id, n=1):
-        if scene_id == "s2-sk1":
+        if scene_id == "b002-a1":
             raise RuntimeError("gpt-image boom")
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         Path(target).write_bytes(b"webp")
@@ -421,16 +451,19 @@ def test_run_image_step_captures_generation_failure(tmp_path: Path, monkeypatch:
 
     monkeypatch.setattr(perf, "_gen_scene_image", _gen)
     out = perf.run_image_step(_noop, job_dir=str(jd))
-    assert (out["ok"], out["failed"], out["sketch_failed"]) == (1, 0, 1)
-    s2 = next(it for it in out["items"] if it["scene_id"] == "s2")
-    assert "图片生成失败" in s2["sketches"][0]["error"]
+    assert (out["ok"], out["failed"], out["asset_failed"]) == (1, 0, 1)
+    s2 = next(it for it in out["items"] if it["shot_id"] == "b002")
+    assert "图片生成失败" in s2["assets"][0]["error"]
 
 
 def test_run_image_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     jd = tmp_path / "job"
     _seed_episode(jd, {
-        "beats": [{"scene": "s1"}],
-        "scenes": {"s1": {"prompt": "唯一场景"}},
+        "beats": [{"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [{"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一", "assets": []}],
+        },
         "image": {"retries": 0},
     })
     monkeypatch.setattr(perf, "_gen_scene_image",

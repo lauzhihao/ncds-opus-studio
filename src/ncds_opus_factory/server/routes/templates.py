@@ -24,7 +24,7 @@ router = APIRouter()
 _FACTORY_TEMPLATES_ROOT = (
     Path(__file__).resolve().parents[2] / "templates"  # ncds_opus_factory/templates（009 等）
 )
-# paper_card_talk_015 已迁入 core（P1.3）；模板现分散两包，列表/解析需扫两个根
+# final_preview 已迁入 core（P1.3）；模板现分散两包，列表/解析需扫两个根
 from ncds_opus_core.templates import templates_root as _core_templates_root
 
 
@@ -73,14 +73,14 @@ def _template_fonts(template_id: str) -> list[dict[str, Any]]:
 
     字体清单是模板资源声明（驱动 @font-face 注入 + Inspector 字体下拉），由模板
     单点维护；starter / mock 产出 episode 时统一从这里取，避免出现"fonts:[]
-    但磁盘上明明有字体目录"的脱节。仅认得 paper_card_talk_015；其它模板返回空。
+    但磁盘上明明有字体目录"的脱节。仅认得 final_preview；其它模板返回空。
     """
-    if template_id != "paper_card_talk_015":
+    if template_id != "final_preview":
         return []
     d = _resolve_template_dir(template_id)
     if d is None:
         return []
-    tpl_ep = d / ".015-draft-assets" / "episode.json"
+    tpl_ep = d / ".final-preview-assets" / "episode.json"
     try:
         ep = json.loads(tpl_ep.read_text(encoding="utf-8"))
         fonts = ep.get("fonts")

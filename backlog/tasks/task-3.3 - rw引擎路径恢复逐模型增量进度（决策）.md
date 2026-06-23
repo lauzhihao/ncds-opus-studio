@@ -16,7 +16,7 @@ priority: medium
 ## Description
 
 修复前：rw 默认走 engine（当时 `pipeline_runner.py` 分发只排除 asr，rw 不排除）。engine `run_rw_step`
-（`pipeline_performers_015.py:316,397`）刻意删掉了 `_push_model_progress` / `push_outputs_patch(...,
+（`pipeline_performers_final.py:316,397`）刻意删掉了 `_push_model_progress` / `push_outputs_patch(...,
 "drafts")` 增量推送，on_status 给 no-op。
 
 **影响范围核实清楚**：产物**完全不变**——drafts 仍写 `02_rw/{model_id}/draft.md`，节点 done 时一次性
@@ -53,4 +53,4 @@ A5。
 - 2026-06-22：按默认建议将 rw 固定回 legacy 执行路径：默认 `NOF_ENGINE_NODES` 不再包含 `rw`，调度分发也把 `rw` 与 `asr` 一起列为 legacy-only，避免显式 `NOF_ENGINE_NODES=rw` 误绕过逐模型增量输出。
 - 2026-06-22：新增 strangler 回归测试，锁定 rw 即使被 engine flag 命中也走 `_execute_rw`；`PipelineRwRun` 继续负责 `_push_model_progress` 与增量 `outputs.drafts` patch，web 柳永抽屉可在单个模型完成后立即显示/选择。
 - 2026-06-22：同步更新 README / FRONTEND-API / PRODUCTION-ENGINE-DESIGN 中的当前运行时事实：默认 engine 节点为 `lines/storyboard/tts/image/render`，`asr` 与 `rw` 固定 legacy。
-- 验证：`pytest tests/server/test_engine_strangler.py tests/server/test_pipeline_runner.py tests/server/test_pipeline_performers_015.py -q` 50 passed；全量 `.venv/bin/python3 -m pytest -q` 610 passed；严格 warning 模式 `.venv/bin/python3 -m pytest -q -W default` 610 passed。
+- 验证：`pytest tests/server/test_engine_strangler.py tests/server/test_pipeline_runner.py tests/server/test_pipeline_performers_final.py -q` 50 passed；全量 `.venv/bin/python3 -m pytest -q` 610 passed；严格 warning 模式 `.venv/bin/python3 -m pytest -q -W default` 610 passed。

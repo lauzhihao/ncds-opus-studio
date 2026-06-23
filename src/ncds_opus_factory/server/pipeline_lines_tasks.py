@@ -162,10 +162,10 @@ def _build_lines_prompt(draft_md: str) -> tuple[str, str]:
     return system_prompt, user_prompt
 
 
-def _load_template_episode(pipeline_id: str = "paper_card_talk_015") -> dict[str, Any]:
+def _load_template_episode(pipeline_id: str = "final_preview") -> dict[str, Any]:
     """Read the template episode skeleton and keep render/audio/image config."""
     tpl = (
-        _template_dir("paper_card_talk_015")
-        / ".015-draft-assets" / "episode.json"
+        _template_dir("final_preview")
+        / ".final-preview-assets" / "episode.json"
     )
     return json.loads(tpl.read_text(encoding="utf-8"))

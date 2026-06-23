@@ -13,7 +13,7 @@
 - `NOF_ENGINE_NODES=""|"none"|"off"|"legacy"` 会让 web 画布全走旧 `_execute_*` 路径；逗号列表只让列出的非 `asr`/`rw` 节点走 engine。
 - Flutter app 决策视角当前仍走 `/tasks` → `TaskRunner` / `nof-worker`；尚未切到 `/instances`。
 - `/instances` 后端 driver API 与测试已存在，但不是 web/app 前端主路径。
-- `RECIPE_REGISTRY` 当前只注册 `paper_card_talk_015`；`figure_talk` 仍是未来 recipe / cold chain，不是当前主路径。
+- `RECIPE_REGISTRY` 当前只注册 `final_preview`；`figure_talk` 仍是未来 recipe / cold chain，不是当前主路径。
 
 ---
 
@@ -32,7 +32,7 @@
 |---|---|---|
 | D1 | 方向 | ✅ 放弃三包对等拆分；改 **core 能力 → 一个生产实例引擎 → 两视图 + app 外挂子系统** |
 | D2 | 发起 + 租户 | ✅ 用户发起（给链接/对标账号→卧龙派人）；**按用户隔离**（现无鉴权，schema 预留 `owner_id`，不挡死） |
-| D3 | 配方 | ✅ **目标多配方**：015 纸卡 / figure_talk 剪影各是一条 recipe；当前只注册 015，figure_talk 仍待 E3 入册 |
+| D3 | 配方 | ✅ **目标多配方**：final_preview / figure_talk 剪影各是一条 recipe；当前只注册 final_preview，figure_talk 仍待 E3 入册 |
 | D4 | 介入模型 | ✅ **每步 = agent 先出草稿 + 人可选介入**（质量闸门，尤其挡贵步骤；人反馈回喂卧龙自学习）。web 介入=改内容，app 介入=批决策 |
 | D5 | **范围** | ✅ **全范围**：两端合一 **+ 补完 agent→render 闭环 + retro 自学习**（这条链历史上设计过 CONVERGENCE 但从没建完，见 §9） |
 | D6 | **首步路径** | ✅ **C：web 整条 pipeline 一次迁上引擎**（最快见效，风险最高；护城河=web 旧画布可跑副本在 `main`，本 branch 不并 main 就毁不掉） |
@@ -44,7 +44,7 @@
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │ core (ncds_opus_core, 已抽出)  纯能力 + PRIMITIVE_REGISTRY(6)            │
-│   wst/tst/vid/tts/render/render_015 + gpt_image + 模板015 + 中性 common   │
+│   wst/tst/vid/tts/render/render_final_preview + gpt_image + 模板015 + 中性 common   │
 └───────────────────────────────────────────────────────────────────────┘
                      ▲ 单向依赖                  ▲ 单向依赖
 ┌──────────────────────────────────┐  ┌────────────────────────────────────┐
@@ -99,7 +99,7 @@ class StepState(BaseModel):
 class InstanceMeta(BaseModel):
     instance_id: str              # i_<ms>_<hex8>；兼容读旧 task_id/job_id
     owner_id: str | None = None   # 多租户预留（演示=None / "demo"，生产由鉴权中间件填）
-    recipe_id: str                # "paper_card_talk_015" / "figure_talk" ...
+    recipe_id: str                # "final_preview" / "figure_talk" ...
     recipe_version: str = "latest"
     status: InstanceStatus        # pending/running/paused/completed/failed/cancelled
     title: str = ""
@@ -125,7 +125,7 @@ Recipe（DAG 骨架，纯数据 + 字符串 key）：
 class RecipeStep(BaseModel):
     step_id: str
     label: str
-    cmd: str | None = None        # 命中 build_full_registry() 的 key（render_015/tts/...）
+    cmd: str | None = None        # 命中 build_full_registry() 的 key（render_final_preview/tts/...）
     agent: str | None = None      # agent 步（liuyong/wudaozi/guiguzi/boya）；与 cmd 二选一或同源
     deps: list[str] = []          # 前置步骤（拓扑约束，如 tts 依赖 storyboard 定稿）
     expensive: bool = False       # 标"贵步骤"，driver 据此决定是否在它前面强制闸门
@@ -136,9 +136,9 @@ class Recipe(BaseModel):
     recipe_id: str
     name: str; description: str
     steps: list[RecipeStep]       # 有序
-    template_renderer: str        # "paper_card_talk_015"/"figure_talk"/"stickman"
+    template_renderer: str        # "final_preview"/"figure_talk"/"stickman"
 
-RECIPE_REGISTRY: dict[str, Recipe]   # 当前只有 015；figure_talk 等后续入册
+RECIPE_REGISTRY: dict[str, Recipe]   # 当前只有 final_preview；figure_talk 等后续入册
 ```
 
 ---
@@ -147,10 +147,10 @@ RECIPE_REGISTRY: dict[str, Recipe]   # 当前只有 015；figure_talk 等后续�
 
 | 组件 | 裁定 | 说明 |
 |---|---|---|
-| web `_execute_{asr,rw,lines,storyboard,tts,image,render}` | **进引擎** | 全是生产步骤；render 早已共用 `render_015.run`。改成统一 step + 经 registry 派发 |
+| web `_execute_{asr,rw,lines,storyboard,tts,image,render}` | **进引擎** | 全是生产步骤；render 早已共用 `render_final_preview.run`。改成统一 step + 经 registry 派发 |
 | **沈括(采集)** / 鬼谷子(选题) / 柳永/吴道子/伯牙 | **进引擎（作为步骤执行者，全在卧龙麾下）** | 卧龙指挥的五个 agent 就是生产链的步骤 performer；recipe 按 id 晚绑定它们。**沈括 = 统一"外部原料采购"边界**（对标账号→爬取采集 / 作品链接→单链 asr，都走它，对下游屏蔽来源），早期步骤、产物可复用（缓存/共享池，见 §8） |
 | `TaskStore` / `TaskRunner` / `EventBus`(SSE) | **进引擎** | 是统一 store/调度/事件的底层，扩展而非替换 |
-| `PipelineRunner` + `JobState` + `video-jobs/` | **退役** | 015 DAG 是一条 recipe 的特例；被 InstanceStore 的 recipe/steps 包容 |
+| `PipelineRunner` + `JobState` + `video-jobs/` | **退役** | final_preview DAG 是一条 recipe 的特例；被 InstanceStore 的 recipe/steps 包容 |
 | **卧龙** | **保留为可插拔 driver** | 掌编排机械（派沈括→鬼谷子→柳永→…→render、状态推进/事件消费），**决策权归人**（走 review 路由→rounds_gate）；与 web 手动 driver 并列 |
 | **自治神经层**：`subscriptions`(传感器) / `planner`(排产) / `retro_trigger`+`wolong_retro`(学习) / `rounds_gate`(接线) / `label_store`(案卷) | **app 子系统（在卧龙之外）** | **触发/支撑**卧龙、但不是他指挥的 agent：订阅决定"何时该让沈括刷新对标号"、排产决定"何时开工/补选题库"、学习闭环喂 rubric、接线/案卷做事件与训练数据。独立协程 + 独立配额桶 |
 | 介入点机制（content_edit / decision_only） | **引擎提供原语，driver 用** | 引擎给状态机+草稿+审看字段；闸门**逻辑**在 driver（卧龙 round / web 手动） |
@@ -185,7 +185,7 @@ idle → queued → running → draft_ready
 - **闸门不止柳永——每个 agent 产出都能挂闸**（D4 本意）：柳永(成稿)、吴道子(分镜)、伯牙(声音)的产出都需可被人验收/打回，
   尤其作为"挡在烧钱步骤前"的**强制闸**——生图（吴道子下游）、tts（伯牙）、render 是贵步骤，闸门插在它们**之前**，
   把低质内容挡在烧钱之前。哪些步带 `intervention` / 哪些 `expensive` 由 **recipe 声明**，闸门**逻辑**由 driver 执行
-  （不同 recipe/round 可不同）。典型 015 链的闸门点：柳永后、吴道子后(生图前)、伯牙后(tts 后)、render 后。
+  （不同 recipe/round 可不同）。典型 final_preview 链的闸门点：柳永后、吴道子后(生图前)、伯牙后(tts 后)、render 后。
 - **反馈回喂**：每个闸门的 `review` + 定稿差异 → `label_store` → `retro` 学 rubric → 注入下一轮 `liuyong` brief / `prescreen`（§9）。
 
 ---
@@ -193,8 +193,8 @@ idle → queued → running → draft_ready
 ## 5. 多配方
 
 - Recipe = 有序 `RecipeStep`，每步绑 `cmd`/`agent`（字符串）、`expensive`、`intervention`、`material_source`。
-- 当前已注册 **015 纸卡**（`paper_card_talk_015`）；**figure_talk 剪影**是目标 recipe，仍在 E3 / cold chain 范围。
-- **素材来源**是步骤内策略：`material_source="generated"`（gpt-image 生图，015）vs `"collected"`（沈括切素材，figure_talk）——不冲突、按 recipe/step 配。
+- 当前已注册 **final_preview**；**figure_talk 剪影**是目标 recipe，仍在 E3 / cold chain 范围。
+- **素材来源**是步骤内策略：`material_source="generated"`（gpt-image 生图，final_preview）vs `"collected"`（沈括切素材，figure_talk）——不冲突、按 recipe/step 配。
 - 新风格 = 新 recipe + 新 `template_renderer`，不动引擎。
 
 ---
@@ -256,7 +256,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 | 用户给的输入 | 沈括的模式 | 之后 |
 |---|---|---|
 | **对标账号** | 爬取采集（下载+转写+截帧抠图，落共享池） | →鬼谷子(选题)→柳永→… |
-| **作品链接** | 单链 asr（只转写这一条；即旧 web 015 的 asr 节点收进沈括） | →柳永(改写/编剧)→… |
+| **作品链接** | 单链 asr（只转写这一条；即 web final_preview 的 asr 节点收进沈括） | →柳永(改写/编剧)→… |
 | **选题/一句话想法** | 无（没有外部原料可采，跳过沈括） | 直接 →柳永(或先鬼谷子提炼) |
 
 > 即"链接→asr"这个裸节点不再独立存在，它是**沈括的单链模式**；底层仍调 core 的 asr 能力，但归属与对外契约
@@ -271,9 +271,9 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 ## 9. 补完 agent→render 闭环 + retro 学习（D5 范围）
 
 **现实（研究实测）**：app 的卧龙 round 今天走到**成稿就停**；"成稿→成片"渲染段（旧 `CONVERGENCE` 设计的
-`job_driver.py`）**从没建**；`wolong.mode="retro"` 是 `NotImplementedError` 桩。真正能到 mp4 的只有 web 015 链。
+`job_driver.py`）**从没建**；`wolong.mode="retro"` 是 `NotImplementedError` 桩。真正能到 mp4 的只有 web final_preview 链。
 
-**本设计如何补完**（这是统一引擎的副产品红利，不再需要单独的 job_driver 把卧龙焊到 015 pipeline 上）：
+**本设计如何补完**（这是统一引擎的副产品红利，不再需要单独的 job_driver 把卧龙焊到 final_preview pipeline 上）：
 
 1. **agent→render**：卧龙 driver 的 round line 沿全链（闸门见 §4，挡在贵步骤前）
    **沈括(采集)→鬼谷子(选题)→柳永(成稿)→〔闸〕→吴道子(分镜)→〔闸·生图前〕→伯牙(声音)→〔闸〕→render→〔闸〕**
@@ -291,7 +291,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 
 | 期 | 做什么 | 退出标准（检查点） |
 |---|---|---|
-| **E0 引擎骨架** | 建 `server/engine/`：`types.py`(Instance/Step/Recipe) + `instance_store.py`(扩展 TaskStore 布局) + `instance_runner.py`(经 `build_full_registry()` 派发单步 + 状态机 + 分层 SSE)；`recipes.py` 把 015 表达成一条 Recipe。**先不接任何视图** | 引擎可独立跑通"建实例→跑 render 步（已共享）→出事件→落 store"；新单测覆盖状态机 + 晚绑定派发；pytest 绿 |
+| **E0 引擎骨架** | 建 `server/engine/`：`types.py`(Instance/Step/Recipe) + `instance_store.py`(扩展 TaskStore 布局) + `instance_runner.py`(经 `build_full_registry()` 派发单步 + 状态机 + 分层 SSE)；`recipes.py` 把 final_preview 表达成一条 Recipe。**先不接任何视图** | 引擎可独立跑通"建实例→跑 render 步（已共享）→出事件→落 store"；新单测覆盖状态机 + 晚绑定派发；pytest 绿 |
 | **E1 web 整条迁上引擎（C 的主刀）** | 目标是把 `PipelineRunner._execute_*` 七步逐个改成"引擎步骤执行者"（asr/rw/lines/storyboard/tts/image 复用其现有实现，但纳入 step 生命周期 + 经 registry），再让 `routes/{jobs,pipelines,preview}` 重指引擎（`/instances` + 兼容 `/jobs`），最后 `web/` 前端走新 instance API。当前只完成 facade strangler：web UI 仍走 `/jobs`，多数节点经 facade 进 engine，`asr` 仍 legacy。 | **目标检查点**：web 画布端到端冒烟：贴链接→逐节点→出 mp4，与旧行为对齐；`content_edit`（改 beats/prompt）通；旧 `job_id` 兼容读通；pytest 绿；**`PipelineRunner` 退役** |
 | **E2 app driver 上引擎** | 卧龙 driver 调 `InstanceRunner.run_step`，沿 沈括→鬼谷子→柳永 链派发；`rounds_gate` 接 review→decision；`/tasks` 兼容读映射到 instance；app 决策视角订 `level=meta,step` | 卧龙 round 跑通到**成稿+验收**（含采集/选题入口），task 兼容读通；自治神经层(订阅/排产/学习) 不动照常；pytest 绿 |
 | **E3 补完 agent→render** | round line 续到 吴道子→伯牙→render（同引擎后续步骤）；figure_talk 作第二条 recipe 入 `RECIPE_REGISTRY`；定采集产物存法（实例内 vs 共享池） | 卧龙 driver **端到端出 mp4**（采集→选题→成稿→分镜→声音→成片）；多 recipe 可选；贵步骤闸门生效 |
@@ -311,7 +311,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 - ✅ `run_step(..., config=...)`：config 作**溯源**落 `StepState.config`（步骤真正启动时）。⚠️ **不** splat 进 performer——真实命令闭合签名（rw 的 model 在 `payload` 里、非顶层 kwarg），driver 负责把选择折进 `step_inputs`（与 TaskRunner "调用方建好 params" 契约一致）。
 
 **E1-a 评审加固**（2 轮对抗审查 + 逐条对抗复核）——抓出并修掉 6 条 E0 遗留/本期引入的真缺陷：
-1. **闸门判据从 `performer` 改回 `intervention`**（blocker）：原 `_run_step` 的 `performer is None→done` 早返回在 intervention 判定之前，致 015 的 `lines/storyboard/preview`（content_edit 但无 cmd）被静默直通、强制闸门失效。现无 performer 但有 intervention 的步也停 `awaiting_review`，以上游 `step_inputs` 作初始草稿。
+1. **闸门判据从 `performer` 改回 `intervention`**（blocker）：原 `_run_step` 的 `performer is None→done` 早返回在 intervention 判定之前，致 final_preview 的 content_edit 步被静默直通、强制闸门失效。现无 performer 但有 intervention 的步也停 `awaiting_review`，以上游 `step_inputs` 作初始草稿。
 2. **守门提到副作用之前**（major×2）：抽 `_start_running` 先校验 `idle/queued→running` 合法、再翻 meta running / 落 config——非法重跑（对终态步）是干净的 no-op 失败，不再把已结算实例 meta 永久翻 running、也不脏写 config。
 3. **config 不再 splat 进 performer**（major）：见上 `run_step` 条。
 4. **直通步真正推进时才翻 meta running + 记 config**（minor×2）：消除"首步后 meta 滞留 pending"与"passthrough 漏记 config"两处不一致。
@@ -325,23 +325,23 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 **E1-b1 范围取舍（b2 补）**：`/run` 同步 await（贵步骤后台派发待 b2）；SSE 只推 meta/step（detail/progress 走 jsonl、tail-merge 待 b2）。
 
 **E1-b2 slice-1 后端验证已落地**（纯增量、hermetic；当期全量测试通过）：
-- `server/engine/pipeline_performers_015.py`：把 web `_execute_lines`/`_execute_storyboard` 的 opus 结构化算法**原样复用**成引擎 step-performer（经 `_opus_structure` 间接层可注入桩；保留 `video-jobs/` + 共享 `02_rw/episode.json` 耦合，去掉 PipelineRunner 的 self.* 状态管理交引擎接管）。
-- 集成测试 `test_pipeline_performers_015.py`：引擎按真实 015 拓扑（rw/lines/storyboard/preview 四道 `content_edit` 闸门经 `approve_step` 放行）驱动 lines/storyboard 真实 performer + asr/rw/tts/image/render 桩，经共享 episode.json **端到端出 mp4**——证明引擎能编排真实 015 链 + 文件系统耦合 + 闸门，不依赖真 opus/node/ffmpeg/015 样例素材。
+- `server/engine/pipeline_performers_final.py`：把 web `_execute_lines`/`_execute_storyboard` 的 opus 结构化算法**原样复用**成引擎 step-performer（经 `_opus_structure` 间接层可注入桩；保留 `video-jobs/` + 共享 `02_rw/episode.json` 耦合，去掉 PipelineRunner 的 self.* 状态管理交引擎接管）。
+- 集成测试 `test_pipeline_performers_final.py`：引擎按真实 final_preview 拓扑（rw/lines/storyboard/preview 四道 `content_edit` 闸门经 `approve_step` 放行）驱动 lines/storyboard 真实 performer + asr/rw/tts/image/render 桩，经共享 episode.json **端到端出 mp4**——证明引擎能编排真实 final_preview 链 + 文件系统耦合 + 闸门，不依赖真 opus/node/ffmpeg/模板样例素材。
 - 评审加固：补回 storyboard `groups_count`（与 web `StoryboardOutputs` 契约对齐）；e2e 闸门断言改 load-bearing（断真正 fire 的 content_edit 步 == recipe 声明集，删任一 intervention 即变红）。
 
 **E1-b2 全部 7 步 performer 已真实包装**（lines/storyboard/tts/image/render/asr/rw；当期全量测试通过）：
-- `run_*_step`（`pipeline_performers_015.py`）：忠实复刻 `_execute_*` 编排，复用模块级 helper（shenkuo.collect_one / tts_gen / generate_scene_image / rebuild_tts_items / render_015.run / invoke_rw_candidate / MODEL_CANDIDATES），外部副作用经 seam（`_collect_one`/`_run_tts_gen`/`_gen_scene_image`/`_render_run`/`_invoke_rw`）注桩。job_dir/urls/asr_items/profile 经 step_inputs 传入、保留 video-jobs 布局；pipeline_runner 未动（编排暂双份，/jobs 退役时去重）。
+- `run_*_step`（`pipeline_performers_final.py`）：忠实复刻 `_execute_*` 编排，复用模块级 helper（shenkuo.collect_one / tts_gen / generate_scene_image / rebuild_tts_items / render_final_preview.run / invoke_rw_candidate / MODEL_CANDIDATES），外部副作用经 seam（`_collect_one`/`_run_tts_gen`/`_gen_scene_image`/`_render_run`/`_invoke_rw`）注桩。job_dir/urls/asr_items/profile 经 step_inputs 传入、保留 video-jobs 布局；pipeline_runner 未动（编排暂双份，/jobs 退役时去重）。
 - **模型差异**：web 的 mid-run 增量进度（`_push_outputs_patch` item_progress / model_progress / 增量 drafts）暂不复刻——引擎当前只在步末设 outputs，信息经 on_progress 文本透出；引擎加增量 outputs 后再补。asr 已改为与 legacy fast collect 同源的 `collect_one` 口径；rw 4 模型 async 并发（同步 performer 内 `asyncio.run` 跑原 `gather`）忠实保留。
 - 单测：每步覆盖正常 + 失败/边界（image 异常/全失败、render picture_dir 转发、asr collect_one 快采/元数据兜底/单条失败/全失败/取消透传、rw 部分成功/全失败/profile/code-fence）。经 3 轮 fidelity+coverage 对抗审查加固。
 
-**E1-b2 全局 015 recipe 绑定已落地**：`recipes.py` 的 PAPER_CARD_TALK_015 各执行步 cmd 已从 bare command
-重绑到 `pct015_*` orchestration performer；`server/state.py` 的 `INSTANCE_RUNNER` registry =
-`build_full_registry()`(含 mock 门) ∪ `PERFORMERS_015`。`preview` 仍是无 performer 的 content_edit 人工闸。
-带生产 wiring 守护测试（015 每个执行步的 performer 必须在生产 registry 解析）。
+**E1-b2 全局 final_preview recipe 绑定已落地**：`recipes.py` 的 FINAL_PREVIEW 各执行步 cmd 已从 bare command
+重绑到 `final_*` orchestration performer；`server/state.py` 的 `INSTANCE_RUNNER` registry =
+`build_full_registry()`(含 mock 门) ∪ `PERFORMERS_FINAL`。`preview` 仍是无 performer 的 content_edit 人工闸。
+带生产 wiring 守护测试（final_preview 每个执行步的 performer 必须在生产 registry 解析）。
 
 **E1-b2 #3 绞杀者（strangler）已落地，但不是前端直连 `/instances`**：`PipelineRunner` 经
 `attach_engine(INSTANCE_RUNNER)` 注入引擎；`NOF_ENGINE_NODES` 控制哪些节点从 `_execute_*` 改走
-`InstanceRunner.run_step`（经合并 registry 派发到 `pct015_*` performer + 引擎状态机）。
+`InstanceRunner.run_step`（经合并 registry 派发到 `final_*` performer + 引擎状态机）。
 当前默认行为是：未设置 `NOF_ENGINE_NODES` 时初始化为 engine-safe 节点集合，`lines/storyboard/tts/image/render`
 经 facade 走 engine；`asr` 与 `rw` 因执行处分支固定走 legacy。设置
 `NOF_ENGINE_NODES=""|"none"|"off"|"legacy"` 可全量回旧路径；设置逗号列表时只让列出的非 `asr`/`rw` 节点走 engine。
@@ -350,7 +350,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 facade 自动定稿；performer 的 on_progress 经 `run_step(on_progress=)` 回桥到 facade SSE（避免
 storyboard/image/render running 态进度冻结）。
 
-**Worker 拆分(S3)已落地**：离线 TaskRunner 任务执行从 8810 拆到独立 `nof-worker` 进程，Redis 承担队列、配额、inflight 与任务执行状态协调；server 只生产，worker 通过 Redis claim 消费并回写 completed/failed/cancelled。重启 8810 不打断在跑任务，Redis 不重启时任务调度状态连续（详见 `backlog/docs/S3-redis-worker-design.md`）。画布 run_node / 015 引擎 run_step 已通过 `pipeline_node` 任务迁到 worker 路径。
+**Worker 拆分(S3)已落地**：离线 TaskRunner 任务执行从 8810 拆到独立 `nof-worker` 进程，Redis 承担队列、配额、inflight 与任务执行状态协调；server 只生产，worker 通过 Redis claim 消费并回写 completed/failed/cancelled。重启 8810 不打断在跑任务，Redis 不重启时任务调度状态连续（详见 `backlog/docs/S3-redis-worker-design.md`）。画布 run_node / final_preview 引擎 run_step 已通过 `pipeline_node` 任务迁到 worker 路径。
 
 **E1-b2 仍待补**（路径 C 高风险段，下一步）：
 - asr 若要改道引擎，需先给引擎补**步内增量 outputs**（asr `item_progress` / collected 渐进推送）并覆盖 done 后后台 enrich，否则会丢实时采集进度与补音轨/抠图行为。
@@ -382,7 +382,7 @@ storyboard/image/render running 态进度冻结）。
 | MAJOR | rw 4 模型可用性探测（`shutil.which`/env）在不同进程/环境下静默失败 | 探测结果入 `step.config` + 共享配置，不藏在节点里 |
 | MAJOR | preview 的 `regen_*` 在 DAG 之外原地改、不级联失效 | 显式建模为"微步骤"（step 内重生），与整步重跑区分；写 `draft` 触发下游 `stale` 标记 |
 | MAJOR | storyboard→tts 顺序依赖（tts 要 scene_id） | recipe `deps` 硬约束 + 引擎拓扑校验，driver 不能乱序派 |
-| MAJOR | render_015 是 Python 调用，并发下线程安全 | 引擎里 `to_thread`/子进程隔离跑贵步骤 |
+| MAJOR | render_final_preview 是 Python 调用，并发下线程安全 | 引擎里 `to_thread`/子进程隔离跑贵步骤 |
 | MAJOR | 多租户后期加 `owner_id` 易漏校验→串户 | 中间件统一校验 + `list/get` 强制 `owner_filter`；演示期 `None` 直通 |
 | MINOR | recipe 版本 vs 旧实例 replay | `recipe_version` 钉在实例上，升级 recipe 不影响在跑实例 |
 

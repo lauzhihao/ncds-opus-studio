@@ -1,6 +1,6 @@
 """PipelineRunner 的 agent 后台任务 mixin。
 
-这些任务与 015 节点执行体正交：ASR done 后的沈括 enrich、进画布后的沈括刷新、
+这些任务与 final_preview 节点执行体正交：ASR done 后的沈括 enrich、进画布后的沈括刷新、
 以及虚拟 agent 鬼谷子的分析/出题后台任务。它们仍通过 PipelineRunner 的 store/event
 helper 读写状态；本文件只把方法从 god-object 中机械搬出，不改变运行时契约。
 """

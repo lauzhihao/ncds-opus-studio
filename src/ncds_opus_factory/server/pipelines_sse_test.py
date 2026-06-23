@@ -39,7 +39,7 @@ def _seed_job(runner: PipelineRunner, job_id: str) -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     state = {
         "job_id": job_id,
-        "pipeline_id": "paper_card_talk_015",
+        "pipeline_id": "final_preview",
         "title": "test",
         "created_at": time.time(),
         "updated_at": time.time(),

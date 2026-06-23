@@ -1,6 +1,6 @@
-// 画布页（agent 视角重构）：6 个有序 agent 节点 + 卧龙总览条 + agent 抽屉 + SSE 实时状态。
+// 画布页（agent 视角重构）：6 个有序 agent 节点 + agent 抽屉 + SSE 实时状态。
 //
-// 底层仍是一条 015 recipe 的 job（input→asr→rw→lines→storyboard→image→tts→preview→
+// 底层仍是一条 final_preview recipe 的 job（input→asr→rw→lines→storyboard→image→tts→preview→
 // render→download）；这里把这些 engine 节点按 agent 分组重新呈现为 6 个有序 agent。
 // agent 节点是纯前端分组，操作仍打到底层 engine 节点（见 components/AgentDrawer）。
 
@@ -18,11 +18,11 @@ import ReactFlow, {
   type NodeMouseHandler,
   type ReactFlowInstance,
 } from 'reactflow';
-import { ArrowLeft, Crown, Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 
 import { api } from '../api/client';
 import { useToast } from '../components/Toast';
-import type { JobState, NodeStatus, PipelineDef } from '../api/types';
+import type { PipelineDef } from '../api/types';
 import { useJobStream } from '../hooks/useJobStream';
 import { AgentCard, type AgentCardData } from '../components/AgentCard';
 import { AgentDrawer } from '../components/AgentDrawer';
@@ -211,8 +211,6 @@ export function JobCanvasPage() {
     [jobId],
   );
 
-  const overview = useMemo(() => computeOverview(job, angleConfirmed), [job, angleConfirmed]);
-
   if (!jobId) {
     return (
       <div className="page" style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', gap: 'var(--s-3)' }}>
@@ -240,28 +238,6 @@ export function JobCanvasPage() {
         </span>
         <AppsMenu />
         <ThemeSwitcher />
-      </div>
-
-      {/* 卧龙总览条：统领全局（聚合进度 + 当前阶段 + 进入按钮） */}
-      <div className={`wolong-bar status-${overview.status}`}>
-        <span className="wolong-id">
-          <Crown size={15} strokeWidth={1.7} /> 卧龙
-          <span className="dim-mono">统领全局</span>
-        </span>
-        <div className="wolong-track">
-          {AGENTS.map((a) => {
-            const st = job ? agentStatus(a, job.nodes, { angleConfirmed }) : 'idle';
-            return <span key={a.id} className={`wolong-pip status-${st}`} title={`${a.name} · ${a.role}`} />;
-          })}
-        </div>
-        <span className="wolong-stat dim-mono">
-          {overview.done}/{AGENTS.length} 阶段 · {overview.label}
-        </span>
-        {overview.current && (
-          <button className="btn primary sm" onClick={() => setOpenAgent(overview.current!)}>
-            进入 {AGENTS[agentIndex(overview.current)].name}
-          </button>
-        )}
       </div>
 
       <div className="canvas-frame">
@@ -319,28 +295,6 @@ export function JobCanvasPage() {
       )}
     </div>
   );
-}
-
-// 卧龙总览聚合：完成阶段数 / 整体状态 / 当前应进入的 agent。
-function computeOverview(job: JobState | null, angleConfirmed: boolean): {
-  done: number;
-  status: NodeStatus;
-  label: string;
-  current: AgentId | null;
-} {
-  if (!job) return { done: 0, status: 'idle', label: '连接中', current: null };
-  const sts = AGENTS.map((a) => agentStatus(a, job.nodes, { angleConfirmed }));
-  const done = sts.filter((s) => s === 'done').length;
-  let status: NodeStatus = 'idle';
-  if (sts.some((s) => s === 'failed')) status = 'failed';
-  else if (sts.some((s) => s === 'running' || s === 'queued')) status = 'running';
-  else if (done === AGENTS.length) status = 'done';
-  const label =
-    status === 'failed' ? '有阶段失败' : status === 'done' ? '已完成' : status === 'running' ? '进行中' : '待开始';
-  // 当前阶段：首个未完成的 agent（失败的也算"需处理"）。
-  const idx = sts.findIndex((s) => s !== 'done');
-  const current = idx >= 0 ? AGENTS[idx].id : null;
-  return { done, status, label, current };
 }
 
 function EditableMark({ jobId, value }: { jobId: string; value: string }) {

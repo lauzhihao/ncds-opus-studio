@@ -91,7 +91,7 @@ export function AccountWorksPage() {
     setCreating(post.aweme_id);
     try {
       const state = await api.createJob({
-        pipeline_id: 'paper_card_talk_015',
+        pipeline_id: 'final_preview',
         title: post.desc ? post.desc.slice(0, 60) : `衍生作品 ${post.aweme_id.slice(-6)}`,
         inputs: {},
       });

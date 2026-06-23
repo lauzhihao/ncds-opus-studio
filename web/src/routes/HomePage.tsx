@@ -748,7 +748,7 @@ function AddTempTaskModal({
       const domain = ready[0].domain;
       const firstTitle = ready[0].work!.title?.trim().slice(0, 60);
       const state = await api.createJob({
-        pipeline_id: 'paper_card_talk_015',
+        pipeline_id: 'final_preview',
         title:
           ready.length === 1 && firstTitle
             ? firstTitle

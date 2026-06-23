@@ -12,13 +12,13 @@
 ## 0. 目标与红线
 
 **目标**：卧龙 round 在**闸1（脚本验收）通过后**，复用 015 画布引擎（`pipeline_runner` 的
-`lines/storyboard/tts/image` 出素材 + `render_015` 出片）自动产出成片，并补**闸2（终验）**，
+`lines/storyboard/tts/image` 出素材 + `render_final_preview` 出片）自动产出成片，并补**闸2（终验）**，
 从而把此前游离在外的画布世界**纳入卧龙的质检 + 离线学习闭环**。
 
 **不做**：不造新的拟人"出片 agent"；不走 009（吴道子/伯牙/render）那套；本期不物理删 009。
 
 **红线（违反即收敛失败）**：
-1. `render_015` 终验 task 的 `source` **必须是字面量 `"wolong"`**，且**绝不**进
+1. `render_final_preview` 终验 task 的 `source` **必须是字面量 `"wolong"`**，且**绝不**进
    `_UNGATED_ROUND_CMDS`、绝不设 `cron/retro/gate`——否则成片被自动归档，闸2 形同虚设（§2.3）。
 2. 出片驱动**绝不**跑在 wolong worker 上（并发硬钳 1）——否则全系统 round 续跑饿死（§2.2）。
 3. 闸1 过审的台词**必须原样进片**——否则闸2 审的不是闸1 审的东西，收敛前提不成立（§2.4）。
@@ -51,7 +51,7 @@
 
 卧龙 round 是主、015 pipeline job 是从。round 不把出片交给画布的手动流，而是**程序化驱动**
 一个 015 job 当"素材厂"用：注入脚本 → 顺序跑 `lines→storyboard→tts→image` 出齐
-`episode.json + scene-*.mp3 + 配图` → 再由 `render_015` task 出片。
+`episode.json + scene-*.mp3 + 配图` → 再由 `render_final_preview` task 出片。
 
 015 引擎关键事实（查实，[pipeline_runner.py](../src/ncds_opus_factory/server/pipeline_runner.py)）：
 - `create_job` 只建状态不启动（:248）；唯一执行入口是逐节点 `run_node`（:384），**无整 job run**。
@@ -80,21 +80,21 @@ intent（`task_id=None`）并返回；后续节点推进由 JobDriver 协程接�
 node.status != "done" 才 POST run_node**；已 done 一律跳过、绝不重 POST。否则崩溃重入/对账重投
 会把已 done 节点重跑，BFS 连带 reset 下游、清掉进度。
 
-### 2.3 `render_015` 作为 `source="wolong"` 的 task = 闸2 外壳〔BLOCKER 修复〕
+### 2.3 `render_final_preview` 作为 `source="wolong"` 的 task = 闸2 外壳〔BLOCKER 修复〕
 
-**问题**：闸2 全靠 `render_015` 终验 task 的 `decision` 回流成 round 事件，但 `source` 取值有
+**问题**：闸2 全靠 `render_final_preview` 终验 task 的 `decision` 回流成 round 事件，但 `source` 取值有
 致命二义。`TaskSource` 是闭集 `Literal[user|wolong|gate|cron|retro]`
 （[schemas.py:25](../src/ncds_opus_factory/server/schemas.py:25)），计划原文"续跑段干活同源"字面=`gate`。
 
 **证伪两个错误取值，钉死唯一正确值**：
 - `source="gate"` → `handle_decision` 首行 `if ... source=="gate" or cmd=="wolong": return`
   （[rounds_gate.py:90](../src/ncds_opus_factory/server/rounds_gate.py:90)）**直接吞掉 decision** → 闸2 永远收不到终验。
-- `source="wolong"` → ①`_maybe_auto_archive` 因 `cmd=render_015≠wolong` 且非 cron/retro 而
+- `source="wolong"` → ①`_maybe_auto_archive` 因 `cmd=render_final_preview≠wolong` 且非 cron/retro 而
   `return` 不归档（[task_runner.py:406](../src/ncds_opus_factory/server/task_runner.py:406)）→ 成片正常进待验收桶 ✓；
   ②`handle_decision` 因 `source≠gate` 且 `cmd≠wolong` 而放行投递 decision 事件 ✓；
-  ③`POST /tasks` 的递归闸（source=wolong 不许 cmd=wolong）因 `cmd=render_015` 不被拦 ✓。
+  ③`POST /tasks` 的递归闸（source=wolong 不许 cmd=wolong）因 `cmd=render_final_preview` 不被拦 ✓。
 
-**决策**：`render_015` 终验 task **派发时 `source` 写死字面量 `"wolong"`**，并加单测断言
+**决策**：`render_final_preview` 终验 task **派发时 `source` 写死字面量 `"wolong"`**，并加单测断言
 `source=="wolong"` 且 `!= "gate"`。这是同时满足"不被自动归档"与"decision 可回流"的唯一取值。
 
 ### 2.4 脚本进链：seed_done + draft.md 注入 + **lines 只切句不改写**〔BLOCKER 修复〕
@@ -102,7 +102,7 @@ node.status != "done" 才 POST run_node**；已 done 一律跳过、绝不重 PO
 **柳永产物**：纯口播正文 `.md`（无分句/beats/时间戳），`douyin_cog` profile 直出
 （[liuyong.py:144-190](../src/ncds_opus_factory/commands/liuyong.py:144)），与 015 的 `02_rw/{model}/draft.md` 同形。
 
-**注入点**：`create_job("paper_card_talk_015", inputs={})` 建合法 job（不复用柳永 `OGV_*` 目录，
+**注入点**：`create_job("final_preview", inputs={})` 建合法 job（不复用柳永 `OGV_*` 目录，
 那里无 `pipeline_state.json`，`_load` 会 KeyError）→ 把 `draft['text']` 经 `PUT /jobs/{id}/files/02_rw/draft.md`
 写盘（与 `select_rw_model` 拷出的定稿同形，零格式转换）→ 新增
 **`PipelineRunner.seed_done(job_id, upto_node="rw")`** 把 `input/asr/rw` **三个节点全部置
@@ -139,13 +139,13 @@ tts  ── scene 整段合成 + 字级时间戳回写 ──▶ 04_tts/scene-<s
    ▼
 image ── 按 scenes[].prompt 出容器图 + 简笔画 ──▶ 03_image/<sid>.webp
    ▼  ＜机器自检 _precheck_episode＞
-render_015 task (source="wolong", round_id, intent_key="render:{slot}:0")
+render_final_preview task (source="wolong", round_id, intent_key="render:{slot}:0")
    │  output_path = video-jobs/{job}/06_render/output.mp4
    ▼
 待验收桶（闸2 终验）── 用户 decision ──▶ handle_decision → maybe_resume → round 收盘
 ```
 
-**渲染前机器自检 `_precheck_episode`**（烧渲染算力前的零成本硬校验，`render_015.run` 只查文件
+**渲染前机器自检 `_precheck_episode`**（烧渲染算力前的零成本硬校验，`render_final_preview.run` 只查文件
 存在不查内容自洽）：①`episode.json` 可解析且 `beats` 非空；②每条非章节 beat 有 `scene` 字段
 （storyboard 真跑过）且 `audioFile/audioStart/audioEnd` 齐全；③对应 `scene-*.mp3` / 配图存在。
 不过线 → 自动重派一次再升级给人（对齐 WOLONG-DESIGN §4.6"渲染派发前零成本机器自检"）。
@@ -180,31 +180,31 @@ render_015 task (source="wolong", round_id, intent_key="render:{slot}:0")
   中途 kill 重入不重建 job；集成测覆盖**单向推进绝不回触上游**。
 
 ### P2 — 闸2 终验 task + 事件回桥 + 收盘
-- **scope**：JobDriver 在 `image done + _precheck` 通过后 `transport.submit("render_015", ...,
+- **scope**：JobDriver 在 `image done + _precheck` 通过后 `transport.submit("render_final_preview", ...,
   source="wolong", round_id, intent_key="render:{slot}:0")`；`artifacts.py` `extract_artifacts`
-  加 `render_015` 分支（对 `result.output_path` 标 video kind，落 `video-jobs/` 在 `ALLOWED_ROOTS`
+  加 `render_final_preview` 分支（对 `result.output_path` 标 video kind，落 `video-jobs/` 在 `ALLOWED_ROOTS`
   内）；`_handle_event` 加 render task 的 `decision` 分支（approved→收盘该 line；rejected→重渲，
   计返工）。
 - **〔MAJOR 修复〕清场不误杀终验成片**：`_cleanup_round_tasks` 现只跳过 `cmd==wolong`/`source==gate`
   （[rounds_gate.py:203](../src/ncds_opus_factory/server/rounds_gate.py:203)），render task 是
-  `cmd=render_015 source=wolong` 会被取消。须保证**一条 line 在其 render task 拿到 user decision
+  `cmd=render_final_preview source=wolong` 会被取消。须保证**一条 line 在其 render task 拿到 user decision
   前不算落定**，round 不会 done/terminate 去清场。
 - **〔MAJOR 修复〕案卷 digest 有可学特征**：`label_store._artifact_digest`
-  （[label_store.py:45-85](../src/ncds_opus_factory/server/label_store.py:45)）无 render_015 分支，
-  退片样本会落到兜底"存路径"。加 render_015 分支：据 intent 里的 `job_id` 反读 `episode.json`，
+  （[label_store.py:45-85](../src/ncds_opus_factory/server/label_store.py:45)）无 render_final_preview 分支，
+  退片样本会落到兜底"存路径"。加 render_final_preview 分支：据 intent 里的 `job_id` 反读 `episode.json`，
   存 `meta.title + 前若干句口播 + scenes 数 + storyboard prompt 摘要 + 时长/体积` 作内容指纹。
 - **〔MAJOR 修复〕孤儿 015 job**：round 终局/超时清场新增一支——遍历 `r['lines']` 取 `job_id`，
   调 `PIPELINE_RUNNER` 取消在途节点并标 job 弃用；render intent 对账须同覆盖"job 卡死"与
   "job 已出片但 render task 未派"两态。
 - **files**：`server/artifacts.py`、`commands/wolong_rounds.py`、`server/rounds_gate.py`、
   `server/job_driver.py`、`server/label_store.py`。
-- **exit**：成片作为带 round_id 的 render_015 task 进待验收桶、iOS 点红灯、端上能拿到成片
+- **exit**：成片作为带 round_id 的 render_final_preview task 进待验收桶、iOS 点红灯、端上能拿到成片
   video URL；用户终验 decision 回流推进/收盘 round；闸2 reject→重渲路径通；崩溃重入
-  （handle_decision 先于 terminal / job 卡死）对账救活；断言 render_015 **不**被 `_maybe_auto_archive`
+  （handle_decision 先于 terminal / job 卡死）对账救活；断言 render_final_preview **不**被 `_maybe_auto_archive`
   归档、**不**被清场误杀。
 
 ### P3 — 收敛去重（可选，非打通必需）
-- 让卧龙链跳过 pipeline 的 `render` 节点（只跑到 image done），渲染只由 render_015 task 跑一次
+- 让卧龙链跳过 pipeline 的 `render` 节点（只跑到 image done），渲染只由 render_final_preview task 跑一次
   落 `06_render/output.mp4`，**消除"渲染跑两次"**；render 双外壳收敛为"task 派发 + 画布只读展示"。
 - `video-jobs/` 重型素材 GC 立项（WOLONG-DESIGN §5.1 已知缺口）。
 - **files**：`server/job_driver.py`、`server/pipeline_runner.py`、`docs/WOLONG-DESIGN.md`。
@@ -221,7 +221,7 @@ render_015 task (source="wolong", round_id, intent_key="render:{slot}:0")
 | 4 | P1/P2 状态机拆分死结 | MAJOR×2 | §4 P1：`_finalize_if_done` 改造与 P1 同期，引入 `rendering` 中间态 |
 | 5 | 清场误杀待验收成片 | MAJOR | §4 P2：render task 拿到 user decision 前 line 不落定 |
 | 6 | 孤儿 015 job / 撞名 / 清场不对称 | MAJOR | §4 P2：清场遍历 job_id 取消在途节点；对账覆盖两态 |
-| 7 | 案卷 digest 对成片无可学特征 | MAJOR | §4 P2：digest 加 render_015 分支，反读 episode 取内容指纹 |
+| 7 | 案卷 digest 对成片无可学特征 | MAJOR | §4 P2：digest 加 render_final_preview 分支，反读 episode 取内容指纹 |
 | 8 | seed_done 漏置 asr 节点 | MAJOR | §2.4：seed_done 置 input/asr/rw 三节点全 done |
 | 9 | JobDriver 重推触发 BFS reset | MAJOR | §2.2：单向推进硬不变量（done 不重 POST） |
 | 10 | seed_done rw.outputs 空致画布读路径崩 | MINOR | §2.4：rw.outputs 填最小自洽形 |
@@ -246,7 +246,7 @@ render_015 task (source="wolong", round_id, intent_key="render:{slot}:0")
 - env fixture 照抄 `test_labels.py`；LLM 调用做成模块级函数属性供 monkeypatch；E2E 用
   `NOF_MOCK_AGENTS` + 固定输出假函数（卧龙必须真跑 round 逻辑）。
 - 必测：seed_done 置位/补节点不冲突；JobDriver 单向推进绝不回触上游 + done 不重 POST；
-  render_015 `source=="wolong"` 不被归档且 decision 可回流；P1 round 推进 rendering 不收盘/不挂死；
+  render_final_preview `source=="wolong"` 不被归档且 decision 可回流；P1 round 推进 rendering 不收盘/不挂死；
   闸2 reject→重渲；崩溃重入幂等 + 对账救活；清场不误杀待验收成片；孤儿 job 被取消；
   digest 对退片有内容指纹；台词一致性（闸1 稿 vs 成片 beats 抽样逐字一致）。
 
@@ -259,4 +259,4 @@ render_015 task (source="wolong", round_id, intent_key="render:{slot}:0")
 | 分镜 | 015 `_execute_storyboard` + `storyboard_director` | 吴道子 标 legacy/deprecated-for-wolong |
 | 配音 | 015 `_execute_tts`（scene 整段 + 字级时间戳） | 伯牙 标 legacy（数据契约不兼容） |
 | 出图 | 015 `_execute_image`（gpt-image-2 真出图） | 009 无独立出图入口 |
-| 渲染 | `render_015.run`（带 round_id 的 task 那层外壳） | 画布手点继续用 pipeline render 节点那层；P3 收敛单次化 |
+| 渲染 | `render_final_preview.run`（带 round_id 的 task 那层外壳） | 画布手点继续用 pipeline render 节点那层；P3 收敛单次化 |

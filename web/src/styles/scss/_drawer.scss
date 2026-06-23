@@ -197,6 +197,11 @@
 .drawer.fullscreen .body {
   padding: var(--s-4) var(--s-5);
 }
+.drawer.fullscreen.preview-editing .head,
+.drawer.fullscreen.preview-editing .agent-steps,
+.drawer.fullscreen.preview-editing .preview-action-bar {
+  display: none;
+}
 /* preview 抽屉是两栏布局：body 需 flex 撑满供 editor-2col 拿满高度 */
 .drawer.fullscreen .body:has(.editor-2col),
 .drawer.fullscreen .body:has(.canvas-editor),

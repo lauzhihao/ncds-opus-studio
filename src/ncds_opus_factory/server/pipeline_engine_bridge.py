@@ -21,7 +21,7 @@ class PipelineEngineBridgeMixin:
 
     async def _execute_via_engine(self, job_id: str, node_name: str) -> dict[str, Any]:
         """绞杀者（E1-b2 #3）：该节点的执行改走生产引擎 ``run_step``——经合并 registry 派发到
-        ``pct015_*`` performer + 引擎状态机。
+        ``final_*`` performer + 引擎状态机。
 
         JobState 仍是 facade 真相源；引擎实例只作执行载体（throwaway，每 job 复用一个、跑前
         ``reset_step`` 回 idle 支持重跑）。performer 读写同一 ``video-jobs/{job_id}`` 文件，故与未迁
@@ -32,7 +32,7 @@ class PipelineEngineBridgeMixin:
         job = self._load(job_id)
         iid = job.engine_iid
         if iid is None or not engine.store.exists(iid):
-            iid = engine.create_instance("paper_card_talk_015", inputs=job.inputs).meta.instance_id
+            iid = engine.create_instance("final_preview", inputs=job.inputs).meta.instance_id
             job.engine_iid = iid          # 持久化句柄，重启后复用同一实例（不留孤儿）
             self._save(job)
         # force：无条件回 idle 重跑。watcher 宽限期后的 asyncio 强制 cancel 只回收 facade 节点、
@@ -40,7 +40,7 @@ class PipelineEngineBridgeMixin:
         # 之后普通 reset_step 撞「无法重置运行中的步」永久起不来。run_node 的 _running_nodes 守卫已保证
         # 走到这里时旧 task 必 done（旧线程已死），故此处 force 重置 orphan running 是安全的。
         await engine.reset_step(iid, node_name, force=True)
-        # 闭合签名：各 pct015_* performer 不能盲 splat config，driver 按节点装配 step_inputs。
+        # 闭合签名：各 final_* performer 不能盲 splat config，driver 按节点装配 step_inputs。
         step_inputs = self._engine_step_inputs(job, node_name)
         # 纯引擎路径无 TaskRunner task_id 时，用实例 iid 作节点追踪句柄。
         # web /jobs 运行时已由 pipeline_node 任务承载，不能再用 iid 覆盖 facade task_id。

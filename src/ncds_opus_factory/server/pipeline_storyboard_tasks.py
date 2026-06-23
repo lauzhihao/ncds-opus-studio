@@ -56,7 +56,7 @@ class PipelineStoryboardRun:
             container_guide=self.container_guide,
             palette=self.palette,
         )
-        scene_by_beat, scenes, background = await asyncio.to_thread(
+        visual = await asyncio.to_thread(
             structure_json_with_model_fallback,
             user_prompt,
             system_prompt,
@@ -69,27 +69,38 @@ class PipelineStoryboardRun:
             final_error="视觉方案生成暂时失败：备用通道都没有成功，请稍后重试。",
             log_context="storyboard",
             max_parse_attempts=3,
-            retry_hint="JSON 必须含 scenes{} 与 sceneMap{} 两个键，scenes 的每个值含 prompt 字段。",
+            retry_hint="JSON 必须含 visual.stage 与 visual.shots[]，每条 shot 必须有 beatIndex。",
         )
+        shots = visual.get("shots") if isinstance(visual.get("shots"), list) else []
+        group_by_beat = {
+            int(shot.get("beatIndex")): str(shot.get("group") or "").strip()
+            for shot in shots
+            if isinstance(shot, dict) and shot.get("beatIndex") is not None
+        }
         for i, b in enumerate(self.beats_raw, start=1):
-            b["scene"] = scene_by_beat.get(i, b.get("scene") or "")
+            # scene 保留为 TTS 粗分段，不再驱动画面切换。
+            b["scene"] = group_by_beat.get(i) or b.get("scene") or "main"
         self.episode["beats"] = self.beats_raw
-        self.episode["scenes"] = scenes
+        prev_visual = self.episode.get("visual") if isinstance(self.episode.get("visual"), dict) else {}
+        self.episode["visual"] = {**dict(prev_visual or {}), **visual}
+        self.episode["scenes"] = {}
         image_cfg = self.episode.get("image") if isinstance(self.episode.get("image"), dict) else {}
         image_cfg = dict(image_cfg or {})
-        image_cfg["background"] = background
+        stage = visual.get("stage") if isinstance(visual.get("stage"), dict) else {}
+        background = stage.get("background") if isinstance(stage.get("background"), dict) else {}
+        image_cfg["background"] = dict(background or {})
         self.episode["image"] = image_cfg
         self.episode_path.write_text(json.dumps(self.episode, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        sketch_total = sum(len(s.get("sketches") or []) for s in scenes.values())
-        groups = sorted({s.get("group") or sid for sid, s in scenes.items()})
+        asset_total = sum(len(s.get("assets") or []) for s in shots if isinstance(s, dict))
+        groups = sorted({str(s.get("group") or "").strip() for s in shots if isinstance(s, dict) and s.get("group")})
         self.on_progress(
-            f"视觉方案生成完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 个前景素材"
+            f"视觉方案生成完成：{len(shots)} 句画面 · {len(groups)} 段 · {asset_total} 个前景素材"
         )
         return {
             "episode_relpath": "02_rw/episode.json",
-            "scenes_count": len(scenes),
-            "sketches_count": sketch_total,
+            "shots_count": len(shots),
+            "assets_count": asset_total,
             "groups_count": len(groups),
             "beats_count": len(self.beats_raw),
             "background_count": 1,

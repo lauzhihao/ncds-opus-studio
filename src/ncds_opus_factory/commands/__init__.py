@@ -1,7 +1,7 @@
 """命令注册表（factory 侧）。
 
 二分（§9.4）：
-- **core**：``PRIMITIVE_REGISTRY`` = wst/tst/vid/tts/render/render_015（纯能力，复用两端）。
+- **core**：``PRIMITIVE_REGISTRY`` = wst/tst/vid/tts/render/render_final_preview（纯能力，复用两端）。
 - **factory**：``AGENT_REGISTRY`` = 6 中国风 agent + asr（采集/转写入口归 factory）。
 - ``build_full_registry()`` 合并两者，喂给 server.task_runner 反射拉起每个 run（口径不变）。
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ncds_opus_core.commands.registry import PRIMITIVE_REGISTRY, RunFn
 
-# asr：factory 专属本地采集/转写命令；web 主链仍走 015 performer。
+# asr：factory 专属本地采集/转写命令；web 主链仍走 final_preview performer。
 from ncds_opus_factory.commands import asr
 # 5 个中国风成片 agent + 卧龙(操盘手)；run() 同样遵守 run(...on_progress)->dict 契约。
 from ncds_opus_factory.commands import boya, guiguzi, liuyong, shenkuo, wolong, wudaozi

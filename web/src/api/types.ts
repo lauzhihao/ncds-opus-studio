@@ -110,13 +110,19 @@ export interface LinesOutputs {
   beats_count: number;
 }
 
-// IMAGE 节点 outputs.items[].sketches 中的一条；与 _execute_image 前景素材产物对齐。
-export interface ImageSketchItem {
+// IMAGE 节点 outputs.items[].assets 中的一条；与 _execute_image 前景素材产物对齐。
+export interface ImageAssetItem {
   index: number;
+  asset_id?: string;
+  role?: string;
   prompt: string;
+  pos?: { x: number; y: number };
+  size?: number;
+  motion?: { enter?: string; duration?: number; delay?: number };
   image_relpath: string | null;
   status?: 'queued' | 'running' | 'done' | 'failed' | 'skipped';
   variants?: ImageVariantItem[];
+  selected_variant_relpath?: string | null;
   error?: string | null;
 }
 
@@ -126,18 +132,18 @@ export interface ImageVariantItem {
   selected?: boolean;
 }
 
-// IMAGE 节点 outputs.items 中的一条；与 pipeline_runner._execute_image 对齐。
-// image_relpath 为 null 时表示未生成（mock 模式或单图重生中）。
-// sketches：该 scene 的前景素材产物（白底黑剪影，渲染层 multiply 抠白）。
+// IMAGE 节点 outputs.items 中的一条；当前语义是一句字幕对应一个 visual shot。
+// assets：该 shot 的前景素材产物（白底黑剪影，渲染层 multiply 抠白）。
 export interface ImageItem {
-  scene_id: string;
-  prompt: string;
-  image_relpath: string | null;
+  shot_id: string;
+  beat_index: number;
+  group?: string;
+  intent: string;
+  layout?: string;
+  transition?: string;
   background_relpath?: string | null;
   status?: 'queued' | 'running' | 'done' | 'failed' | 'skipped';
-  variants?: ImageVariantItem[];
-  selected_variant_relpath?: string | null;
-  sketches?: ImageSketchItem[];
+  assets?: ImageAssetItem[];
   error?: string | null;
 }
 
@@ -151,11 +157,39 @@ export interface ImageBackgroundItem {
   error?: string | null;
 }
 
+export type MaterialScope = 'current_job' | 'same_author' | 'same_domain' | 'global';
+
+export interface MaterialItem {
+  id: string;
+  kind: 'cutout' | 'image' | 'video_frame';
+  title?: string;
+  preview_url: string;
+  object_url?: string;
+  source_label?: string;
+  source?: {
+    platform?: string;
+    aweme_id?: string;
+    author_id?: string;
+    job_id?: string;
+  };
+  tags?: string[];
+  domain?: string | null;
+  usage_count?: number;
+}
+
+export interface MaterialSearchResponse {
+  index_ready: boolean;
+  items: MaterialItem[];
+  query?: Record<string, unknown>;
+  scopes?: { id: MaterialScope; label: string }[];
+  todo?: string;
+}
+
 // STORYBOARD（分镜）节点 outputs；与 pipeline_runner._execute_storyboard 对齐。
 export interface StoryboardOutputs {
   episode_relpath: string;
-  scenes_count: number;
-  sketches_count: number;
+  shots_count: number;
+  assets_count: number;
   groups_count: number;
   beats_count: number;
   background_count?: number;
@@ -167,7 +201,7 @@ export interface TtsItem {
   zh: string;
   scene: string;
   audio_relpath: string | null;
-  // 015 整段合成：beat 在整段里的区间（ms）
+  // final_preview 整段合成：beat 在整段里的区间（ms）
   audio_start?: number | null;
   audio_end?: number | null;
 }
@@ -374,14 +408,17 @@ export interface Episode {
   };
   fonts?: Array<{ family: string; src: string; weight?: string | number; style?: string; format?: string; display?: string }>;
   visual: {
-    palette: string;
-    bandStyle: string;
-    kenBurns: boolean;
-    showSubtitleEn: boolean;
-    capZhSize: number;
-    capEnSize: number;
+    palette: string | Record<string, unknown>;
+    bandStyle?: string;
+    kenBurns?: boolean;
+    showSubtitleEn?: boolean;
+    capZhSize?: number;
+    capEnSize?: number;
     capZhFont?: string;
     capEnFont?: string;
+    style?: string;
+    stage?: VisualStage;
+    shots?: VisualShot[];
   };
   playback: { rate: number };
   audio?: { tts?: Record<string, unknown> };
@@ -395,7 +432,40 @@ export interface Beat {
   en: string;
   scene: string;
   capEnter?: string;
-  chapter?: boolean;
+  chapter?: number | boolean | null;
+}
+
+export interface VisualStage {
+  background?: {
+    prompt?: string;
+    imageFit?: 'cover' | 'contain' | 'fill';
+    imageFile?: string;
+  };
+  palette?: Record<string, unknown>;
+  shotRhythm?: string;
+}
+
+export interface VisualShot {
+  beatIndex: number;
+  shotId: string;
+  group?: string;
+  intent: string;
+  layout?: string;
+  transition?: string;
+  motion?: { enter?: string; duration?: number; delay?: number };
+  emphasis?: Overlay[];
+  assets?: VisualAsset[];
+}
+
+export interface VisualAsset {
+  id: string;
+  role?: string;
+  prompt: string;
+  pos: { x: number; y: number };
+  size: number;
+  motion?: { enter?: string; duration?: number; delay?: number };
+  imageFile?: string;
+  at?: { match: string; delay?: number };
 }
 
 export interface Scene {

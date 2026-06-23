@@ -1,0 +1,26 @@
+{
+  "id": "final_preview",
+  "name": "Final Preview",
+  "title": "成品预览模板",
+  "entry": "final-preview.html",
+  "style": ".final-preview-assets/styles.css",
+  "script": ".final-preview-assets/player.js",
+  "assets": ".final-preview-assets/",
+  "description": "Studio 成片检查与渲染模板：读取当前 job 的 episode.json、audio、pictures，按吴道子的背景图/前景素材和伯牙配音生成 1920x1080 预览与 MP4。E 模式写回 episode.visual.finalPreview，用于微调标题、Logo、声明、字幕、前景素材和文字素材样式。",
+  "version": "1.0.0",
+  "features": [
+    "episode.json 单文件数据源：meta/visual/fonts/beats 作为成品预览配置源",
+    "整屏背景图：visual.stage.background 对应吴道子生成的全片背景",
+    "前景素材：visual.shots[].assets 按字幕切换并叠加到内容安全区",
+    "E 模式成品构图编辑：直接写回 job 的 episode.json",
+    "render.mjs 离线出片：puppeteer 录屏 + ffmpeg 合成 scene 音频"
+  ],
+  "entryAssets": ".final-preview-assets/",
+  "scripts": [
+    ".final-preview-assets/bootstrap.js",
+    ".final-preview-assets/image-slot.js",
+    ".final-preview-assets/overlays.js",
+    ".final-preview-assets/player.js",
+    ".final-preview-assets/edit-mode.js"
+  ]
+}

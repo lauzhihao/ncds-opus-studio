@@ -1,11 +1,11 @@
-"""Mock 数据：用 015 素材把 mock015 作品改造成「可交互模拟器」。
+"""Mock 数据：用 final_preview 素材把 mock_final 作品改造成「可交互模拟器」。
 
 设计（v2）
 ---------
-- mock015 不再预置成品：种作品时只把 START(input) 置 done + 打 mock=True 标志，
+- mock_final 不再预置成品：种作品时只把 START(input) 置 done + 打 mock=True 标志，
   其余节点 idle —— 用户从 START 一路点下去。
 - 每个节点的「执行」由 pipeline_runner._execute_mock 接管：running 态内 sleep
-  MOCK_NODE_DELAY_SEC 秒，再调本模块 run_mock_node(job_dir, node) —— 实时从 015
+  MOCK_NODE_DELAY_SEC 秒，再调本模块 run_mock_node(job_dir, node) —— 实时从 final_preview
   素材写该节点产物并返回 outputs。
 - 前端零 mock：触发仍走真实 /run + SSE，状态正常 idle->queued->running->done 流转。
 - regen 类操作（重生单图 / 单段音 / 单模型）也在 runner 里短路，复用素材，
@@ -14,7 +14,7 @@
 产物落点对齐 routes/preview.py 的硬性期望：
     01_asr/1/article.md | 02_rw/episode.json(+4 模型) | 04_tts/scene-*.mp3 | 03_image/*.webp
 
-素材源优先 ../ncds-materials/.015-draft-assets（用户素材），回退仓库内模板（保证
+素材源优先 ../ncds-materials/.final-preview-assets（用户素材），回退仓库内模板（保证
 CI / 无 sibling 时也能种）。调 mock 行为只需改 MOCK_CONFIG / MOCK_NODE_DELAY_SEC。
 """
 
@@ -27,20 +27,21 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_core.pipelines import get_pipeline
+from ncds_opus_core.templates import template_dir as _core_template_dir
 from ncds_opus_factory.server.pipeline_media_helpers import _rebuild_tts_items_015
 from ncds_opus_factory.server.pipeline_runner import (
     JobState,
     NodeState,
 )
 
-MOCK_JOB_ID = "mock015"
-MOCK_PIPELINE_ID = "paper_card_talk_015"
+MOCK_JOB_ID = "mock_final"
+MOCK_PIPELINE_ID = "final_preview"
 # 每个节点 mock 执行的模拟耗时（秒）：running 态内 sleep 这么久再吐数据
 MOCK_NODE_DELAY_SEC = 3.0
 
 # 开关参数：mock 作品如何拼装（改这里即可调 mock 行为）
 MOCK_CONFIG: dict[str, Any] = {
-    "title": "MOCK · 015 素材",
+    "title": "MOCK · final_preview 素材",
     "rw_models": [
         # label 仅作前端未知 id 的兜底展示；前端 MODEL_LABELS 已统一泛化为「改写方案 X」
         {"id": "opus", "label": "改写方案 A"},
@@ -51,11 +52,10 @@ MOCK_CONFIG: dict[str, Any] = {
 }
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-# 015 素材源候选：优先用户的 ncds-materials，回退仓库内模板
+# final_preview 素材源候选：优先用户的 ncds-materials，回退仓库内模板
 _SOURCE_CANDIDATES = [
-    _REPO_ROOT.parent / "ncds-materials" / ".015-draft-assets",
-    _REPO_ROOT / "src" / "ncds_opus_factory" / "templates"
-    / "paper_card_talk_015" / ".015-draft-assets",
+    _REPO_ROOT.parent / "ncds-materials" / ".final-preview-assets",
+    _core_template_dir("final_preview") / ".final-preview-assets",
 ]
 
 
@@ -64,12 +64,14 @@ def _source_dir() -> Path:
         if (d / "episode.json").is_file():
             return d
     raise FileNotFoundError(
-        "015 mock 素材未找到：ncds-materials/.015-draft-assets 与仓库模板均缺 episode.json"
+        "final_preview mock 素材未找到：ncds-materials/.final-preview-assets 与仓库模板均缺 episode.json"
     )
 
 
 def _load_episode() -> dict[str, Any]:
-    return json.loads((_source_dir() / "episode.json").read_text(encoding="utf-8"))
+    episode = json.loads((_source_dir() / "episode.json").read_text(encoding="utf-8"))
+    _ensure_visual_shots(episode)
+    return episode
 
 
 def _body_from_beats(episode: dict[str, Any]) -> str:
@@ -90,6 +92,74 @@ def _scene_order(episode: dict[str, Any]) -> list[str]:
     return order
 
 
+def _ensure_visual_shots(episode: dict[str, Any]) -> None:
+    """把样例素材迁到当前 visual.shots 契约，供 mock 跑新链路。"""
+    visual = episode.get("visual") if isinstance(episode.get("visual"), dict) else {}
+    visual = dict(visual or {})
+    if isinstance(visual.get("shots"), list) and visual["shots"]:
+        episode["visual"] = visual
+        episode["scenes"] = {}
+        return
+
+    scenes = episode.get("scenes") if isinstance(episode.get("scenes"), dict) else {}
+    shots: list[dict[str, Any]] = []
+    for i, beat in enumerate(episode.get("beats") or [], start=1):
+        if not isinstance(beat, dict):
+            continue
+        sid = str(beat.get("scene") or "").strip()
+        sc = scenes.get(sid) if isinstance(scenes.get(sid), dict) else {}
+        raw_assets = sc.get("sketches") if isinstance(sc.get("sketches"), list) else []
+        assets: list[dict[str, Any]] = []
+        for n, sk in enumerate([a for a in raw_assets if isinstance(a, dict)], start=1):
+            aid = f"a{n}"
+            assets.append({
+                "id": aid,
+                "role": "main" if n == 1 else "support",
+                "prompt": str(sk.get("prompt") or f"a simple pictogram for: {beat.get('zh') or ''}"),
+                "pos": sk.get("pos") if isinstance(sk.get("pos"), dict) else {"x": 50, "y": 52},
+                "size": sk.get("size") if isinstance(sk.get("size"), (int, float)) else 34,
+                "motion": sk.get("motion") if isinstance(sk.get("motion"), dict) else {"enter": "zoom-pop", "duration": 500},
+                "imageFile": f"pictures/b{i:03d}-{aid}.webp",
+            })
+        if not assets:
+            assets.append({
+                "id": "a1",
+                "role": "main",
+                "prompt": f"a simple black pictogram symbolizing this line: {beat.get('zh') or ''}",
+                "pos": {"x": 50, "y": 52},
+                "size": 34,
+                "motion": {"enter": "zoom-pop", "duration": 500},
+                "imageFile": f"pictures/b{i:03d}-a1.webp",
+            })
+        shots.append({
+            "beatIndex": i,
+            "shotId": f"b{i:03d}",
+            "group": str((sc or {}).get("group") or sid or f"S1-{((i - 1) // 4) + 1:02d}"),
+            "intent": str((sc or {}).get("prompt") or beat.get("zh") or ""),
+            "layout": "center_icon",
+            "transition": "replace",
+            "motion": {"enter": "fade", "duration": 500},
+            "emphasis": [],
+            "assets": assets,
+        })
+
+    image_cfg = episode.get("image") if isinstance(episode.get("image"), dict) else {}
+    bg = image_cfg.get("background") if isinstance(image_cfg.get("background"), dict) else {}
+    visual["style"] = visual.get("style") or "paper_card_talk"
+    visual["stage"] = {
+        "background": {
+            "prompt": str((bg or {}).get("prompt") or "16:9 全幅暖纸质感页面背景，淡雅远景层次贯穿整张画面，细腻纸张纹理，主体元素留给前景素材，无文字，无数字。"),
+            "imageFit": "cover",
+            "imageFile": "pictures/background.webp",
+        },
+        "palette": visual.get("palette") if isinstance(visual.get("palette"), dict) else {},
+        "shotRhythm": "one-shot-per-beat",
+    }
+    visual["shots"] = shots
+    episode["visual"] = visual
+    episode["scenes"] = {}
+
+
 # ---------------------------------------------------------------------------
 # 逐节点 mock builder：写该节点产物到 job_dir + 返回 outputs dict。
 # outputs 形状须与 pipeline_runner._execute_* 真实产物一致，前端面板才认。
@@ -102,7 +172,7 @@ def _mock_asr(job_dir: Path, episode: dict[str, Any]) -> dict[str, Any]:
     (d / "article.md").write_text(body + "\n", encoding="utf-8")
     return {
         "items": [{
-            "index": 1, "url": "mock://015", "title": MOCK_CONFIG["title"],
+            "index": 1, "url": "mock://final", "title": MOCK_CONFIG["title"],
             "author": "mock", "transcript_relpath": "01_asr/1/article.md",
             "article_relpath": "01_asr/1/article.md", "error": None,
         }],
@@ -115,7 +185,7 @@ def _mock_rw(job_dir: Path, episode: dict[str, Any]) -> dict[str, Any]:
     episode_json = json.dumps(episode, ensure_ascii=False, indent=2)
     rw = job_dir / "02_rw"
     rw.mkdir(parents=True, exist_ok=True)
-    # 02_rw/episode.json 是 preview.py 与下游的 canonical 来源：rw 阶段就落整份 015 episode
+    # 02_rw/episode.json 是 preview.py 与下游的 canonical 来源：rw 阶段就落整份 episode
     (rw / "draft.md").write_text(body + "\n", encoding="utf-8")
     (rw / "episode.json").write_text(episode_json, encoding="utf-8")
     drafts: list[dict[str, Any]] = []
@@ -145,13 +215,17 @@ def _mock_lines(job_dir: Path, episode: dict[str, Any]) -> dict[str, Any]:
 
 
 def _mock_storyboard(job_dir: Path, episode: dict[str, Any]) -> dict[str, Any]:
-    scenes = episode.get("scenes") or {}
+    visual = episode.get("visual") if isinstance(episode.get("visual"), dict) else {}
+    shots = [s for s in (visual.get("shots") or []) if isinstance(s, dict)]
+    asset_total = sum(len(s.get("assets") or []) for s in shots)
+    groups = {str(s.get("group") or "").strip() for s in shots if s.get("group")}
     return {
         "episode_relpath": "02_rw/episode.json",
-        "scenes_count": len(scenes),
-        "sketches_count": 0,
-        "groups_count": len(_scene_order(episode)),
+        "shots_count": len(shots),
+        "assets_count": asset_total,
+        "groups_count": len(groups),
         "beats_count": len(episode.get("beats") or []),
+        "background_count": 1,
     }
 
 
@@ -179,20 +253,78 @@ def _mock_image(job_dir: Path, episode: dict[str, Any]) -> dict[str, Any]:
     if pics.is_dir():
         for p in pics.glob("*.webp"):
             shutil.copyfile(p, img_dir / p.name)
-    scenes = episode.get("scenes") or {}
+    background_src = img_dir / "background.webp"
+    if not background_src.is_file():
+        for sid in _scene_order(episode):
+            cand = img_dir / f"{sid}.webp"
+            if cand.is_file():
+                shutil.copyfile(cand, background_src)
+                break
+    visual = episode.get("visual") if isinstance(episode.get("visual"), dict) else {}
+    shots = [s for s in (visual.get("shots") or []) if isinstance(s, dict)]
     items = []
-    for sid in _scene_order(episode):
-        sc = scenes.get(sid) or {}
-        rel = f"03_image/{sid}.webp"
-        has = (job_dir / rel).is_file()
+    for i, shot in enumerate(shots, start=1):
+        sid = str(shot.get("shotId") or f"b{i:03d}")
+        assets = []
+        for n, asset in enumerate([a for a in (shot.get("assets") or []) if isinstance(a, dict)], start=1):
+            aid = str(asset.get("id") or f"a{n}")
+            rel = f"03_image/{sid}-{aid}.webp"
+            target = job_dir / rel
+            if not target.is_file() and background_src.is_file():
+                shutil.copyfile(background_src, target)
+            has = (job_dir / rel).is_file()
+            assets.append({
+                "index": n,
+                "asset_id": aid,
+                "role": str(asset.get("role") or ""),
+                "prompt": str((asset or {}).get("prompt") or ""),
+                "pos": asset.get("pos") if isinstance(asset.get("pos"), dict) else {"x": 50, "y": 50},
+                "size": asset.get("size") if isinstance(asset.get("size"), (int, float)) else 32,
+                "motion": asset.get("motion") if isinstance(asset.get("motion"), dict) else {},
+                "image_relpath": rel if has else None,
+                "status": "done" if has else "queued",
+            })
         items.append({
-            "scene_id": sid, "prompt": str(sc.get("prompt") or ""),
-            "image_relpath": rel if has else None, "sketches": [],
+            "shot_id": sid,
+            "beat_index": int(shot.get("beatIndex") or i),
+            "group": str(shot.get("group") or ""),
+            "intent": str(shot.get("intent") or ""),
+            "layout": str(shot.get("layout") or ""),
+            "transition": str(shot.get("transition") or ""),
+            "background_relpath": "03_image/background.webp",
+            "status": "done",
+            "assets": assets,
         })
+    bg_rel = "03_image/background.webp"
+    bg_has = (job_dir / bg_rel).is_file()
+    background = {
+        "id": "background",
+        "prompt": str(((episode.get("image") or {}).get("background") or {}).get("prompt") or ""),
+        "image_relpath": bg_rel if bg_has else None,
+        "status": "done" if bg_has else "queued",
+        "variants": [],
+        "selected_variant_relpath": bg_rel if bg_has else None,
+    }
+    foreground_ready = sum(1 for it in items for asset in (it.get("assets") or []) if asset.get("image_relpath"))
+    foreground_total = sum(len(it.get("assets") or []) for it in items)
     return {
-        "items": items, "pictures_dir": "03_image",
-        "pictures_count": sum(1 for it in items if it["image_relpath"]),
-        "ok": 0, "skipped": 0, "failed": 0, "sketch_ok": 0, "sketch_failed": 0,
+        "background": background,
+        "items": items,
+        "pictures_dir": "03_image",
+        "pictures_count": (1 if bg_has else 0) + foreground_ready,
+        "ok": 1 if bg_has else 0,
+        "skipped": 0,
+        "failed": 0 if bg_has else 1,
+        "asset_ok": foreground_ready,
+        "asset_failed": 0,
+        "asset_summary": {
+            "background_total": 1,
+            "background_ready": 1 if bg_has else 0,
+            "shot_total": len(items),
+            "foreground_total": foreground_total,
+            "foreground_ready": foreground_ready,
+            "foreground_failed": 0,
+        },
     }
 
 
@@ -258,8 +390,8 @@ def ensure_mock_job(runner: Any) -> str:
     job_dir.mkdir(parents=True, exist_ok=True)
 
     now = time.time()
-    shares = [{"url": "mock://015", "title": MOCK_CONFIG["title"], "author": "mock", "tags": []}]
-    inputs = {"url": "mock://015", "urls": ["mock://015"], "raw_text": "", "shares": shares}
+    shares = [{"url": "mock://final", "title": MOCK_CONFIG["title"], "author": "mock", "tags": []}]
+    inputs = {"url": "mock://final", "urls": ["mock://final"], "raw_text": "", "shares": shares}
 
     nodes: dict[str, NodeState] = {}
     for nd in get_pipeline(MOCK_PIPELINE_ID).nodes:
@@ -267,7 +399,7 @@ def ensure_mock_job(runner: Any) -> str:
             nodes[nd.name] = NodeState(
                 name=nd.name, status="done", started_at=now, finished_at=now,
                 progress="完成",
-                outputs={"url": "mock://015", "urls": ["mock://015"], "shares": shares, "raw_text": ""},
+                outputs={"url": "mock://final", "urls": ["mock://final"], "shares": shares, "raw_text": ""},
                 error=None, task_id=None,
             )
         else:

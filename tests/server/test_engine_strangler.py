@@ -49,7 +49,7 @@ class _FakeEngine:
 
 
 def _job(runner: PipelineRunner) -> str:
-    return runner.create_job("paper_card_talk_015", "T", {"urls": ["https://x"]}).job_id
+    return runner.create_job("final_preview", "T", {"urls": ["https://x"]}).job_id
 
 
 def test_flagged_node_routes_through_engine(tmp_path: Path):

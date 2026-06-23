@@ -3,7 +3,7 @@
 给移动端/前端渲染输入表单用，对齐各 commands/<name>.py 的 run() 签名；不做强校验
 （``POST /tasks/{cmd}`` 仍原样 spread 给 ``run(**params)``）。
 
-归属（§9.4）：core 严格 **6 个 primitive**（wst/tst/vid/tts/render/render_015）。
+归属（§9.4）：core 严格 **6 个 primitive**（wst/tst/vid/tts/render/render_final_preview）。
 asr 虽 UI ``group="primitive"`` 但命令归 **factory**，其 schema 不在此（在
 ``ncds_opus_factory.server.command_schemas`` 的 AGENT_SCHEMAS 里）。factory 的
 AGENT_SCHEMAS 复用本模块的 ``_f`` helper，并由 factory ``get_schema()`` 合并
@@ -88,8 +88,8 @@ PRIMITIVE_SCHEMAS: dict[str, dict[str, Any]] = {
             _f("output_path", "输出 mp4 路径", "string", required=True),
         ],
     },
-    "render_015": {
-        "label": "合成成片(015)", "group": "primitive", "summary": "015 纸卡模板成片",
+    "render_final_preview": {
+        "label": "合成成片(final_preview)", "group": "primitive", "summary": "成品预览模板出片",
         "fields": [
             _f("episode_path", "episode.json 路径", "string", required=True),
             _f("audio_dir", "人声目录", "string", required=True),

@@ -44,7 +44,7 @@ def _seed_job(runner: PipelineRunner, job_id: str, node: str, mock: bool = False
     job_dir.mkdir(parents=True, exist_ok=True)
     state = {
         "job_id": job_id,
-        "pipeline_id": "paper_card_talk_015",
+        "pipeline_id": "final_preview",
         "title": "test",
         "created_at": time.time(),
         "updated_at": time.time(),
@@ -208,7 +208,7 @@ def test_execute_asr_collect_raises_task_cancelled(tmp_path: Path, monkeypatch: 
     job_dir.mkdir(parents=True, exist_ok=True)
     state = {
         "job_id": job_id,
-        "pipeline_id": "paper_card_talk_015",
+        "pipeline_id": "final_preview",
         "title": "test",
         "created_at": time.time(),
         "updated_at": time.time(),
@@ -256,7 +256,7 @@ def test_enrich_asr_collected_raises_task_cancelled(tmp_path: Path) -> None:
     }
     state = {
         "job_id": job_id,
-        "pipeline_id": "paper_card_talk_015",
+        "pipeline_id": "final_preview",
         "title": "test",
         "created_at": time.time(),
         "updated_at": time.time(),

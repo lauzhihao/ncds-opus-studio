@@ -21,7 +21,19 @@
     beats[endIdx].zh = beats[endIdx].zh.replace(END_RE, '');
     beats.length = endIdx + 1;
   }
-  const scenes = EP.scenes || {};
+  const visual = EP.visual || {};
+  const shots = Array.isArray(visual.shots) ? visual.shots : [];
+  const stage = visual.stage || {};
+  const scenes = { 'visual-stage': stage };
+  const shotByBeat = new Map();
+  shots.forEach((shot, idx) => {
+    const bi = Number(shot && shot.beatIndex);
+    if (Number.isFinite(bi) && bi > 0 && !shotByBeat.has(bi)) {
+      shotByBeat.set(bi, shot);
+    } else if (!shotByBeat.has(idx + 1)) {
+      shotByBeat.set(idx + 1, shot);
+    }
+  });
 
   // 给图片 / 音频 URL 加 cache-bust：ncds.cc 静态资源是 immutable+30d，
   // 重新生图 / 重录音频后必须 ?v= 不同才能让浏览器拉新文件。
@@ -49,31 +61,36 @@
   }
   function _pick(arr, seed) { return arr[_hash(seed) % arr.length]; }
 
-  // ── 构造 scene 节点（每个 SCENES 项一个节点） ──────────────────────
-  const sceneOrder = [];
-  const sceneSeen = new Set();
-  for (const b of beats) {
-    if (!sceneSeen.has(b.scene)) {
-      sceneSeen.add(b.scene);
-      sceneOrder.push(b.scene);
-    }
-  }
-
-  // 预生成图片路径：新链路默认全片共用 pictures/background.webp；
-  // 老 episode 没有 image.background 时仍回退 pictures/<scene-id>.webp。
+  // 预生成图片路径：当前链路默认全片共用 pictures/background.webp；
+  // 每条字幕 shot 的前景素材为 pictures/<shot-id>-<asset-id>.webp。
   const PIC_DIR = ASSET_ROOT + '/pictures';
-  function picSrcFor(sceneId) {
-    const def = scenes[sceneId] || {};
-    const bg = (EP.image && EP.image.background) || {};
-    const explicit = def.imageFile || def.backgroundImage || bg.imageFile;
-    if (explicit) {
-      return bustedUrl(ASSET_ROOT + '/' + String(explicit).replace(/^\/+/, ''));
-    }
-    return bustedUrl(PIC_DIR + '/' + sceneId + '.webp');
+  function assetSrc(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return '';
+    if (/^data:/i.test(text)) return text;
+    if (/^https?:|^\//i.test(text)) return bustedUrl(text);
+    return bustedUrl(ASSET_ROOT + '/' + text.replace(/^\/+/, ''));
   }
-  // 简笔画图片路径：pictures/<scene-id>-sk<n>.webp（n 从 1）
-  function picSketchSrcFor(sceneId, n) {
-    return bustedUrl(PIC_DIR + '/' + sceneId + '-sk' + n + '.webp');
+  function backgroundSrc() {
+    const def = stage || {};
+    const bg2 = (def && def.background) || {};
+    const bg = (EP.image && EP.image.background) || {};
+    const explicit = bg2.imageFile || def.imageFile || bg.imageFile;
+    if (explicit) {
+      return assetSrc(explicit);
+    }
+    return assetSrc('pictures/background.webp');
+  }
+  function shotIdFor(shot, index) {
+    return String((shot && (shot.shotId || shot.id)) || ('b' + String(index + 1).padStart(3, '0')));
+  }
+  function assetIdFor(asset, n) {
+    return String((asset && asset.id) || ('a' + n));
+  }
+  function picAssetSrcFor(shot, asset, n, beatIndex) {
+    const explicit = asset && asset.imageFile;
+    if (explicit) return bustedUrl(ASSET_ROOT + '/' + String(explicit).replace(/^\/+/, ''));
+    return bustedUrl(PIC_DIR + '/' + shotIdFor(shot, beatIndex - 1) + '-' + assetIdFor(asset, n) + '.webp');
   }
 
   // 应用 scene 级 motion 配置：加 mo-scene-* class + 写 duration/easing CSS var
@@ -108,6 +125,8 @@
   }
 
   const stack = $('sceneStack');
+  const stageDom = $('stage');
+  const stageBackground = $('stageBackground');
   const capZh = $('capZh');
   const capEn = $('capEn');
   const progress = $('progress');
@@ -116,8 +135,8 @@
   const band = $('band');
 
   const sceneNodes = {};
-  // 计算并挂上 image-stage 用的 mo-img-* class（先清旧再加新；用于 init 和
-   // inspector 改 motion.image 后的实时刷新）。chapter 类 scene 不挂图片动效。
+  const sceneOrder = ['visual-stage'];
+  // 计算并挂上 image-stage 用的 mo-img-* class（先清旧再加新）。
   function applyImageKen(el, def, idx) {
     const toRemove = [];
     for (const c of el.classList) {
@@ -144,49 +163,67 @@
     applySceneMotion(el, def && def.motion);
   }
 
-  sceneOrder.forEach((id, i) => {
-    const def = scenes[id] || { prompt: '(未定义)' };
-    const el = document.createElement('div');
-    el.className = 'scene';
-    el.dataset.sceneId = id;
-    const src = picSrcFor(id);
+  const stageEl = document.createElement('div');
+  stageEl.className = 'scene active visual-stage';
+  stageEl.dataset.sceneId = 'visual-stage';
+  const stageBg = (stage && stage.background) || {};
+  const fit = (stageBg.imageFit === 'contain' || stageBg.imageFit === 'fill') ? stageBg.imageFit : 'cover';
+  applySceneMotionFresh(stageEl, stage);
+  stageEl.innerHTML =
+    '<div class="placeholder">' +
+    '  <div class="ph-id">visual</div>' +
+    '  <div class="ph-prompt">' + ((stageBg && stageBg.prompt) || '') + '</div>' +
+    '</div>';
+  stack.appendChild(stageEl);
+  sceneNodes['visual-stage'] = stageEl;
 
-    // motion class（场景过渡 + 图片 Ken Burns）。优先 episode.json
-    // scenes[id].motion.{enter,image}，缺省按 hash 从 IMG_KENS 池轮换以保
-    // 录制可复现。
-    applySceneMotionFresh(el, def);
-    applyImageKen(el, def, i);
-
-    if (def.type === 'chapter') {
-      // 章节卡纯 CSS 渲染，不挂 image-slot 也不显示 placeholder；
-      // 背景就是 var(--card) 暖纸底色，章节卡覆盖在上面。
-      // 当前实现：只渲染 chapter-text 一行居中（num/rule 已从视觉中撤掉）
-      el.classList.add('is-chapter');
-      applyChapterStyle(el, def.style);
-      const subtitle = def.subtitle || '';
-      el.innerHTML =
-        '<div class="chapter-card">' +
-        '  <div class="chapter-text">' + subtitle + '</div>' +
-        '</div>';
-    } else {
-      const fit = (def.imageFit === 'cover' || def.imageFit === 'fill') ? def.imageFit : 'contain';
-      // image-stage：light DOM wrapper，专门承载 mo-img-* keyframe。
-      // 原本规则挂在 image-slot::part(image)（shadow DOM 内的 img）—— chrome 对
-      // 跨 shadow DOM 的 ::part + animation 不真正启动 animation 实例：computed
-      // style 里能看到 animation-name，但 img.getAnimations() 是空、transform 全程
-      // 不变。挂到 light DOM wrapper 上就 work。
-      el.innerHTML =
-        '<div class="image-stage">' +
-        '  <image-slot id="slot-' + id + '" src="' + src + '" fit="' + fit + '" placeholder="拖入此场景的图（详见左侧）"></image-slot>' +
-        '</div>' +
-        '<div class="placeholder">' +
-        '  <div class="ph-id">' + id + '</div>' +
-        '  <div class="ph-prompt">' + (def.prompt || '') + '</div>' +
-        '</div>';
+  function renderStageBackground() {
+    const bgDef = ((EP.visual || {}).stage || stage || {}).background || {};
+    const bgFit = (bgDef.imageFit === 'contain' || bgDef.imageFit === 'fill') ? bgDef.imageFit : 'cover';
+    const src = backgroundSrc();
+    if (stageBackground) stageBackground.innerHTML = '';
+    if (!stageDom) return;
+    if (!src) {
+      stageDom.style.backgroundImage = '';
+      return;
     }
-    stack.appendChild(el);
-    sceneNodes[id] = el;
-  });
+    const position = bgDef.imagePosition || bgDef.position || '50% 50%';
+    stageDom.style.backgroundImage = 'url("' + src.replace(/"/g, '\\"') + '")';
+    stageDom.style.backgroundSize = bgFit === 'fill' ? '100% 100%' : bgFit;
+    stageDom.style.backgroundPosition = position;
+    stageDom.style.backgroundRepeat = 'no-repeat';
+  }
+  renderStageBackground();
+
+  function currentShotForBeat(i) {
+    return shotByBeat.get(i + 1) || shots[i] || null;
+  }
+
+  function renderShot(i) {
+    const shot = currentShotForBeat(i);
+    if (!shot) {
+      if (window.__overlays) {
+        window.__overlays.renderSketches(stageEl, []);
+        window.__overlays.renderInto(stageEl, []);
+      }
+      return;
+    }
+    const assets = Array.isArray(shot.assets) ? shot.assets : [];
+    if (window.__overlays && window.__overlays.renderSketches) {
+      window.__overlays.renderSketches(stageEl, assets, {
+        srcFor: (n) => picAssetSrcFor(shot, assets[n - 1], n, i + 1),
+      });
+    }
+    if (window.__overlays && window.__overlays.renderInto) {
+      const emphasis = Array.isArray(shot.emphasis) ? shot.emphasis : [];
+      window.__overlays.renderInto(stageEl, emphasis);
+    }
+  }
+
+  function refreshVisual() {
+    renderStageBackground();
+    renderShot(cur);
+  }
 
   // ── 预加载所有 scene 音频 ───────────────────────────────────────
   // 按 unique audioFile 去重共享 Audio；beatAudio[i] = { audio, start, end } 指向其上区间
@@ -287,38 +324,15 @@
     capZh.classList.add(capEnter);
     capEn.classList.add(capEnter);
 
-    const newSceneId = b.scene;
-    const sceneEl = sceneNodes[newSceneId];
-    const sceneWasActive = sceneEl.classList.contains('active');
-    for (const id of sceneOrder) {
-      sceneNodes[id].classList.toggle('active', id === newSceneId);
-    }
+    stageEl.classList.add('active');
+    renderShot(i);
 
-    if (!sceneWasActive && window.__overlays) {
-      const def = scenes[newSceneId] || {};
-      window.__overlays.renderInto(sceneEl, def.overlays);
-      if (window.__overlays.renderSketches) {
-        window.__overlays.renderSketches(sceneEl, def.sketches, {
-          srcFor: (n) => picSketchSrcFor(newSceneId, n),
-        });
-      }
-    }
-
-    // 每条 beat 都给 overlays 一次机会：at.match 命中时 overlay 才入场
+    // 每条 beat 都给 overlays / shot assets 一次机会：at.match 命中时才入场
     if (window.__overlays && window.__overlays.onBeat) {
       // 传 beatMs 让 overlays 按 keyword 字符位置占比算飞入时刻
       const ent = beatAudio[i];
       const beatMsForOverlay = ent ? (ent.end - ent.start) : estimateMs(b.zh);
-      window.__overlays.onBeat(sceneEl, b, beatMsForOverlay);
-    }
-
-    if (!sceneWasActive && document.body.classList.contains('ken-burns')) {
-      sceneEl.style.transition = 'none';
-      void sceneEl.offsetWidth;
-      const ms = computeSceneRunMs(i);
-      sceneEl.style.transition = 'opacity 0.55s ease, transform ' + ms + 'ms ease-out';
-    } else if (!document.body.classList.contains('ken-burns')) {
-      sceneEl.style.transition = '';
+      window.__overlays.onBeat(stageEl, b, beatMsForOverlay);
     }
 
     setProgress(i + 1);
@@ -422,23 +436,7 @@
 
   function enableMotion() {
     document.body.classList.add('motion-enabled');
-    // 当前 scene 已激活但因守门没动效，需要"重新激活"才能触发 keyframes
-    const sceneId = beats[cur] && beats[cur].scene;
-    const sceneEl = sceneId && sceneNodes[sceneId];
-    if (sceneEl && sceneEl.classList.contains('active')) {
-      sceneEl.classList.remove('active');
-      void sceneEl.offsetWidth;
-      sceneEl.classList.add('active');
-      if (window.__overlays) {
-        const def = scenes[sceneId] || {};
-        window.__overlays.renderInto(sceneEl, def.overlays);
-        if (window.__overlays.renderSketches) {
-          window.__overlays.renderSketches(sceneEl, def.sketches, {
-            srcFor: (n) => picSketchSrcFor(sceneId, n),
-          });
-        }
-      }
-    }
+    stageEl.classList.add('active');
   }
 
   function play() {
@@ -521,17 +519,6 @@
     enterRecording();
   });
 
-  // 编辑模式入口；edit-mode.js 在 player.js 之后才注入，所以这里只挂 click，
-  // 真正调用时 window.__editMode 已就绪。ncds.cc 上 edit-mode 自禁用，按钮一并移除。
-  if (/(?:^|\.)ncds\.cc$/i.test(location.hostname)) {
-    $('editBtn').remove();
-  } else {
-    $('editBtn').addEventListener('click', () => {
-      if (window.__editMode && window.__editMode.enter) window.__editMode.enter();
-      else console.error('edit-mode.js 未加载');
-    });
-  }
-
   function enterRecording() {
     pause();
     enableMotion();
@@ -541,9 +528,7 @@
     }
     document.body.classList.add('recording');
 
-    for (const id of sceneOrder) {
-      sceneNodes[id].classList.remove('active');
-    }
+    stageEl.classList.add('active');
     capZh.textContent = '';
     capEn.textContent = '';
     setProgress(1);
@@ -583,7 +568,7 @@
       return;
     }
     if (isRecording) return;
-    // 输入框 / textarea 里别抢键（progress 跳转输入 + 编辑模式 inspector 都有 input）
+    // 输入框 / textarea 里别抢键（progress 跳转输入）
     const tag = (e.target && e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || (e.target && e.target.isContentEditable)) return;
     if (e.key === ' ') {
@@ -615,7 +600,7 @@
       try { a.currentTime = 0; } catch (_) {}
     }
     document.body.classList.add('recording');
-    for (const id of sceneOrder) sceneNodes[id].classList.remove('active');
+    stageEl.classList.add('active');
     capZh.textContent = '';
     capEn.textContent = '';
     setProgress(1);
@@ -643,8 +628,8 @@
     }
   }
 
-  // 给 inspector 改 motion.{enter,image} 后即时刷 sceneEl 的 mo-* class +
-   // toggle active 触发 keyframe restart（编辑模式下 .image-stage 守门已豁免）。
+  // 给外层调试脚本即时刷新 sceneEl 的 mo-* class；
+  // toggle active 触发 keyframe restart。
   function refreshSceneMotion(sceneId) {
     const def = scenes[sceneId];
     const el = sceneNodes[sceneId];
@@ -659,5 +644,5 @@
     }
   }
 
-  window.__player = { play, pause, showBeat, enterRecording, exitRecording, startRecordingPlayback, refreshSceneMotion, beats, scenes, sceneNodes, sceneOrder, audioElements };
+  window.__player = { play, pause, showBeat, enterRecording, exitRecording, startRecordingPlayback, refreshSceneMotion, refreshVisual, beats, scenes, sceneNodes, sceneOrder, audioElements };
 })();

@@ -1,6 +1,6 @@
 """E0 生产引擎骨架单测：状态机 + 晚绑定派发 + 建实例→跑步→出事件→落 store。
 
-派发用注入的 fake registry/recipe（hermetic，不跑真命令）；另有一条用例核真实 015 配方
+派发用注入的 fake registry/recipe（hermetic，不跑真命令）；另有一条用例核真实 final_preview 配方
 的每个 performer 都能在 build_full_registry() 里解析（晚绑定 wiring 为真）。
 """
 
@@ -15,8 +15,8 @@ import pytest
 from ncds_opus_factory.commands import build_full_registry
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
-from ncds_opus_factory.server.engine.pipeline_performers_015 import PERFORMERS_015
-from ncds_opus_factory.server.engine.recipes import PAPER_CARD_TALK_015
+from ncds_opus_factory.server.engine.pipeline_performers_final import PERFORMERS_FINAL
+from ncds_opus_factory.server.engine.recipes import FINAL_PREVIEW
 from ncds_opus_factory.server.engine.types import Recipe, RecipeStep, can_transition
 
 
@@ -40,18 +40,18 @@ def test_step_state_machine_legal_and_illegal():
 
 
 # --------------------------------------------------------------------------- #
-# 2) 真实 015 配方的晚绑定 wiring：每个 performer 都能在 registry 里解析
+# 2) 真实 final_preview 配方的晚绑定 wiring：每个 performer 都能在 registry 里解析
 # --------------------------------------------------------------------------- #
-def test_recipe_015_performers_resolve_in_registry():
-    # 引擎用的合并 registry = bare command ∪ 015 orchestration performer（见 server/state.py）
-    reg = {**build_full_registry(), **PERFORMERS_015}
-    for step in PAPER_CARD_TALK_015.steps:
+def test_recipe_final_preview_performers_resolve_in_registry():
+    # 引擎用的合并 registry = bare command ∪ final_preview orchestration performer（见 server/state.py）
+    reg = {**build_full_registry(), **PERFORMERS_FINAL}
+    for step in FINAL_PREVIEW.steps:
         if step.performer is not None:
             assert step.performer in reg, f"{step.step_id} 的 performer {step.performer} 不在 registry"
-    # E1-b2：各执行步绑到 pct015_* orchestration performer（render 经 run_render_step → render_015.run）
-    assert PAPER_CARD_TALK_015.step("render").performer == "pct015_render"
-    assert "pct015_render" in reg and "render_015" in build_full_registry()  # bare 命令仍在
-    order = PAPER_CARD_TALK_015.topological_order()
+    # E1-b2：各执行步绑到 final_* orchestration performer（render 经 run_render_step → render_final_preview.run）
+    assert FINAL_PREVIEW.step("render").performer == "final_render"
+    assert "final_render" in reg and "render_final_preview" in build_full_registry()  # bare 命令仍在
+    order = FINAL_PREVIEW.topological_order()
     assert order[0] == "input" and order[-1] == "download"
 
 
@@ -103,7 +103,7 @@ _FAKE_RECIPE_CE = Recipe(
 )
 
 
-# 无 performer 的人工编辑/决策步（如 015 lines/storyboard/preview）+ 闭合签名 performer。
+# 无 performer 的人工编辑/决策步（如 final_preview preview）+ 闭合签名 performer。
 _FAKE_RECIPE_HUMAN = Recipe(
     recipe_id="t3",
     name="performer-less human-edit + closed-sig",
@@ -224,18 +224,18 @@ def test_run_step_registry_miss_fails(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------- #
-# 9) 默认构造（真实 build_full_registry + 真实 015 配方）建实例 + 跑直通步
+# 9) 默认构造（真实 build_full_registry + 真实 final_preview 配方）建实例 + 跑直通步
 #    —— 不跑真 render（需 ffmpeg/node_modules），只证默认 runner 的 create/run/store 链通
 # --------------------------------------------------------------------------- #
-def test_default_runner_real_015_create_and_passthrough(tmp_path: Path):
+def test_default_runner_real_final_preview_create_and_passthrough(tmp_path: Path):
     store = InstanceStore(tmp_path / "instances")
-    # 生产同款合并 registry（bare command ∪ 015 performer），与 server/state.py 一致
-    runner = InstanceRunner(store, registry={**build_full_registry(), **PERFORMERS_015})
-    state = runner.create_instance("paper_card_talk_015", inputs={"urls": ["x"]})
+    # 生产同款合并 registry（bare command ∪ final_preview performer），与 server/state.py 一致
+    runner = InstanceRunner(store, registry={**build_full_registry(), **PERFORMERS_FINAL})
+    state = runner.create_instance("final_preview", inputs={"urls": ["x"]})
     iid = state.meta.instance_id
-    assert set(state.steps) == set(PAPER_CARD_TALK_015.step_ids())
+    assert set(state.steps) == set(FINAL_PREVIEW.step_ids())
     # 每个执行步的 performer 都能在合并 registry 里解析（晚绑定 wiring 成立）
-    for step in PAPER_CARD_TALK_015.steps:
+    for step in FINAL_PREVIEW.steps:
         if step.performer is not None:
             assert runner.registry.get(step.performer) is not None, step.step_id
     # 跑直通 input 步：create→run→落 store 全链通
@@ -245,10 +245,10 @@ def test_default_runner_real_015_create_and_passthrough(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------- #
-# 10) 配方自检：悬空 deps / 成环 / 重复 step_id 早抛；015 通过
+# 10) 配方自检：悬空 deps / 成环 / 重复 step_id 早抛；final_preview 通过
 # --------------------------------------------------------------------------- #
 def test_recipe_validate_rejects_bad_recipes():
-    PAPER_CARD_TALK_015.validate()  # 内置配方应通过，不抛
+    FINAL_PREVIEW.validate()  # 内置配方应通过，不抛
 
     dangling = Recipe(recipe_id="d", name="x",
                       steps=[RecipeStep(step_id="a", deps=["nope"])])
@@ -336,7 +336,7 @@ def test_run_step_config_persists_as_provenance(tmp_path: Path):
 
 
 def test_run_step_config_not_splatted_into_closed_signature_performer(tmp_path: Path):
-    # 真实命令是闭合签名（rw/wst/render_015…）；config 含非参数 key（model/profile）
+    # 真实命令是闭合签名（rw/wst/render_final_preview…）；config 含非参数 key（model/profile）
     # 若被 splat 进去必 TypeError → 步骤静默 failed。这里用闭合签名 performer 钉死回归。
     runner = _runner(tmp_path)
     iid = runner.create_instance("t3").meta.instance_id
@@ -564,7 +564,7 @@ def test_finalize_instance_pending_and_running(tmp_path: Path):
 
 # --------------------------------------------------------------------------- #
 # 22) 闸门判据是 intervention 不是 performer：无执行体的 content_edit 步必须停 awaiting_review
-#     （否则 015 的 lines/storyboard/preview 被静默直通，强制闸门失效）
+#     （否则 content_edit 步被静默直通，强制闸门失效）
 # --------------------------------------------------------------------------- #
 def test_performerless_intervention_step_awaits_review(tmp_path: Path):
     runner = _runner(tmp_path)
@@ -590,14 +590,14 @@ def test_performerless_decision_only_step_awaits_review(tmp_path: Path):
     assert st.draft == {}
 
 
-def test_real_015_preview_is_performerless_content_edit_gate(tmp_path: Path):
-    # E1-b2 rebind 后：015 的 lines/storyboard 已绑 pct015_* performer；preview 仍是无 performer 的
+def test_real_final_preview_preview_is_performerless_content_edit_gate(tmp_path: Path):
+    # E1-b2 rebind 后：final_preview 的 lines/storyboard 已绑 final_* performer；preview 仍是无 performer 的
     # content_edit 人工闸（iframe 改 episode）。验证无 performer + intervention → 停 awaiting_review。
     store = InstanceStore(tmp_path / "instances")
-    runner = InstanceRunner(store, registry={**build_full_registry(), **PERFORMERS_015})
-    iid = runner.create_instance("paper_card_talk_015", inputs={"urls": ["x"]}).meta.instance_id
-    assert PAPER_CARD_TALK_015.step("preview").performer is None        # 无 performer
-    assert PAPER_CARD_TALK_015.step("lines").performer == "pct015_lines"  # 已绑 performer
+    runner = InstanceRunner(store, registry={**build_full_registry(), **PERFORMERS_FINAL})
+    iid = runner.create_instance("final_preview", inputs={"urls": ["x"]}).meta.instance_id
+    assert FINAL_PREVIEW.step("preview").performer is None        # 无 performer
+    assert FINAL_PREVIEW.step("lines").performer == "final_lines"  # 已绑 performer
     st = asyncio.run(runner.run_step(iid, "preview", step_inputs={"k": "preview"}))
     assert st.status == "awaiting_review"          # 无 performer 的 content_edit 步停闸门
     assert st.draft == {"k": "preview"}

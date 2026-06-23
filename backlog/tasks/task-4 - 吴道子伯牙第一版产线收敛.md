@@ -21,7 +21,7 @@ priority: high
 
 当前事实边界：
 
-- 当前 web/engine 主链是 `paper_card_talk_015`，目标节点顺序是 `storyboard -> image -> tts -> preview -> render`。
+- 当前 web/engine 主链是 `final_preview`，目标节点顺序是 `storyboard -> image -> tts -> preview -> render`。
 - `commands/wudaozi.py` / `commands/boya.py` 已在 task-3.7 标记为旧 figure_talk 冷链，第一版不复活、不兼容、不强行复用。
 - web 端现有吴道子面板里的 `台词 / 分镜 / 画质` 是实现残留的暴露方式；其中 `lines` 应作为吴道子进入前的隐藏准备，不应让用户把它理解成吴道子职责。
 - 第一版直接把 `image` 调整到 `tts` 前：吴道子先完成视觉方案和画面资产，再交给伯牙做声音。
@@ -41,6 +41,7 @@ priority: high
 - task-4.4 伯牙声音面板包装现有 TTS
 - task-4.5 产线推进、节点状态与文案对齐
 - task-4.6 第一版验收与文档收敛
+- task-4.7 P0 `lines` 字幕保真：不得压缩柳永定稿
 
 ## Non-goals
 

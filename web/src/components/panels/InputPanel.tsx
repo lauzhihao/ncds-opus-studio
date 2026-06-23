@@ -112,7 +112,7 @@ export function InputPanel({ jobId, nodeState, asrStatus, onStarted }: Props) {
     setForking(true);
     try {
       const state = await api.createJob({
-        pipeline_id: 'paper_card_talk_015',
+        pipeline_id: 'final_preview',
         title: `作品 ${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`,
         inputs: { url: '' },
       });

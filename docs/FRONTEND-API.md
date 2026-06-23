@@ -26,7 +26,7 @@
 
 ## 3. `/jobs`：web 内容画布主路径
 
-`/studio` 当前通过 `web/src/api/client.ts` 调 `/jobs`。它是作品/内容视角：一个 job 对应一条 015 画布，节点状态、画布位置、episode、预览和本地文件都围绕 `job_id`。
+`/studio` 当前通过 `web/src/api/client.ts` 调 `/jobs`。它是作品/内容视角：一个 job 对应一条 final_preview 画布，节点状态、画布位置、episode、预览和本地文件都围绕 `job_id`。
 
 常用端点：
 
@@ -41,7 +41,7 @@
 | `GET` | `/jobs/{job_id}/events` | web 画布 SSE |
 | `GET` / `PUT` | `/jobs/{job_id}/episode` | 读写 `02_rw/episode.json` |
 | `GET` / `PUT` | `/jobs/{job_id}/files/{relpath}` | 读写 `video-jobs/{job_id}/` 下文本/媒体文件 |
-| `GET` | `/preview/{job_id}` | 015 预览 iframe |
+| `GET` | `/preview/{job_id}` | final_preview 预览 iframe |
 
 当前 strangler 行为：`NOF_ENGINE_NODES` 未设置时，`lines/storyboard/tts/image/render` 经 facade 走 engine；`asr` 因需要步内增量与后台 enrich，仍走 legacy `_execute_asr_collect`；`rw` 因需要逐模型实时 `model_progress/drafts`，仍走 legacy `_execute_rw`。
 
@@ -101,7 +101,7 @@ es.onmessage = (e) => {
 | `POST` | `/instances/{iid}/finalize` | 根据步骤终态结算实例 |
 | `GET` | `/instances/{iid}/events?level=meta,step` | 分层 SSE |
 
-当前 `RECIPE_REGISTRY` 只注册 `paper_card_talk_015`。`figure_talk` 仍是未来 recipe / cold chain，不要在前端当成可选 engine recipe。
+当前 `RECIPE_REGISTRY` 只注册 `final_preview`。`figure_talk` 仍是未来 recipe / cold chain，不要在前端当成可选 engine recipe。
 
 ## 6. SSE 信封
 

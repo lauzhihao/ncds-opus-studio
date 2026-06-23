@@ -14,7 +14,7 @@ from pathlib import Path
 from ncds_opus_factory.commands import build_full_registry
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
-from ncds_opus_factory.server.engine.pipeline_performers_015 import PERFORMERS_015
+from ncds_opus_factory.server.engine.pipeline_performers_final import PERFORMERS_FINAL
 from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.mock_agents import maybe_mock_registry
 from ncds_opus_factory.server.pipeline_runner import PipelineRunner
@@ -44,13 +44,13 @@ RUNNER: TaskRunner = TaskRunner(
     redis_queue=get_default_queue(),  # 显式传入，确保配额走 Redis 而非内存
 )
 PIPELINE_RUNNER: PipelineRunner = PipelineRunner(VIDEO_JOBS_DIR)
-# 生产引擎（E1）：派发表 = bare command（含 mock 门）∪ 015 orchestration performer（pct015_*）。
-# 015 recipe 各步的 cmd 指向 pct015_*（见 recipes.py），故引擎须能在合并表里解析它们。
-# PERFORMERS_015 是真实编排（不过 mock 门；其内部 helper 自行处理外部依赖）。
+# 生产引擎（E1）：派发表 = bare command（含 mock 门）∪ final_preview orchestration performer（final_*）。
+# final_preview recipe 各步的 cmd 指向 final_*（见 recipes.py），故引擎须能在合并表里解析它们。
+# PERFORMERS_FINAL 是真实编排（不过 mock 门；其内部 helper 自行处理外部依赖）。
 INSTANCE_STORE: InstanceStore = InstanceStore(INSTANCES_DIR)
 INSTANCE_RUNNER: InstanceRunner = InstanceRunner(
     INSTANCE_STORE,
-    {**maybe_mock_registry(build_full_registry()), **PERFORMERS_015},
+    {**maybe_mock_registry(build_full_registry()), **PERFORMERS_FINAL},
 )
 # 绞杀者（E1-b2 #3）：把引擎注入 PipelineRunner，NOF_ENGINE_NODES 命中的节点执行改走引擎。
 # 在两个 runner 都建好后注入，避免 pipeline_runner ↔ state 的 import 环。

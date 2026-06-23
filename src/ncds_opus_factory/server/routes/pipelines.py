@@ -40,23 +40,18 @@ from collections.abc import AsyncGenerator
 from dataclasses import asdict
 from typing import Any
 
-from pathlib import Path
-
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from ncds_opus_core.pipelines import PIPELINE_REGISTRY
+from ncds_opus_core.templates import template_dir as _core_template_dir
 from ncds_opus_factory.server.state import PIPELINE_RUNNER
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# ncds_opus_factory/templates（封面取模板自带 episode + pictures 的首场景图）
-_TEMPLATES_ROOT = Path(__file__).resolve().parents[2] / "templates"
-
 
 def _exc_msg(e: Exception) -> str:
     """KeyError 的 str() 会给消息套一层引号（str(KeyError("x")) == "'x'"）；
@@ -142,7 +137,10 @@ async def pipeline_cover(pipeline_id: str) -> FileResponse:
     无现成图则 404，前端回退到数字 marker。"""
     if pipeline_id not in PIPELINE_REGISTRY:
         raise HTTPException(404, f"pipeline not found: {pipeline_id}")
-    assets = _TEMPLATES_ROOT / pipeline_id / ".015-draft-assets"
+    try:
+        assets = _core_template_dir(pipeline_id) / ".final-preview-assets"
+    except KeyError:
+        raise HTTPException(404, f"pipeline template not found: {pipeline_id}")
     ep_path = assets / "episode.json"
     if not ep_path.is_file():
         raise HTTPException(404, "no template episode")
@@ -332,7 +330,7 @@ async def regen_scene_image_from_preview(job_id: str, scene_id: str) -> dict[str
 
 @router.post("/jobs/{job_id}/nodes/tts/regen-scene/{scene_id}")
 async def regen_tts_scene(job_id: str, scene_id: str) -> dict[str, Any]:
-    """015：重生指定 scene 的整段音频，不影响其他 scene 和下游节点。"""
+    """final_preview：重生指定 scene 的整段音频，不影响其他 scene 和下游节点。"""
     try:
         await PIPELINE_RUNNER.regen_tts_scene(job_id, scene_id)
     except KeyError as e:

@@ -13,6 +13,7 @@
     pipelines: GET /pipelines, GET /pipelines/{id}, GET /pipelines/{id}/cover
     templates: GET /templates, GET /templates/{name}/episode.json
     preview  : GET /preview/{job_id}/* 合成预览 + 编辑写盘端点
+    materials: GET /materials（素材索引占位；未来接数据库/向量库 + 对象存储）
     artifacts: GET /artifacts/{dir,files}/{relpath}（白名单产物服务，移动端审看）
     mock     : POST /mock/ensure
     studio   : /studio SPA（prod 静态 web/dist；NOF_DEV=1 反代 vite）
@@ -47,6 +48,7 @@ from ncds_opus_factory.server.routes import artifacts as artifacts_routes
 from ncds_opus_factory.server.routes import commands as commands_routes
 from ncds_opus_factory.server.routes import instances as instances_routes
 from ncds_opus_factory.server.routes import jobs as jobs_routes
+from ncds_opus_factory.server.routes import materials as materials_routes
 from ncds_opus_factory.server.routes import mock as mock_routes
 from ncds_opus_factory.server.routes import pipelines as pipelines_routes
 from ncds_opus_factory.server.routes import preview as preview_routes
@@ -116,6 +118,7 @@ app.include_router(pipelines_routes.router)
 app.include_router(preview_routes.router)
 app.include_router(mock_routes.router)
 app.include_router(works_routes.router)
+app.include_router(materials_routes.router)
 
 
 # ---------------------------------------------------------------------------

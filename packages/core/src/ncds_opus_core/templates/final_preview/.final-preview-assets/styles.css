@@ -1,6 +1,6 @@
 /* ──────────────────────────────────────────────────────────────────
-   抖音/B站短片样板：1920×1080，纸质暖色底，顶部标题/声明，中央卡片，
-   底部双语字幕。所有数值都走 CSS 变量，方便在 Tweaks 面板里改。
+   成品预览模板：1920×1080，整屏背景图 + 顶部标题/声明 + 内容安全区，
+   底部透明字幕层。所有可编辑项走 CSS 变量，E 模式负责写入 episode.visual。
    ────────────────────────────────────────────────────────────────── */
 
 :root {
@@ -11,9 +11,24 @@
   --ink-soft:    #4a4639;    /* 次级文字 */
   --accent:      #c1392b;    /* 强调红 */
   --accent-soft: #d4a44a;    /* 暖黄 */
-  --band:        #131210;    /* 底部字幕带 */
-  --band-text:   #ffffff;
-  --band-sub:    #cfc9b8;
+  --band:        transparent; /* 底部字幕层默认不遮挡背景图 */
+  --band-text:   var(--ink);
+  --band-sub:    var(--ink-soft);
+
+  /* 成品编辑器写入的布局变量 */
+  --brand-x: 0px;
+  --brand-y: 0px;
+  --logo-size: 60px;
+  --disclaimer-x: 0px;
+  --disclaimer-y: 0px;
+  --asset-x: 0px;
+  --asset-y: 0px;
+  --asset-scale: 1;
+  --text-x: 0px;
+  --text-y: 0px;
+  --text-scale: 1;
+  --text-size: 48px;
+  --text-color: var(--ink);
 
   /* 字号（1920×1080 刻度） */
   --type-title:    44px;     /* 顶部标题 */
@@ -49,13 +64,33 @@ html, body {
   position: relative;
   width: 1920px; height: 1080px;
   transform-origin: center center;
-  background: var(--bg);
+  background: transparent;
+  background-size: cover;
+  background-position: 50% 50%;
+  background-repeat: no-repeat;
   overflow: hidden;
   isolation: isolate;
 }
 
-/* 纸质纹理：细密噪点 + 微微竖向纹路 */
-.stage::before {
+.stage-background {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.stage-background img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.stage-background img[data-fit="fill"] { object-fit: fill; }
+.stage-background img[data-fit="contain"] { object-fit: contain; }
+.stage-background img[data-fit="cover"] { object-fit: cover; }
+
+/* 可选纸质纹理：默认关闭，背景样式以 episode.visual.stage.background 为准。 */
+body.paper-texture .stage::before {
   content: "";
   position: absolute; inset: 0;
   pointer-events: none;
@@ -67,8 +102,8 @@ html, body {
   z-index: 1;
 }
 
-/* 装饰水印：稀疏的小星、细十字、圆点，做平铺；密度低、不抢主视觉 */
-.stage::after {
+/* 可选装饰水印：默认关闭，避免盖住吴道子生成的整屏背景。 */
+body.paper-texture .stage::after {
   content: "";
   position: absolute; inset: 0;
   pointer-events: none;
@@ -94,11 +129,12 @@ html, body {
 .brand {
   display: flex; align-items: center; gap: 18px;
   justify-self: start;
+  transform: translate(var(--brand-x), var(--brand-y));
 }
 
 /* 品牌标：红色方块容器 + 内嵌反白钢笔尖 SVG。color 给 SVG 的 currentColor 用。 */
 .brand-mark {
-  width: 60px; height: 60px;
+  width: var(--logo-size); height: var(--logo-size);
   background: var(--accent);
   color: var(--card);
   display: flex; align-items: center; justify-content: center;
@@ -106,6 +142,12 @@ html, body {
   border-radius: 2px;
 }
 .brand-mark svg { display: block; width: 40px; height: 40px; }
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
 
 .brand-title {
   font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
@@ -123,6 +165,7 @@ html, body {
   font-size: var(--type-disclaim);
   color: var(--ink-soft);
   letter-spacing: .04em;
+  transform: translate(var(--disclaimer-x), var(--disclaimer-y));
 }
 
 /* ── 中央卡片 ────────────────────────────────────────────────────── */
@@ -139,10 +182,10 @@ html, body {
 .card {
   position: relative;
   width: 100%; height: 100%;
-  background: var(--card);
-  border-radius: 28px;
-  box-shadow: 0 24px 48px -28px rgba(0,0,0,.18), inset 0 0 0 1px rgba(0,0,0,.04);
-  overflow: hidden;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
 }
 
 /* image-slot 堆叠层。所有 slot 共占一个绝对区域，靠 active 类切换可见 */
@@ -267,6 +310,17 @@ body.ken-burns .scene {
   z-index: 4;
   gap: 18px;
   overflow: hidden;                /* 防字号过大时撑爆字幕带 */
+}
+
+body.band-dark {
+  --band: #131210;
+  --band-text: #ffffff;
+  --band-sub: #cfc9b8;
+}
+body.band-paper {
+  --band: transparent;
+  --band-text: var(--ink);
+  --band-sub: var(--ink-soft);
 }
 
 .subtitle-zh, .subtitle-en {
@@ -403,13 +457,14 @@ body.ken-burns .scene {
 
 body.recording .controls { display: none; }
 
-/* 录制模式下隐藏所有"编辑器残留"，保证视频不漏 UI */
-body.recording .twk-panel { display: none !important; }       /* React Tweaks 面板 */
+/* 录制模式下隐藏所有编辑 UI，保证视频不漏操作面板 */
+body.recording .fp-edit-panel { display: none !important; }
 body.recording .scene .placeholder { display: none; }         /* player.js 渲染的 ph-id + ph-prompt 提示 */
 /* 图已填充时也隐藏 placeholder 提示文字（image-slot 在 src 加载完成后置 data-filled）。
    用 :has 而非 + 兄弟选择器，因为 image-slot 被包在 light DOM 的 .image-stage
    里（mo-img-* keyframe 的载体），跟 .placeholder 已经不是直接相邻。 */
 .scene:has(image-slot[data-filled]) .placeholder { display: none; }
+.scene.visual-stage .placeholder { display: none; }
 body.recording image-slot::part(ring) { display: none; }      /* image-slot 拖拽指示环 */
 body.recording image-slot::part(empty) { display: none; }     /* image-slot 空状态：图标 + placeholder= 文字 */
 
@@ -496,6 +551,8 @@ body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-iris"] {
   position: absolute; inset: 0;
   pointer-events: none;
   z-index: 4;
+  transform: translate(var(--text-x), var(--text-y)) scale(var(--text-scale));
+  transform-origin: center center;
 }
 
 /* overlay 样式系统：base 把所有"可被 inline 覆盖的样式字段"全部 var() 化，
@@ -509,9 +566,9 @@ body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-iris"] {
   transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg));
   font-family: var(--os-font, "Noto Sans SC", "PingFang SC", sans-serif);
   font-weight: var(--os-weight, normal);
-  font-size: var(--os-size, 48px);
+  font-size: var(--os-size, var(--text-size));
   font-style: var(--os-font-style, normal);
-  color: var(--os-color, var(--ink));
+  color: var(--os-color, var(--text-color));
   letter-spacing: var(--os-letter-spacing, normal);
   text-shadow: var(--os-text-shadow, none);
   text-decoration: var(--os-text-decoration, none);
@@ -909,21 +966,22 @@ body:not(.motion-enabled) .subtitle-en[class*="cap-enter-"] {
 body.tts-missing .tts-notice { display: block; }
 
 /* ─── 简笔画层（storyboard sketches）────────────────────────────────
-   director agent 设计、IMAGE 节点出的白底黑剪影 <img>，叠在容器图上。
-   mix-blend-mode:multiply 把纯白底抠成透明（白×底=底），黑剪影合成到暖纸背景。
-   .sketch-layer 与 .overlay-layer 平级、全屏定位（pos/size 相对整屏），preview(014)
-   与 render(015) 行为一致。入场用独立 sk-enter-* keyframes（与文字 overlay 解耦）。 */
+   director agent 设计、IMAGE 节点出的白底黑剪影 <img>，叠在吴道子背景图上。
+   白底转透明由 overlays.js 的像素处理完成，这里只负责定位、尺寸和动效。
+   .sketch-layer 与 .overlay-layer 平级、全屏定位（pos/size 相对整屏）。
+   入场用独立 sk-enter-* keyframes（与文字 overlay 解耦）。 */
 .sketch-layer {
   position: absolute; inset: 0;
   pointer-events: none;
   z-index: 3;                 /* 在容器图之上、文字 overlay (z-index:4) 之下 */
+  transform: translate(var(--asset-x), var(--asset-y)) scale(var(--asset-scale));
+  transform-origin: center center;
 }
 .scene-sketch {
   position: absolute;
   width: var(--sk-size, 30%);
   height: auto;
   transform: translate(-50%, -50%);
-  mix-blend-mode: multiply;
   pointer-events: none;
   -webkit-user-drag: none;
   user-select: none;

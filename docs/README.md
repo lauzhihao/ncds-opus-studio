@@ -51,7 +51,7 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 
 当前实现事实：
 - **P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）。
-- **生产引擎后端已存在**：`src/ncds_opus_factory/server/engine/`、`routes/instances.py`、`pipeline_performers_015.py` 已落地；`RECIPE_REGISTRY` 当前只注册 `paper_card_talk_015`。
+- **生产引擎后端已存在**：`src/ncds_opus_factory/server/engine/`、`routes/instances.py`、`pipeline_performers_final.py` 已落地；`RECIPE_REGISTRY` 当前只注册 `final_preview`。
 - **web 当前主路径仍是 `/jobs/*`**：`/studio` React 画布调用 `/jobs`、`/pipelines`、`/preview`；`PipelineRunner` 作为 facade 保存 `JobState`，命中节点再转到 engine performer。默认未设 `NOF_ENGINE_NODES` 时，`lines/storyboard/tts/image/render` 走 engine；`asr` 因步内增量与后台 enrich 仍固定走 legacy，`rw` 因逐模型实时 `model_progress/drafts` 面板仍固定走 legacy。
 - **app 当前主路径仍是 `/tasks`**：Flutter 决策视角通过 `TaskRunner` / `nof-worker` 消费任务，还没有切到 `/instances`。
 - **`/instances` 是可用的后端 driver API**，目前主要由测试与内部迁移使用，尚未替代 web/app 前端主路径。

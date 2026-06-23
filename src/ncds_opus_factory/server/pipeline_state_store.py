@@ -194,6 +194,9 @@ class PipelineStateStoreMixin:
 
         ep = self.get_episode(job_id)
         if ep:
+            background = job_dir / "03_image" / "background.webp"
+            if background.is_file():
+                return background
             for b in ep.get("beats") or []:
                 sid = b.get("scene")
                 if sid and not str(sid).startswith("ch"):

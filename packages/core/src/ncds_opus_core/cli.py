@@ -1,7 +1,7 @@
 """core primitive CLI 入口：``nof-core {wst|tst|vid} [...args]``。
 
 只分发**有命令行用例**的 primitive：wst/tst/vid。
-render/render_015/tts 也是 core primitive，但**仅经 server 暴露**（无 CLI 分支，
+render/render_final_preview/tts 也是 core primitive，但**仅经 server 暴露**（无 CLI 分支，
 与拆分前 ncds_opus_factory.cli 的行为一致）。
 
 agent 子命令（asr + guiguzi/...）在 factory：``nof {asr|...}``。

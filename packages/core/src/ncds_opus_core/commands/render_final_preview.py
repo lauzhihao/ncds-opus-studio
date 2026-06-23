@@ -1,7 +1,7 @@
-"""/render_015 —— paper_card_talk_015 模板的一键渲染。
+"""/render_final_preview —— final_preview 模板的一键渲染。
 
-015 按 scene 整段配音（scene-<sid>.mp3 + episode.beats[].audioFile/audioStart/
-audioEnd），渲染用 015 模板自带的 render.mjs（它自己起 http.server + puppeteer
+final_preview 按 scene 整段配音（scene-<sid>.mp3 + episode.beats[].audioFile/audioStart/
+audioEnd），渲染用模板自带的 render.mjs（它自己起 http.server + puppeteer
 录屏 + ffmpeg 按 episode 的 scene mp3 concat 合音）。
 
 调用约定：
@@ -26,13 +26,13 @@ ProgressFn = Callable[[str], None]
 
 from ncds_opus_core.templates import template_dir as _template_dir
 
-# 015 模板已迁入 ncds_opus_core（P1.3）；render_015 复制它到 workdir
-DEFAULT_TEMPLATE_DIR = _template_dir("paper_card_talk_015")
-ASSETS_SUBDIR = ".015-draft-assets"
-HTML_FILENAME = "015-draft.html"
+# final_preview 模板在 ncds_opus_core 内；render_final_preview 复制它到 workdir
+DEFAULT_TEMPLATE_DIR = _template_dir("final_preview")
+ASSETS_SUBDIR = ".final-preview-assets"
+HTML_FILENAME = "final-preview.html"
 RENDER_MJS = "render.mjs"
 DEFAULT_NODE_MODULES = "/tmp/node_modules"
-DEFAULT_OUTPUT_MP4 = "output/015-draft.mp4"  # render.mjs 内部约定的输出路径（相对 assets）
+DEFAULT_OUTPUT_MP4 = "output/final-preview.mp4"  # render.mjs 内部约定的输出路径（相对 assets）
 
 DEFAULT_TIMEOUT = int(os.getenv("NOF_RENDER_TIMEOUT", "1800"))
 
@@ -49,8 +49,8 @@ def _build_workdir(
     workdir: Path,
     on_progress: ProgressFn,
 ) -> Path:
-    """拷模板到 workdir，覆盖 episode/audio/pictures。结构同 015 模板。
-    render.mjs 在 workdir/.015-draft-assets/ 下跑，HERE=该目录，自然读到覆盖后的产物。
+    """拷模板到 workdir，覆盖 episode/audio/pictures。结构同 final_preview 模板。
+    render.mjs 在 workdir/.final-preview-assets/ 下跑，HERE=该目录，自然读到覆盖后的产物。
     """
     if workdir.exists():
         shutil.rmtree(workdir)
@@ -103,7 +103,7 @@ def run(
     cleanup_workdir: bool = False,
     on_progress: ProgressFn = _noop,
 ) -> dict[str, Any]:
-    """渲染 paper_card_talk_015。Returns {output_path, video_size_bytes, workdir}."""
+    """渲染 final_preview。Returns {output_path, video_size_bytes, workdir}."""
     ep_path = Path(episode_path).resolve()
     audio_p = Path(audio_dir).resolve()
     out_p = Path(output_path).resolve()
@@ -129,7 +129,7 @@ def run(
     node_modules = node_modules_path or DEFAULT_NODE_MODULES
     env = {**os.environ, "NODE_PATH": node_modules}
 
-    on_progress("启动 015 render.mjs（自带 http.server + puppeteer + ffmpeg）")
+    on_progress("启动 final_preview render.mjs（自带 http.server + puppeteer + ffmpeg）")
     proc = subprocess.Popen(
         ["node", str(render_script)],
         cwd=str(wd),
@@ -153,7 +153,7 @@ def run(
         snippet = "\n".join(tail).strip()
         raise RuntimeError(f"render.mjs exited {code}\n--- last output ---\n{snippet}")
 
-    # render.mjs 输出到 assets/output/015-draft.mp4，拷到目标
+    # render.mjs 输出到 assets/output/final-preview.mp4，拷到目标
     produced = assets / DEFAULT_OUTPUT_MP4
     if not produced.is_file():
         raise RuntimeError(f"render.mjs 未产出 MP4: {produced}")
@@ -168,8 +168,8 @@ def run(
 
 def _cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="nof render_015",
-        description="渲染 paper_card_talk_015 模板出 MP4（015 render.mjs scene 整段合音）",
+        prog="nof render_final_preview",
+        description="渲染 final_preview 模板出 MP4（scene 整段合音）",
     )
     parser.add_argument("--episode", required=True)
     parser.add_argument("--audio-dir", required=True)

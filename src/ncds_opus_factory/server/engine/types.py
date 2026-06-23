@@ -75,7 +75,7 @@ class RecipeStep(BaseModel):
 
     step_id: str
     label: str = ""
-    cmd: str | None = None         # 命中 build_full_registry() 的 key（render_015/tts/wst…）
+    cmd: str | None = None         # 命中 build_full_registry() 的 key（render_final_preview/tts/wst…）
     agent: str | None = None       # agent 步（liuyong/wudaozi/shenkuo…）；与 cmd 二选一
     deps: list[str] = Field(default_factory=list)
     expensive: bool = False        # 贵步骤（生图/tts/render）；driver 据此在其前插强制闸门
@@ -95,7 +95,7 @@ class Recipe(BaseModel):
     recipe_id: str
     name: str
     description: str = ""
-    template_renderer: str = ""    # 渲染模板（paper_card_talk_015 / figure_talk…）
+    template_renderer: str = ""    # 渲染模板（final_preview / figure_talk…）
     steps: list[RecipeStep]
 
     def step(self, step_id: str) -> RecipeStep:

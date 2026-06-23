@@ -125,6 +125,7 @@
   // data-scene-id + data-overlay-index，定位回 episode.json 的 scenes[id].overlays[index]。
   function renderInto(sceneEl, overlays, opts) {
     const edit = !!(opts && opts.edit);
+    const textCfg = (((window.EPISODE || {}).visual || {}).finalPreview || {}).text || {};
     sceneEl.querySelectorAll(':scope > .overlay-layer').forEach((e) => e.remove());
     if (!Array.isArray(overlays) || overlays.length === 0) return;
 
@@ -164,6 +165,7 @@
       } else if (typeof o.animation === 'string' && o.animation !== 'auto') {
         motionClass = o.animation;
       }
+      if (!motionClass && textCfg.enter) motionClass = motionToClass({ enter: textCfg.enter });
       if (!motionClass) motionClass = pick(ANIMS, seedBase + '#a');
       // motion class 总是挂上, 让 edit 模式下用 .em-replay 预览能拿到 animation-name.
       // 静默由 CSS 'body.edit-mode .scene-overlay:not(.em-replay) { animation: none !important }' 保证.
@@ -321,11 +323,12 @@
   }
 
   // ── 简笔画层（storyboard sketches）─────────────────────────────────
-  // 白底黑剪影 <img>，作为 sceneEl 下的 .sketch-layer（与 .overlay-layer 平级，全屏定位），
-  // CSS mix-blend-mode:multiply 把白底抠成透明、黑剪影合成到背景上。复用 overlay 的
-  // at.match 机制：元素带 data-at-match / data-pending-motion，player 的 onBeat 扫整个
-  // sceneEl 自然命中并触发飞入。motion 用独立 sk-enter-* class，与文字 overlay 的 keyframe
-  // 解耦（避免 typewriter/slide-clip 等文字专用动效套到图片上）。
+  // 白底黑剪影 <img>，作为 sceneEl 下的 .sketch-layer（与 .overlay-layer 平级，全屏定位）。
+  // 预览运行时把近白背景像素转成透明，黑剪影直接合成到吴道子背景图上；不要依赖
+  // mix-blend-mode，因为 scene 的 transform/opacity 会让部分浏览器合成出白底方块。
+  // 复用 overlay 的 at.match 机制：元素带 data-at-match / data-pending-motion，player 的
+  // onBeat 扫整个 sceneEl 自然命中并触发飞入。motion 用独立 sk-enter-* class，与文字
+  // overlay 的 keyframe 解耦（避免 typewriter/slide-clip 等文字专用动效套到图片上）。
   const SK_ENTER = {
     'fade': 'sk-enter-fade', 'zoom-pop': 'sk-enter-zoom', 'zoom-in': 'sk-enter-zoom',
     'drift-in': 'sk-enter-drift', 'bounce': 'sk-enter-bounce', 'ink-bleed': 'sk-enter-ink',
@@ -336,9 +339,62 @@
     return (e && SK_ENTER[e]) || 'sk-enter-zoom';
   }
 
+  const sketchAlphaCache = new Map();
+
+  function transparentizeWhite(src) {
+    if (!src) return Promise.resolve('');
+    if (sketchAlphaCache.has(src)) return sketchAlphaCache.get(src);
+
+    const promise = new Promise((resolve) => {
+      const im = new Image();
+      if (!/^data:/i.test(src)) im.crossOrigin = 'anonymous';
+      im.onload = () => {
+        try {
+          const w = im.naturalWidth || im.width;
+          const h = im.naturalHeight || im.height;
+          if (!w || !h) {
+            resolve(src);
+            return;
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(im, 0, 0);
+          const img = ctx.getImageData(0, 0, w, h);
+          const data = img.data;
+          for (let p = 0; p < data.length; p += 4) {
+            const r = data[p];
+            const g = data[p + 1];
+            const b = data[p + 2];
+            const max = Math.max(r, g, b);
+            const min = Math.min(r, g, b);
+            const neutral = (max - min) <= 18;
+            if (neutral && min >= 236) {
+              data[p + 3] = 0;
+            } else if (neutral && min >= 218) {
+              data[p + 3] = Math.min(data[p + 3], Math.round((236 - min) / 18 * 255));
+            }
+          }
+          ctx.putImageData(img, 0, 0);
+          resolve(canvas.toDataURL('image/webp', 0.92));
+        } catch (err) {
+          console.warn('sketch alpha conversion failed:', src, err);
+          resolve(src);
+        }
+      };
+      im.onerror = () => resolve(src);
+      im.src = src;
+    });
+
+    sketchAlphaCache.set(src, promise);
+    return promise;
+  }
+
   function renderSketches(sceneEl, sketches, opts) {
     const edit = !!(opts && opts.edit);
     const srcFor = (opts && opts.srcFor) || null;
+    const assetCfg = (((window.EPISODE || {}).visual || {}).finalPreview || {}).assets || {};
     sceneEl.querySelectorAll(':scope > .sketch-layer').forEach((e) => e.remove());
     if (!Array.isArray(sketches) || sketches.length === 0) return;
 
@@ -353,17 +409,25 @@
       img.alt = '';
       img.draggable = false;
       const src = srcFor ? srcFor(i + 1) : (sk.src || '');
-      if (src) img.src = src;
+      if (src) {
+        img.style.visibility = 'hidden';
+        transparentizeWhite(src).then((cleanSrc) => {
+          if (!img.isConnected) return;
+          img.src = cleanSrc || src;
+          img.style.visibility = '';
+        });
+      }
       const x = (sk.pos && sk.pos.x != null) ? sk.pos.x : 50;
       const y = (sk.pos && sk.pos.y != null) ? sk.pos.y : 50;
       img.style.left = x + '%';
       img.style.top = y + '%';
-      img.style.setProperty('--sk-size', (sk.size != null ? sk.size : 30) + '%');
-      img.style.setProperty('--sk-dur', ((sk.motion && sk.motion.duration) || 600) + 'ms');
+      img.style.setProperty('--sk-size', (sk.size != null ? sk.size : (assetCfg.size != null ? assetCfg.size : 30)) + '%');
+      const motion = sk.motion || (assetCfg.enter ? { enter: assetCfg.enter, duration: assetCfg.duration } : null);
+      img.style.setProperty('--sk-dur', ((motion && motion.duration) || 600) + 'ms');
       img.dataset.sketchIndex = String(i + 1);
 
-      const enterClass = sketchEnterClass(sk.motion);
-      const delay = (sk.motion && sk.motion.delay != null) ? sk.motion.delay : (i * 150);
+      const enterClass = sketchEnterClass(motion);
+      const delay = (motion && motion.delay != null) ? motion.delay : (i * 150);
       img.style.setProperty('--oa-delay', delay + 'ms');
 
       layer.appendChild(img);

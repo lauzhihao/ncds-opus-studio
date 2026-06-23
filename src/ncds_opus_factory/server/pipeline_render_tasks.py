@@ -11,7 +11,7 @@ from typing import Any
 
 @dataclass
 class PipelineRenderRun:
-    """`PipelineRunner._execute_render` 的一次 015 渲染运行上下文。"""
+    """`PipelineRunner._execute_render` 的一次 final_preview 渲染运行上下文。"""
 
     runner: Any
     job_id: str
@@ -39,7 +39,7 @@ class PipelineRenderRun:
         self.runner._push_progress(self.job_id, "render", text)
 
     async def run(self) -> dict[str, Any]:
-        self.on_progress("启动 render_015（scene 整段合音）")
+        self.on_progress("启动 render_final_preview（scene 整段合音）")
         result = await asyncio.to_thread(
             self.render_run,
             episode_path=str(self.episode_path),

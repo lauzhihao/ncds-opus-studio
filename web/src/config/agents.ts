@@ -1,15 +1,14 @@
 // 画布的 agent 表现层配置（止损重构核心）。
 //
-// 画布底层仍是一条 015 recipe 的 job（input→asr→rw→lines→storyboard→image→tts→
+// 画布底层仍是一条 final_preview recipe 的 job（input→asr→rw→lines→storyboard→image→tts→
 // preview→render→download），这里把这些 engine 节点**按 agent 分组重新呈现**为 6 个有序
-// agent + 卧龙总览。agent 节点是纯前端分组：run/cancel/select 仍打到底层 engine 节点
+// agent。agent 节点是纯前端分组：run/cancel/select 仍打到底层 engine 节点
 // （/jobs/{id}/nodes/{node}/run），真实依赖顺序由后端 recipe 定义。
 //
 // 鬼谷子是唯一没有 engine 步的 agent（virtual member），v1 是薄选题 gate：
 // 沈括(asr) 完成 → 鬼谷子录入/确认选题角度 → 让柳永(rw) 出稿。
 
 import {
-  Clapperboard,
   Crown,
   Lightbulb,
   Music,
@@ -44,8 +43,7 @@ export interface AgentDef {
   members: AgentMember[];
 }
 
-// 6 个有序 agent。顺序即产线：沈括→鬼谷子→柳永→吴道子→伯牙→成片。
-// 卧龙不在产线顺序里，作任务级总览（见 WOLONG）。
+// 6 个有序 agent。顺序即产线：沈括→鬼谷子→柳永→吴道子→伯牙→卧龙。
 export const AGENTS: AgentDef[] = [
   {
     id: 'shenkuo',
@@ -99,28 +97,20 @@ export const AGENTS: AgentDef[] = [
   },
   {
     id: 'render',
-    name: '成片',
-    role: '审片合成',
-    description: '审片、渲染并导出最终 MP4。',
-    icon: Clapperboard,
+    name: '卧龙',
+    role: '统筹出片',
+    description: '统筹成片检查、最终渲染与 MP4 导出。',
+    icon: Crown,
     members: [
       { node: 'preview', label: '成片检查' },
-      { node: 'render', label: '合成' },
-      { node: 'download', label: '下载' },
+      { node: 'render', label: '渲染出片' },
     ],
   },
 ];
 
-// 卧龙：任务级总览（顶部条），统领全局，不占产线顺序位。
-export const WOLONG = {
-  name: '卧龙',
-  role: '统领全局',
-  icon: Crown,
-} as const;
-
 // —— 节点 → agent 反查 / 推进链 ——
-// 画布按用户顺序（沈括→鬼谷子→柳永→吴道子→伯牙→渲染）展示，但**推进由引擎真实
-// 数据依赖驱动**：015 链是 storyboard→image→tts，所以吴道子先补齐画面资产，
+// 画布按用户顺序（沈括→鬼谷子→柳永→吴道子→伯牙→卧龙）展示，但**推进由引擎真实
+// 数据依赖驱动**：final_preview 链是 storyboard→image→tts，所以吴道子先补齐画面资产，
 // 再交给伯牙配音。
 
 // 底层 job 节点 → 所属 agentId（含 virtual 的 guiguzi）。
@@ -147,7 +137,8 @@ export const NODE_NEXT: Record<string, string | null> = {
   image: 'tts',
   tts: 'preview',
   preview: 'render',
-  render: 'download',
+  // 下载不再单独占页面；渲染完成后在 render 面板直接暴露 MP4 下载。
+  render: null,
   download: null,
 };
 
@@ -196,6 +187,14 @@ export function agentMemberStatuses(
   jobNodes: Record<string, NodeState> | undefined,
   ctx: { angleConfirmed?: boolean } = {},
 ): NodeStatus[] {
+  if (agent.id === 'render') {
+    const renderStatus = jobNodes?.render?.status ?? 'idle';
+    return agent.members.map((m) => {
+      if (m.node === 'preview') return renderStatus === 'idle' ? 'idle' : 'done';
+      if (m.node === 'render') return renderStatus;
+      return jobNodes?.[m.node]?.status ?? 'idle';
+    });
+  }
   return agent.members.map((m) => {
     if (m.virtual) return ctx.angleConfirmed ? 'done' : 'idle';
     return jobNodes?.[m.node]?.status ?? 'idle';
@@ -217,6 +216,13 @@ export function agentStatus(
 ): NodeStatus {
   if (agent.id === 'wudaozi') {
     return wudaoziStatus(jobNodes);
+  }
+  if (agent.id === 'render') {
+    const render = jobNodes?.render?.status ?? 'idle';
+    if (render === 'failed') return 'failed';
+    if (render === 'running' || render === 'queued') return 'running';
+    if (render === 'done') return 'done';
+    return 'idle';
   }
   return aggregateAgentStatus([
     ...memberStatuses(agent.preflight ?? [], jobNodes),
@@ -288,11 +294,12 @@ function nodeAgentName(node: string): string {
 // > 首个未完成真实节点所属 agent(绿) > 全 idle 则首个 agent(绿)。
 export function jobProgress(nodeStatus: Record<string, NodeStatus> | undefined): JobProgress {
   const ns = nodeStatus ?? {};
-  const failed = NODE_ORDER.find((n) => ns[n] === 'failed');
+  if (ns.render === 'done') return { light: 'green', agentName: '已出片' };
+  const failed = NODE_ORDER.find((n) => n !== 'preview' && ns[n] === 'failed');
   if (failed) return { light: 'red', agentName: nodeAgentName(failed) };
-  const active = NODE_ORDER.find((n) => ns[n] === 'running' || ns[n] === 'queued');
+  const active = NODE_ORDER.find((n) => n !== 'preview' && (ns[n] === 'running' || ns[n] === 'queued'));
   if (active) return { light: 'yellow', agentName: nodeAgentName(active) };
-  const allDone = NODE_ORDER.length > 0 && NODE_ORDER.every((n) => ns[n] === 'done');
+  const allDone = NODE_ORDER.length > 0 && NODE_ORDER.every((n) => n === 'preview' || ns[n] === 'done');
   if (allDone) return { light: 'green', agentName: '已出片' };
   const next = NODE_ORDER.find((n) => ns[n] !== 'done') ?? NODE_ORDER[0] ?? '';
   return { light: 'green', agentName: nodeAgentName(next) };

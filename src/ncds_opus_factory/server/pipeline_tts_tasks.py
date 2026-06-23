@@ -12,7 +12,7 @@ from typing import Any
 
 @dataclass
 class PipelineTtsRun:
-    """`PipelineRunner._execute_tts` 的一次 015 配音运行上下文。"""
+    """`PipelineRunner._execute_tts` 的一次 final_preview 配音运行上下文。"""
 
     runner: Any
     job_id: str

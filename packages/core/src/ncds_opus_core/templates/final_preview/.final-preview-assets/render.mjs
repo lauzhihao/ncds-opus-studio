@@ -1,4 +1,4 @@
-/* 离线渲染：把 012 跑成 1920×1080 30fps MP4，音频从 audio/*.mp3 合成接进去。
+/* 离线渲染：把 final-preview.html 跑成 1920×1080 30fps MP4，音频从 audio/*.mp3 合成接进去。
  *
  * 流程：
  *   1. 起一个 python http.server 让 chrome 能拿到完整页面
@@ -10,9 +10,9 @@
  *   7. ffmpeg 把视频和音频合到最终 mp4
  *
  * 用法（仓库根目录）：
- *   node .015-draft-assets/render.mjs
+ *   node .final-preview-assets/render.mjs
  *
- * 输出：.015-draft-assets/output/015-draft.mp4
+ * 输出：.final-preview-assets/output/final-preview.mp4
  *
  * 需要：
  *   - /usr/bin/google-chrome
@@ -31,11 +31,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..');
 const AUDIO_DIR = path.join(HERE, 'audio');
 const OUTPUT_DIR = path.join(HERE, 'output');
-const OUTPUT_MP4 = path.join(OUTPUT_DIR, '015-draft.mp4');
-const TMP_VIDEO = '/tmp/012-render-silent.mp4';
-const TMP_AUDIO = '/tmp/012-render-audio.mp3';
+const OUTPUT_MP4 = path.join(OUTPUT_DIR, 'final-preview.mp4');
+const TMP_VIDEO = '/tmp/final-preview-render-silent.mp4';
+const TMP_AUDIO = '/tmp/final-preview-render-audio.mp3';
 const HTTP_PORT = 8765;
-const URL_012 = `http://127.0.0.1:${HTTP_PORT}/015-draft.html`;
+const URL_FINAL_PREVIEW = `http://127.0.0.1:${HTTP_PORT}/final-preview.html`;
 const FPS = 30;
 const INTRO_MS = 300;   // recorder 起来到 startRecordingPlayback 之间的空白纸面段
 const GAP_MS = 80;      // beat 之间的"喘息"间隔，必须跟 player.js 里的 setTimeout 一致
@@ -88,12 +88,12 @@ async function buildAudioTrack() {
   // 是第一字幕，没 leading 空白 → audio 也不再需要 intro silence。
   log(`audio: ${files.length} scene mp3s + ${GAP_MS}ms gaps + ${ENDING_MS}ms tail silence`);
 
-  const silenceGap = '/tmp/012-silence-gap.mp3';
-  const silenceTail = '/tmp/012-silence-tail.mp3';
+  const silenceGap = '/tmp/final-preview-silence-gap.mp3';
+  const silenceTail = '/tmp/final-preview-silence-tail.mp3';
   await makeSilence(GAP_MS / 1000, silenceGap);
   await makeSilence(ENDING_MS / 1000, silenceTail);
 
-  const concatList = '/tmp/012-concat.txt';
+  const concatList = '/tmp/final-preview-concat.txt';
   const lines = [];
   for (let i = 0; i < files.length; i++) {
     lines.push(`file '${path.join(HERE, files[i])}'`);
@@ -146,7 +146,7 @@ async function main() {
   try {
     const page = await browser.newPage();
     log('loading page');
-    await page.goto(URL_012, { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.goto(URL_FINAL_PREVIEW, { waitUntil: 'networkidle0', timeout: 30000 });
     // 等所有 audio 元素 readyState >= 1（metadata loaded），player 才能算 Ken Burns 时长
     await page.waitForFunction(
       () =>

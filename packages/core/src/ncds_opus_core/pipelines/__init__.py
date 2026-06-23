@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-from ncds_opus_core.pipelines.paper_card_talk_015 import (
-    PIPELINE as PAPER_CARD_TALK_015,
+from ncds_opus_core.pipelines.final_preview import (
+    PIPELINE as FINAL_PREVIEW,
 )
 from ncds_opus_core.pipelines.types import (
     NodeStatus,
@@ -15,9 +15,9 @@ from ncds_opus_core.pipelines.types import (
     PipelineNode,
 )
 
-# 单模板：paper_card_talk_015（scene 整段配音 + 字级时间戳 + 分镜简笔画）
+# 单模板：final_preview（scene 整段配音 + 字级时间戳 + 分镜简笔画）
 PIPELINE_REGISTRY: dict[str, PipelineDef] = {
-    PAPER_CARD_TALK_015.id: PAPER_CARD_TALK_015,
+    FINAL_PREVIEW.id: FINAL_PREVIEW,
 }
 
 

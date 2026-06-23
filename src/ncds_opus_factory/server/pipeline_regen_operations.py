@@ -99,21 +99,43 @@ class PipelineRegenOperationsMixin:
         return scene_id in {"background", "__background"}
 
     def _background_prompt(self, ep: dict[str, Any]) -> str:
+        visual = ep.get("visual") if isinstance(ep.get("visual"), dict) else {}
+        stage = visual.get("stage") if isinstance(visual.get("stage"), dict) else {}
+        bg2 = stage.get("background") if isinstance(stage.get("background"), dict) else {}
+        prompt2 = str((bg2 or {}).get("prompt") or "").strip()
+        if prompt2:
+            return prompt2
         image_cfg = ep.get("image") if isinstance(ep.get("image"), dict) else {}
         bg = image_cfg.get("background") if isinstance(image_cfg.get("background"), dict) else {}
         prompt = str((bg or {}).get("prompt") or "").strip()
         if prompt:
             return prompt
-        for sc in (ep.get("scenes") or {}).values():
-            if isinstance(sc, dict) and str(sc.get("prompt") or "").strip():
-                return f"{sc['prompt']}，统一暖纸背景，大面积留白，无文字，无数字。"
-        return "暖纸纸质底，极简留白背景，细腻纸张纹理，无文字，无数字。"
+        for shot in visual.get("shots") or []:
+            if isinstance(shot, dict) and str(shot.get("intent") or "").strip():
+                return (
+                    f"{shot['intent']}，16:9 全幅暖纸质感页面背景，淡雅远景层次贯穿整张画面，"
+                    "主体元素留给前景素材，无文字，无数字。"
+                )
+        return "16:9 全幅暖纸质感页面背景，淡雅远景层次贯穿整张画面，细腻纸张纹理，主体元素留给前景素材，无文字，无数字。"
 
     def _write_background_image_file(self, job_id: str, ep: dict[str, Any]) -> None:
+        visual = ep.get("visual") if isinstance(ep.get("visual"), dict) else {}
+        visual = dict(visual or {})
+        stage = visual.get("stage") if isinstance(visual.get("stage"), dict) else {}
+        stage = dict(stage or {})
+        vbg = stage.get("background") if isinstance(stage.get("background"), dict) else {}
+        vbg = dict(vbg or {})
+        vbg["imageFile"] = "pictures/background.webp"
+        if not str(vbg.get("prompt") or "").strip():
+            vbg["prompt"] = self._background_prompt(ep)
+        stage["background"] = vbg
+        visual["stage"] = stage
+        ep["visual"] = visual
+
         image_cfg = ep.get("image") if isinstance(ep.get("image"), dict) else {}
         image_cfg = dict(image_cfg or {})
         bg = image_cfg.get("background") if isinstance(image_cfg.get("background"), dict) else {}
-        bg = dict(bg or {})
+        bg = {**vbg, **dict(bg or {})}
         bg["imageFile"] = "pictures/background.webp"
         if not str(bg.get("prompt") or "").strip():
             bg["prompt"] = self._background_prompt(ep)
@@ -130,18 +152,30 @@ class PipelineRegenOperationsMixin:
         n: int,
         rel: str,
         prompt: str,
+        variants: list[dict[str, Any]] | None = None,
+        selected_variant_relpath: str | None = None,
     ) -> None:
         for it in items:
-            if it.get("scene_id") != scene_id:
+            if it.get("shot_id") != scene_id:
                 continue
-            sk_items = list(it.get("sketches") or [])
+            sk_items = list(it.get("assets") or [])
             hit = next((s for s in sk_items if s.get("index") == n), None)
             if hit is not None:
                 hit["image_relpath"] = rel
+                hit["status"] = "done"
                 hit.pop("error", None)
+                if variants is not None:
+                    hit["variants"] = variants
+                if selected_variant_relpath is not None:
+                    hit["selected_variant_relpath"] = selected_variant_relpath
             else:
-                sk_items.append({"index": n, "prompt": prompt, "image_relpath": rel})
-            it["sketches"] = sk_items
+                item = {"index": n, "prompt": prompt, "image_relpath": rel, "status": "done"}
+                if variants is not None:
+                    item["variants"] = variants
+                if selected_variant_relpath is not None:
+                    item["selected_variant_relpath"] = selected_variant_relpath
+                sk_items.append(item)
+            it["assets"] = sk_items
             break
 
     async def _mock_regen_delay(self) -> None:
@@ -373,7 +407,7 @@ class PipelineRegenOperationsMixin:
         await self.regen_scene_image_from_preview(job_id, scene_id)
 
     async def regen_image_sketch(self, job_id: str, scene_id: str, n: int) -> str:
-        """重生 image 节点里指定 scene 的第 n 幅简笔画（1-based）。"""
+        """重生 image 节点里指定 shot 的第 n 个前景素材（1-based）。"""
         state = self._load(job_id)
         if state.mock:
             return await self._mock_regen_sketch(job_id, scene_id, n)
@@ -386,53 +420,69 @@ class PipelineRegenOperationsMixin:
         ep = self.get_episode(job_id)
         if ep is None:
             raise ValueError("episode.json not found")
-        sc = (ep.get("scenes") or {}).get(scene_id)
-        if not isinstance(sc, dict):
-            raise ValueError(f"unknown scene: {scene_id}")
-        sketches = sc.get("sketches") or []
-        if n < 1 or n > len(sketches):
-            raise ValueError(f"sketch index out of range: {n}")
-        sp = str((sketches[n - 1] or {}).get("prompt") or "").strip()
+        visual = ep.get("visual") if isinstance(ep.get("visual"), dict) else {}
+        shots = [s for s in (visual.get("shots") or []) if isinstance(s, dict)]
+        shot = next((s for s in shots if str(s.get("shotId") or s.get("id") or "") == scene_id), None)
+        if not isinstance(shot, dict):
+            raise ValueError(f"unknown shot: {scene_id}")
+        assets = [a for a in (shot.get("assets") or []) if isinstance(a, dict)]
+        if n < 1 or n > len(assets):
+            raise ValueError(f"asset index out of range: {n}")
+        asset = assets[n - 1] or {}
+        aid = str(asset.get("id") or f"a{n}").strip() or f"a{n}"
+        sp = str(asset.get("prompt") or "").strip()
         if not sp:
-            raise ValueError(f"sketch {scene_id}-sk{n} has empty prompt")
+            raise ValueError(f"asset {scene_id}-{aid} has empty prompt")
 
         image_cfg = ep.get("image") or {}
         quality = image_cfg.get("quality") or "auto"
         no_text_hint = image_cfg.get("noTextHint") or ""
-        sketch_size = image_cfg.get("sketchSize") or "1024x1024"
+        sketch_size = image_cfg.get("assetSize", image_cfg.get("sketchSize")) or "1024x1024"
         sketch_prefix = str(image_cfg.get("sketchStylePrefix") or "").strip()
+        count = self._bounded_image_count(image_cfg.get("assetN", image_cfg.get("sketchN")))
         full = " ".join(p for p in (sketch_prefix, sp, no_text_hint) if p)
 
-        rel = f"03_image/{scene_id}-sk{n}.webp"
+        rel = f"03_image/{scene_id}-{aid}.webp"
         target = self.video_jobs_dir / job_id / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_file():
-            target.unlink()
+        self._unlink_scene_candidates(target, count)
 
         def on_progress(text: str) -> None:
-            self._push_progress(job_id, "image", f"[regen {scene_id}-sk{n}] {text}")
+            self._push_progress(job_id, "image", f"[regen {scene_id}-{aid}] {text}")
 
         on_progress("前景素材重生中…")
-        await asyncio.to_thread(
+        paths = await asyncio.to_thread(
             media_helpers._generate_scene_image,
-            scene_id=f"{scene_id}-sk{n}", prompt=full, size=sketch_size,
-            quality=quality, target=target, job_id=job_id,
+            scene_id=f"{scene_id}-{aid}", prompt=full, size=sketch_size,
+            quality=quality, target=target, job_id=job_id, n=count,
         )
+        variants = [
+            {"index": index, "image_relpath": self._rel_to_job(job_id, path), "selected": index == 1}
+            for index, path in enumerate(paths, start=1)
+        ]
 
         self._update_image_items(
             job_id,
-            lambda items: self._put_sketch_image(items, scene_id=scene_id, n=n, rel=rel, prompt=sp),
+            lambda items: self._put_sketch_image(
+                items,
+                scene_id=scene_id,
+                n=n,
+                rel=rel,
+                prompt=sp,
+                variants=variants,
+                selected_variant_relpath=variants[0]["image_relpath"] if variants else rel,
+            ),
         )
         return rel
 
     async def regen_tts_scene(self, job_id: str, scene_id: str) -> None:
-        """015：重生指定 scene 的整段音频。"""
+        """final_preview：重生指定 scene 的整段音频。"""
         state = self._load(job_id)
         if state.mock:
             await self._mock_regen_tts(job_id, scene_id)
             return
-        if state.pipeline_id != "paper_card_talk_015":
-            raise ValueError("scene 级重生仅 015 pipeline 支持")
+        if state.pipeline_id != "final_preview":
+            raise ValueError("scene 级重生仅 final_preview pipeline 支持")
         n = state.nodes.get("tts")
         if n is None:
             raise KeyError("tts node not found")
@@ -447,7 +497,7 @@ class PipelineRegenOperationsMixin:
         if not any((b.get("scene") == scene_id) for b in (ep.get("beats") or [])):
             raise ValueError(f"unknown scene: {scene_id}")
 
-        tts_gen = _template_dir("paper_card_talk_015") / ".015-draft-assets" / "tts_gen.py"
+        tts_gen = _template_dir("final_preview") / ".final-preview-assets" / "tts_gen.py"
         audio_dir = job_dir / "04_tts"
 
         def on_progress(text: str) -> None:
@@ -475,34 +525,58 @@ class PipelineRegenOperationsMixin:
         self._emit_node_status(job_id, "tts", n)
 
     async def _mock_regen_image(self, job_id: str, scene_id: str) -> str:
-        """mock：从 015 素材拷背景图或旧 scene 图到 03_image/{scene_id}.webp。"""
+        """mock：从 final_preview 素材拷背景图或旧 scene 图到 03_image/{scene_id}.webp。"""
         from ncds_opus_factory.server import mock as mock_mod
         await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
         rel = f"03_image/{scene_id}.webp"
         target = self.video_jobs_dir / job_id / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         src_pic = mock_mod._source_dir() / "pictures" / f"{scene_id}.webp"
+        if self._is_background_scene(scene_id) and not src_pic.is_file():
+            for cand in sorted((mock_mod._source_dir() / "pictures").glob("*.webp")):
+                src_pic = cand
+                break
         if src_pic.is_file():
             await asyncio.to_thread(shutil.copyfile, src_pic, target)
         if target.is_file():
-            self._update_image_items(
-                job_id,
-                lambda items: self._put_scene_image(items, scene_id, rel),
-                touch_job=False,
-            )
+            if self._is_background_scene(scene_id):
+                self._update_image_background(
+                    job_id,
+                    lambda bg: self._put_background_image(bg, rel, [], rel),
+                    touch_job=False,
+                )
+            else:
+                self._update_image_items(
+                    job_id,
+                    lambda items: self._put_scene_image(items, scene_id, rel),
+                    touch_job=False,
+                )
         return rel
 
     async def _mock_regen_sketch(self, job_id: str, scene_id: str, n: int) -> str:
-        """mock：源素材一般无前景素材文件，有则拷、没有用 scene 图占位。"""
+        """mock：源素材一般无前景素材文件，有则拷、没有用背景图占位。"""
         from ncds_opus_factory.server import mock as mock_mod
         await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
-        rel = f"03_image/{scene_id}-sk{n}.webp"
+        ep = self.get_episode(job_id) or {}
+        shot = next(
+            (
+                s for s in ((ep.get("visual") or {}).get("shots") or [])
+                if isinstance(s, dict) and str(s.get("shotId") or s.get("id") or "") == scene_id
+            ),
+            {},
+        )
+        assets = [a for a in (shot.get("assets") or []) if isinstance(a, dict)] if isinstance(shot, dict) else []
+        asset = assets[n - 1] if 1 <= n <= len(assets) else {}
+        aid = str((asset or {}).get("id") or f"a{n}").strip() or f"a{n}"
+        rel = f"03_image/{scene_id}-{aid}.webp"
         target = self.video_jobs_dir / job_id / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         pics = mock_mod._source_dir() / "pictures"
-        cand = pics / f"{scene_id}-sk{n}.webp"
+        cand = pics / f"{scene_id}-{aid}.webp"
         if not cand.is_file():
-            cand = pics / f"{scene_id}.webp"
+            cand = pics / "background.webp"
+        if not cand.is_file():
+            cand = next(iter(sorted(pics.glob("*.webp"))), cand)
         if cand.is_file():
             await asyncio.to_thread(shutil.copyfile, cand, target)
         if target.is_file():

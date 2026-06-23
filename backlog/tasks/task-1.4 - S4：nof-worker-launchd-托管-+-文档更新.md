@@ -43,6 +43,6 @@ S3 已落地：Redis 队列 + 配额下沉 + 取消接线 + `nof-worker`(server/
 - **启停三件套**：`redis`(队列信道) + `nof-server`(:8810 HTTP/SSE/入队，`cli_main`) + `nof-worker`(执行，`server.worker:main`)。三者各 import state 各指同一磁盘 + 各连同一 Redis。文档"本地运行"章节要从"单 nof-server"改成这三件。
 - **多 worker 禁区**：**同 cmd 只能单个 nof-worker 进程**(出队 CAS 与 wolong concurrency=1 是协程级单进程原子、跨进程不成立)。S4 启动脚本应有 pid 锁防重复起。水平扩展需先把 CAS 换 Redis Lua/分布式锁 + wolong `SET NX`——**本期禁止起多 worker**。
 - **降级行为(给运维/文档)**：redis 挂时 → 8810 `POST /tasks` 返 **503 + meta failed**(不留幽灵 pending)；worker 4 个 loop **ping 探活静默空转**(不刷垃圾 failed)；worker `brpop` **指数退避不退出进程**；redis 恢复后 worker `recover_and_start` DEL 旧队列 + 磁盘 pending 全量重投补回。
-- **AC#2 收窄口径(scope a)**：S3 只把 **TaskRunner 类 agent 任务**(shenkuo/wolong/liuyong/guiguzi 经 POST /tasks)移到 worker；**web 画布 run_node + 015 引擎 run_step 执行仍在 8810**(S3.x 迁，前置=`InstanceRunner.EngineEventBus` 改 events.jsonl 文件 tail)。文档别把"8810 完全不执行任何东西"写绝对。
+- **AC#2 收窄口径(scope a)**：S3 只把 **TaskRunner 类 agent 任务**(shenkuo/wolong/liuyong/guiguzi 经 POST /tasks)移到 worker；**web 画布 run_node + final_preview 引擎 run_step 执行仍在 8810**(S3.x 迁，前置=`InstanceRunner.EngineEventBus` 改 events.jsonl 文件 tail)。文档别把"8810 完全不执行任何东西"写绝对。
 - **更新记忆 [[nof-server-restart]]**：S3 后"重启 8810 不再打断在跑任务"(执行已在 nof-worker)；但**重启 8810 不影响 worker、重启/改 worker 才会动在跑任务**——重启 worker 前仍要自检无在跑 job。
 - 设计文档 `BACKLOG/docs/S3-redis-worker-design.md` 有一处陈旧注释(line ~389 "q.get()")待随手改 brpop（非阻塞，S4 或顺手清）。

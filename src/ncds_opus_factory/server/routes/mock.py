@@ -1,4 +1,4 @@
-"""Mock 路由：种一个 015 素材的 mock 作品（开发预览用）。
+"""Mock 路由：种一个 final_preview 素材的 mock 作品（开发预览用）。
 
 studio 前端 URL 带 mock=1 时调 POST /mock/ensure 确保 mock 作品存在，返回其 job_id。
 """

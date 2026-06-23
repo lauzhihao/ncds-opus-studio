@@ -76,13 +76,13 @@ class PipelineRunner(
             self._engine_nodes = {n.strip() for n in _env.split(",") if n.strip()}
 
     async def _execute_tts(self, job_id: str) -> dict[str, Any]:
-        """Legacy fallback: synthesize scene-level 015 audio."""
+        """Legacy fallback: synthesize scene-level final_preview audio."""
         job_dir = self.video_jobs_dir / job_id
         ep = self.get_episode(job_id)
         if ep is None:
             raise ValueError("episode.json not found; run rw first (or manually seed it)")
 
-        tts_gen = _template_dir("paper_card_talk_015") / ".015-draft-assets" / "tts_gen.py"
+        tts_gen = _template_dir("final_preview") / ".final-preview-assets" / "tts_gen.py"
         return await PipelineTtsRun(
             runner=self,
             job_id=job_id,
@@ -185,9 +185,9 @@ class PipelineRunner(
         ).run()
 
     async def _execute_render(self, job_id: str) -> dict[str, Any]:
-        """Legacy fallback: render 015 MP4."""
+        """Legacy fallback: render final_preview MP4."""
         job_dir = self.video_jobs_dir / job_id
-        from ncds_opus_factory.commands import render_015 as render_cmd
+        from ncds_opus_factory.commands import render_final_preview as render_cmd
 
         return await PipelineRenderRun(
             runner=self,

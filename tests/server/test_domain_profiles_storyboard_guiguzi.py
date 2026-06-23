@@ -118,11 +118,15 @@ class TestRunStoryboardStepDomainInjection:
     def _fake_opus_director(self, captured_prompts: list[str]):
         """捕获 user_prompt 以便断言 domain 注入，同时返回合法 director JSON。"""
         director_json = json.dumps({
-            "scenes": {
-                "s1": {"prompt": "x", "group": "g1", "imageFit": "contain",
-                       "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
+            "visual": {
+                "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+                "shots": [
+                    {"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "x",
+                     "assets": [{"id": "a1", "prompt": "asset one"}]},
+                    {"beatIndex": 2, "shotId": "b002", "group": "g1", "intent": "y",
+                     "assets": [{"id": "a1", "prompt": "asset two"}]},
+                ],
             },
-            "sceneMap": {"1": "s1", "2": "s1"},
         }, ensure_ascii=False)
 
         def _opus(user_prompt: str, system_prompt: str, model_id: str = "") -> str:
@@ -132,11 +136,15 @@ class TestRunStoryboardStepDomainInjection:
 
     def _fake_storyboard_fallback(self, captured_prompts: list[str]):
         director_json = json.dumps({
-            "scenes": {
-                "s1": {"prompt": "x", "group": "g1", "imageFit": "contain",
-                       "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
+            "visual": {
+                "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+                "shots": [
+                    {"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "x",
+                     "assets": [{"id": "a1", "prompt": "asset one"}]},
+                    {"beatIndex": 2, "shotId": "b002", "group": "g1", "intent": "y",
+                     "assets": [{"id": "a1", "prompt": "asset two"}]},
+                ],
             },
-            "sceneMap": {"1": "s1", "2": "s1"},
         }, ensure_ascii=False)
 
         def _fallback(user_prompt: str, system_prompt: str, on_progress, *, parse, **_: Any) -> Any:
@@ -148,7 +156,7 @@ class TestRunStoryboardStepDomainInjection:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """domain=finance 且 profile.image_style 非空 → user_prompt 含 image_style 内容。"""
-        from ncds_opus_factory.server.engine import pipeline_performers_015 as perf
+        from ncds_opus_factory.server.engine import pipeline_performers_final as perf
         from ncds_opus_factory.server import domain_profiles as dp_mod
 
         monkeypatch.setattr(dp_mod, "get_profile", _stub_get_profile)
@@ -169,7 +177,7 @@ class TestRunStoryboardStepDomainInjection:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """domain 为 None → user_prompt 不含领域视觉段（回退原行为）。"""
-        from ncds_opus_factory.server.engine import pipeline_performers_015 as perf
+        from ncds_opus_factory.server.engine import pipeline_performers_final as perf
         from ncds_opus_factory.server import domain_profiles as dp_mod
 
         monkeypatch.setattr(dp_mod, "get_profile", _stub_get_profile)
@@ -189,7 +197,7 @@ class TestRunStoryboardStepDomainInjection:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """未知 domain → get_profile 返回 None → 无注入，回退默认行为。"""
-        from ncds_opus_factory.server.engine import pipeline_performers_015 as perf
+        from ncds_opus_factory.server.engine import pipeline_performers_final as perf
 
         monkeypatch.setattr(perf, "_get_domain_profile", _stub_get_profile)
 

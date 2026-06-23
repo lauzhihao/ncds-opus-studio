@@ -1,38 +1,53 @@
-"""STORYBOARD（分镜）阶段的 director agent —— prompt 构造 + 输出解析。
+"""STORYBOARD（视觉方案）director agent：prompt 构造 + 输出解析。
 
-职责边界
---------
-- rw / lines 只负责脚本：把源稿改写、结构化成逐句字幕 beats[]（zh/en）。
-- 本模块对应的 director agent 只负责**视觉层**：读已敲定的 beats，
-  先为全片产出 1 张统一背景图 prompt，再把脚本切成子场景（每个叙事段落 2-3 个子场景），
-  为每个子场景产出 1-6 幅前景素材 sketch（单格黑剪影元素，含位置 / 入场动效 / 跟哪句台词关键词飞入）
-- 出图代码拿本模块解析后的 scenes{} 机械调 gpt-image-2，不做任何创意决策。
+吴道子的职责边界：
+- 上游 lines 只负责脚本，把定稿结构化成逐句字幕 ``beats[]``。
+- 本模块只负责视觉层：一张全片统一舞台背景 + 每条完整字幕一个视觉 shot。
+- ``beats[].scene`` 不再驱动画面切换；它只保留给 TTS 做粗粒度音频分段。
+- 出图代码读取 ``episode.visual.shots[]``，机械调用底层文生图能力，不做创意决策。
 
-人格 = whisper-reel 技能的「心理学家 + 极简动画导演」。这里只取它的**导演方法论**
-（剪影五铁律 / 体态情绪词典 / 符号系统 / 构图 / 单格 prompt 规范），不含文案改写部分
-（脚本已经由上游敲定）。
+输出契约（director 必须严格返回 JSON）：
 
-输出契约（director 必须严格返回的 JSON）
-----------------------------------------
 {
-  "background": {
-    "prompt": "全片统一背景图中文 prompt：暖纸底 + 极简舞台/留白，不含主体",
-    "imageFit": "cover"
-  },
-  "sceneMap": { "1": "S1-01a", "2": "S1-01a", "3": "S1-01b", ... },  # beat 序号(1-based) -> 子场景 id
-  "scenes": {
-    "S1-01a": {
-      "group": "S1-01",                 # 同一叙事段落的 2-3 子场景共享前缀，纯展示分组
-      "prompt": "子场景视觉意图中文短句：只描述本段情绪/构图，不用于逐场景生成背景",
-      "imageFit": "contain",
-      "motion": { "enter": "fade", "duration": 700 },
-      "sketches": [
-        { "prompt": "english single-shot content（圣经自动前置）",
-          "pos": { "x": 28, "y": 62 }, "size": 34,
-          "motion": { "enter": "zoom-pop", "duration": 500 },
-          "at": { "match": "信用卡" } }
-      ]
-    }
+  "visual": {
+    "style": "paper_card_talk",
+    "stage": {
+      "background": {
+        "prompt": "全片统一背景图中文 prompt：暖纸底 + 极简舞台/留白，不含主体",
+        "imageFit": "cover"
+      },
+      "palette": {"paper": "#F4EBDD", "ink": "#1E1A16", "accent": "#B7352D"},
+      "shotRhythm": "one-shot-per-beat"
+    },
+    "shots": [
+      {
+        "beatIndex": 1,
+        "shotId": "b001",
+        "group": "S1-01",
+        "intent": "这一句字幕的画面含义",
+        "layout": "center_icon",
+        "transition": "replace",
+        "motion": {"enter": "fade", "duration": 500},
+        "emphasis": [
+          {
+            "text": "关键词",
+            "pos": {"x": 50, "y": 22},
+            "style": {"size": 54, "weight": 800, "color": "#2A241E"},
+            "motion": {"enter": "handwrite", "duration": 500}
+          }
+        ],
+        "assets": [
+          {
+            "id": "a1",
+            "role": "main",
+            "prompt": "english single-shot pictogram content",
+            "pos": {"x": 50, "y": 50},
+            "size": 32,
+            "motion": {"enter": "zoom-pop", "duration": 500}
+          }
+        ]
+      }
+    ]
   }
 }
 """
@@ -43,8 +58,7 @@ import json
 import re
 from typing import Any
 
-# whisper-reel 风格圣经（单格简笔画每次出图自动前置；与模板 episode.json
-# image.sketchStylePrefix 保持一致，模板缺省时用这个兜底）。
+# 单格前景素材出图时自动前置的风格圣经。director 只写每个素材的独有内容。
 DEFAULT_SKETCH_STYLE_PREFIX = (
     "Minimalist pictogram in the universal public-signage style, like airport "
     "wayfinding icons. Flat solid-black silhouette on a plain pure-white background. "
@@ -56,22 +70,39 @@ DEFAULT_SKETCH_STYLE_PREFIX = (
     "gray, no gradient, no color."
 )
 
-# 简笔画 motion.enter 安全取值（与 overlays.js motionToClass 对齐）
-SKETCH_ENTERS = [
-    "fade", "zoom-pop", "drift-in", "bounce", "ink-bleed", "slide-clip", "handwrite",
+ASSET_ENTERS = [
+    "fade",
+    "zoom-pop",
+    "drift-in",
+    "bounce",
+    "ink-bleed",
+    "slide-clip",
+    "handwrite",
 ]
 
+SHOT_LAYOUTS = {
+    "center_icon",
+    "left_icon_text",
+    "right_icon_text",
+    "icon_pair",
+    "emphasis_text",
+    "card_accumulate",
+    "timeline",
+    "comparison",
+    "empty_pause",
+}
+
+SHOT_TRANSITIONS = {"replace", "accumulate", "hold", "morph"}
 
 DIRECTOR_SYSTEM_PROMPT = (
-    "你是一名极简主义动画导演，深谙人类心理学。你只用最干净的黑色剪影和最大的留白，"
-    "让每个画面只讲一件事。现在脚本（逐句字幕）已经写好，你**不改一个字**，只负责把它"
-    "导成画面：一张全片统一背景 + 切子场景 + 为每个子场景设计叠在上面的前景素材。"
-    "只输出一个合法 JSON 对象，禁止代码块或任何额外文本。"
+    "你是一名极简主义动画导演，深谙人类心理学。脚本逐句字幕已经写好，"
+    "你不改一个字，只把它导成画面：一张全片统一舞台背景，以及每条完整字幕"
+    "对应的一个视觉 shot。只输出一个合法 JSON 对象，禁止代码块或任何额外文本。"
 )
 
 
 def _shot_prompt_spec() -> list[str]:
-    """单格简笔画 prompt 规范（剪影导演方法论，给 director 当规则）。"""
+    """单格前景素材 prompt 规范，给 director 当规则。"""
     return [
         "【剪影可读性五铁律】",
         "1. 轮廓测试：填成纯黑、只看外形也认得出在干嘛；手脚甩出躯干，别叠在身体上糊成一坨。",
@@ -79,6 +110,9 @@ def _shot_prompt_spec() -> list[str]:
         "3. 平视或正侧，不要透视、不要前缩。",
         "4. 多个剪影之间留白缝，绝不用影子 / 地面 / 连接线把两个黑块焊在一起。",
         "5. 一格一概念：一个主体动作 + 最多一个符号物。",
+        "",
+        "【字幕驱动画面】每条完整字幕都要切换一次画面内容；背景不变，前景素材/强调文字/布局变化。",
+        "不要把多句字幕塞进同一个静态子场景里等待。",
         "",
         "【隐喻必须落地】只画具体的并置 / 比例 / 姿态 / 位置，不画抽象修辞。"
         "想说“孩子在复制你”，就画一大一小两个独立剪影、同一姿态、并排、中间留白；"
@@ -90,10 +124,9 @@ def _shot_prompt_spec() -> list[str]:
         "【符号系统】先为本片定 2-4 个固定符号反复出现：发光手机 / 屏幕=沉溺；时钟 / 日历=时间流逝；"
         "巨石 / 大方块=太重的事；墙 / 门缝 / 笼=困住；线 / 绳=牵绊；一束光=希望出口。",
         "",
-        "【单格 sketch.prompt 写法】只写这一格独有的英文内容，顺序：体态(line of action) → "
-        "空间关系/构图(focal + 留白方向) → 符号物。**不要**再写人物长相/画风（圣经已固定）。"
-        "例：a small child silhouette curled into a tight C-shape in the lower-left, knees to "
-        "chest, holding a glowing phone, vast empty space upper-right.",
+        "【单格 asset.prompt 写法】只写这一格独有的英文内容，顺序：体态(line of action) → "
+        "空间关系/构图(focal + 留白方向) → 符号物。不要再写人物长相/画风（圣经已固定）。",
+        "例：a small child silhouette curled into a tight C-shape in the lower-left, knees to chest, holding a glowing phone.",
     ]
 
 
@@ -106,79 +139,79 @@ def build_director_prompt(
     palette: str = "",
     domain_image_style: str | None = None,
     sub_scenes_per_scene: tuple[int, int] = (2, 3),
-    sketches_per_sub_scene: tuple[int, int] = (1, 6),
+    sketches_per_sub_scene: tuple[int, int] = (1, 3),
 ) -> tuple[str, str]:
-    """构造 director agent 的 (system_prompt, user_prompt)。
+    """构造 director agent 的 ``(system_prompt, user_prompt)``。
 
-    beats: [{ "index": 1, "zh": "...", "en": "..." }]，index 为 1-based。
-    domain_image_style: 领域片内视觉调性（来自 domain_profiles 的 wudaozi 槽位）。
-      非空时叠加在圣经之外，作为本片领域调性提示，不替换 style_bible。
-      空/None 时行为与原来完全一致（回退 DEFAULT_SKETCH_STYLE_PREFIX）。
+    ``sub_scenes_per_scene`` 保留在签名里是为了调用面稳定；新契约不再产子场景。
+    ``sketches_per_sub_scene`` 在新契约中表示每个 shot 的前景素材数量范围。
     """
+    del sub_scenes_per_scene
+    asset_min, asset_max = sketches_per_sub_scene
     lines: list[str] = []
-    lines.append("把下面这条短视频的脚本（逐句字幕）导成分镜，输出视觉层 JSON。")
+    lines.append("把下面这条短视频的逐句字幕导成吴道子视觉方案 JSON。")
     lines.append("")
-    lines.append("【角色边界】脚本已敲定，你不改字。你只设计全片统一背景、切子场景、设计前景素材。")
+    lines.append("【角色边界】脚本已敲定，你不改字。你只设计统一舞台背景与逐字幕 shot。")
     lines.append("")
-    lines.append("【切分规则】")
-    lines.append(
-        f"- 先把脚本按语义切成若干叙事段落，每个叙事段落再切 "
-        f"{sub_scenes_per_scene[0]}-{sub_scenes_per_scene[1]} 个子场景；"
-    )
-    lines.append("- 子场景 id 形如 S1-01a / S1-01b（同段落共享前缀，写进 group 字段）；")
-    lines.append("- sceneMap 必须覆盖每一条 beat（按其 index 映射到一个子场景 id），不漏不重。")
+    lines.append("【核心节奏】")
+    lines.append("- 每条完整字幕 = 一个 visual.shots[] 项，shots.length 必须等于 beats 条数；")
+    lines.append("- beatIndex 必须覆盖每条 beat.index（1-based），不漏不重；")
+    lines.append("- 画面切换由 shot 驱动，不再由 scene/subscene 驱动；")
+    lines.append("- group 只用于粗粒度音频/展示分组，建议每 3-6 句同一组，不能替代逐字幕 shot；")
+    lines.append("- 参考短视频的可借鉴点只有“字幕驱动内容变化”：背景像固定 PPT 舞台，前景素材与强调文字跟着每句变化。")
     lines.append("")
-    lines.append("【全片统一背景 background.prompt（中文）】")
-    lines.append("- 只生成 1 张全片共用背景，像 PPT 背景 / 舞台布景 / 纸卡底图；")
-    lines.append("- 暖纸纸质底 + 稀疏场景背景/留白，主体元素留给前景素材，不要画满；")
+    lines.append("【stage.background.prompt（中文）】")
+    lines.append("- 只生成 1 张全片共用背景，作为最终成片整张 16:9 页面背景；")
+    lines.append("- 背景图必须覆盖整张画面，不能只在下方字幕区出现景物，不能写“上方留白 / 大面积留白”；")
+    lines.append("- 暖纸纸质底 + 贯穿全幅的稀疏场景氛围 / 远景层次；主体元素留给前景素材，背景不要画成主角；")
+    lines.append("- 如果使用山形、海岸线、城市轮廓等地景，需要让它自然延展为全页底图，而不是只贴在底边；")
     lines.append("- 背景应能承载整条片子，不能跟某一句台词绑定，不能出现人物主体；")
     if container_guide:
         lines.append(f"- 额外约束：{container_guide}")
     if palette:
         lines.append(f"- 配色：{palette}")
-    # 领域视觉调性：叠加在通用风格圣经之外，不替换圣经本体。
-    # 只在 domain_image_style 非空时注入，否则行为与无领域时完全一致。
     if domain_image_style:
         lines.append(f"- 【本片领域视觉调性】（仅供参考，叠加在上述风格之外）：{domain_image_style}")
     lines.append("- background.prompt 里不要出现任何文字 / 数字。")
     lines.append("")
-    lines.append(
-        f"【前景素材 sketches（每个子场景 {sketches_per_sub_scene[0]}-"
-        f"{sketches_per_sub_scene[1]} 幅）】"
-    )
-    lines.append(
-        "- 每幅 sketch 是一个白底黑剪影元素，叠在全片背景上。下面这段风格圣经会在出图时"
-        "自动前置到每条 sketch.prompt，你写单格内容时**默认它已存在**，不要重复写画风："
-    )
+    lines.append(f"【shot.assets（每个 shot {asset_min}-{asset_max} 个前景素材）】")
+    lines.append("- 前景素材是白底黑剪影元素，叠在统一背景上；")
+    lines.append("- 下面这段风格圣经会在出图时自动前置到每条 asset.prompt，你写单格内容时默认它已存在，不要重复写画风：")
     lines.append(f"  「{style_bible}」")
     lines.extend(_shot_prompt_spec())
     lines.append("")
-    lines.append("【pos / size / motion / at】")
-    lines.append("- pos {x,y}：前景素材在画面内的百分比位置（0-100，左上原点）；size：宽度占画面百分比；")
-    lines.append(f"- motion.enter 从这些里选：{', '.join(SKETCH_ENTERS)}；duration 400-700ms；")
-    lines.append(
-        "- at.match：填该子场景内某条 beat.zh 里的一个关键词（2-6 字），前景素材会在台词读到"
-        "这个词时飞入；不需要跟台词触发的（如背景陪衬）可省略 at（子场景切入即显）。"
-    )
+    lines.append("【shot 字段】")
+    lines.append("- shotId 形如 b001 / b002；")
+    lines.append(f"- layout 从这些里选：{', '.join(sorted(SHOT_LAYOUTS))}；")
+    lines.append(f"- transition 从这些里选：{', '.join(sorted(SHOT_TRANSITIONS))}；")
+    lines.append("- intent：中文短句，说明这一句字幕在画面上讲什么；")
+    lines.append("- emphasis：可选的强调文字，必须短，不要复制整句字幕；")
+    lines.append("- assets[].pos {x,y}：画面百分比位置（0-100，左上原点）；size：宽度占画面百分比；")
+    lines.append(f"- assets[].motion.enter 从这些里选：{', '.join(ASSET_ENTERS)}；duration 400-700ms。")
     lines.append("")
     lines.append("【输出格式】只输出一个 JSON 对象，结构严格如下，不要代码块、不要解释：")
     lines.append("{")
-    lines.append('  "background": { "prompt": "全片统一背景图中文 prompt", "imageFit": "cover" },')
-    lines.append('  "sceneMap": { "1": "S1-01a", "2": "S1-01a", "3": "S1-01b" },')
-    lines.append('  "scenes": {')
-    lines.append('    "S1-01a": {')
-    lines.append('      "group": "S1-01",')
-    lines.append('      "prompt": "子场景视觉意图中文短句",')
-    lines.append('      "imageFit": "contain",')
-    lines.append('      "motion": { "enter": "fade", "duration": 700 },')
-    lines.append('      "sketches": [')
-    lines.append(
-        '        { "prompt": "english single-shot content", '
-        '"pos": {"x":28,"y":62}, "size":34, '
-        '"motion": {"enter":"zoom-pop","duration":500}, "at": {"match":"信用卡"} }'
-    )
-    lines.append("      ]")
-    lines.append("    }")
+    lines.append('  "visual": {')
+    lines.append('    "style": "paper_card_talk",')
+    lines.append('    "stage": {')
+    lines.append('      "background": { "prompt": "全片统一背景图中文 prompt", "imageFit": "cover" },')
+    lines.append('      "palette": { "paper": "#F4EBDD", "ink": "#1E1A16", "accent": "#B7352D" },')
+    lines.append('      "shotRhythm": "one-shot-per-beat"')
+    lines.append("    },")
+    lines.append('    "shots": [')
+    lines.append("      {")
+    lines.append('        "beatIndex": 1, "shotId": "b001", "group": "S1-01",')
+    lines.append('        "intent": "这一句字幕的画面含义",')
+    lines.append('        "layout": "center_icon", "transition": "replace",')
+    lines.append('        "motion": { "enter": "fade", "duration": 500 },')
+    lines.append('        "emphasis": [')
+    lines.append('          { "text": "关键词", "pos": {"x":50,"y":22}, "style": {"size":54,"weight":800}, "motion": {"enter":"handwrite","duration":500} }')
+    lines.append("        ],")
+    lines.append('        "assets": [')
+    lines.append('          { "id": "a1", "role": "main", "prompt": "english single-shot pictogram content", "pos": {"x":50,"y":52}, "size":32, "motion": {"enter":"zoom-pop","duration":500} }')
+    lines.append("        ]")
+    lines.append("      }")
+    lines.append("    ]")
     lines.append("  }")
     lines.append("}")
     lines.append("")
@@ -221,48 +254,161 @@ def _norm_motion(raw: Any, *, default_enter: str) -> dict[str, Any]:
         enter = default_enter
     out: dict[str, Any] = {"enter": enter.strip()}
     if isinstance(m.get("duration"), (int, float)):
-        out["duration"] = int(m["duration"])
+        out["duration"] = int(_clamp(m["duration"], 100, 2000, 500))
     if isinstance(m.get("delay"), (int, float)):
-        out["delay"] = int(m["delay"])
+        out["delay"] = int(_clamp(m["delay"], 0, 5000, 0))
+    if isinstance(m.get("easing"), str) and m["easing"].strip():
+        out["easing"] = m["easing"].strip()
     return out
 
 
-def _norm_sketch(raw: Any) -> dict[str, Any] | None:
+def _norm_pos(raw: Any, *, default_x: float = 50, default_y: float = 50) -> dict[str, float]:
+    pos = raw if isinstance(raw, dict) else {}
+    return {
+        "x": _clamp(pos.get("x"), 0, 100, default_x),
+        "y": _clamp(pos.get("y"), 0, 100, default_y),
+    }
+
+
+def _safe_id(value: Any, fallback: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raw = fallback
+    safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", raw).strip("-")
+    return safe or fallback
+
+
+def _fallback_asset_prompt(beat: dict[str, Any]) -> str:
+    zh = str(beat.get("zh") or "").strip()
+    return f"a simple black pictogram symbolizing this line: {zh}"
+
+
+def _norm_asset(raw: Any, *, shot_id: str, index: int, beat: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     prompt = str(raw.get("prompt") or "").strip()
     if not prompt:
         return None
-    pos_in = raw.get("pos") if isinstance(raw.get("pos"), dict) else {}
-    sk: dict[str, Any] = {
+    asset_id = _safe_id(raw.get("id"), f"a{index}")
+    out: dict[str, Any] = {
+        "id": asset_id,
+        "role": str(raw.get("role") or ("main" if index == 1 else "support")).strip(),
         "prompt": prompt,
-        "pos": {
-            "x": _clamp(pos_in.get("x"), 0, 100, 50),
-            "y": _clamp(pos_in.get("y"), 0, 100, 50),
-        },
+        "pos": _norm_pos(raw.get("pos"), default_x=50, default_y=50),
         "size": _clamp(raw.get("size"), 5, 100, 32),
         "motion": _norm_motion(raw.get("motion"), default_enter="zoom-pop"),
+        "imageFile": f"pictures/{shot_id}-{asset_id}.webp",
     }
     at = raw.get("at")
     if isinstance(at, dict) and str(at.get("match") or "").strip():
-        sk["at"] = {"match": str(at["match"]).strip()}
+        out["at"] = {"match": str(at["match"]).strip()}
         if isinstance(at.get("delay"), (int, float)):
-            sk["at"]["delay"] = int(at["delay"])
-    return sk
+            out["at"]["delay"] = int(_clamp(at["delay"], 0, 5000, 0))
+    # beat is part of the signature so fallback creation can share this normalizer.
+    del beat
+    return out
 
 
-def parse_director_output(
-    raw: str, beats: list[dict[str, Any]]
-) -> tuple[dict[int, str], dict[str, dict[str, Any]]]:
-    """解析 + 规整 director 输出。
+def _fallback_asset(*, shot_id: str, beat: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": "a1",
+        "role": "main",
+        "prompt": _fallback_asset_prompt(beat),
+        "pos": {"x": 50, "y": 52},
+        "size": 34,
+        "motion": {"enter": "zoom-pop", "duration": 500},
+        "imageFile": f"pictures/{shot_id}-a1.webp",
+    }
 
-    返回 (scene_by_beat_index, scenes)：
-    - scene_by_beat_index: {1-based beat index -> scene_id}，已补全所有 beat
-      （sceneMap 缺的 beat 沿用前一条的 scene；首条缺则用第一个出现的 scene）。
-    - scenes: 规整后的 scenes{}，每个含 prompt / imageFit / motion / overlays[] / sketches[]。
-    - background: 全片统一背景图描述，旧输出缺失时从第一个 scene.prompt 兜底。
 
-    解析失败 / 结构非法时 raise RuntimeError / ValueError。
+def _norm_emphasis(raw: Any, *, index: int) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    text = str(raw.get("text") or "").strip()
+    if not text:
+        return None
+    out: dict[str, Any] = {
+        "id": _safe_id(raw.get("id"), f"t{index}"),
+        "text": text[:18],
+        "pos": _norm_pos(raw.get("pos"), default_x=50, default_y=22),
+        "style": raw.get("style") if isinstance(raw.get("style"), dict) else {},
+        "motion": _norm_motion(raw.get("motion"), default_enter="handwrite"),
+    }
+    return out
+
+
+def _norm_stage(parsed: dict[str, Any], shots: list[dict[str, Any]]) -> dict[str, Any]:
+    visual_in = parsed.get("visual") if isinstance(parsed.get("visual"), dict) else {}
+    stage_in = visual_in.get("stage") if isinstance(visual_in.get("stage"), dict) else parsed.get("stage")
+    stage_in = stage_in if isinstance(stage_in, dict) else {}
+    bg_in = stage_in.get("background") if isinstance(stage_in.get("background"), dict) else {}
+    bg_prompt = str(bg_in.get("prompt") or "").strip()
+    if not bg_prompt:
+        bg_prompt = next((str(s.get("intent") or "").strip() for s in shots if str(s.get("intent") or "").strip()), "")
+    return {
+        "background": {
+            "prompt": bg_prompt or "16:9 全幅暖纸质感页面背景，淡雅远景层次贯穿整张画面，细腻纸张纹理，主体元素留给前景素材，无文字，无数字。",
+            "imageFit": bg_in.get("imageFit") if bg_in.get("imageFit") in ("cover", "contain", "fill") else "cover",
+            "imageFile": "pictures/background.webp",
+        },
+        "palette": stage_in.get("palette") if isinstance(stage_in.get("palette"), dict) else {},
+        "shotRhythm": "one-shot-per-beat",
+    }
+
+
+def _group_for_index(i: int) -> str:
+    return f"S1-{((i - 1) // 4) + 1:02d}"
+
+
+def _norm_shot(raw: Any, *, beat: dict[str, Any], index: int) -> dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    shot_id = _safe_id(src.get("shotId") or src.get("id"), f"b{index:03d}")
+    layout = str(src.get("layout") or "center_icon").strip()
+    if layout not in SHOT_LAYOUTS:
+        layout = "center_icon"
+    transition = str(src.get("transition") or "replace").strip()
+    if transition not in SHOT_TRANSITIONS:
+        transition = "replace"
+
+    assets_raw = src.get("assets") if isinstance(src.get("assets"), list) else []
+    assets = [
+        a for a in (
+            _norm_asset(item, shot_id=shot_id, index=n, beat=beat)
+            for n, item in enumerate(assets_raw, start=1)
+        )
+        if a is not None
+    ]
+    if not assets and layout != "empty_pause":
+        assets = [_fallback_asset(shot_id=shot_id, beat=beat)]
+
+    emphasis_raw = src.get("emphasis") if isinstance(src.get("emphasis"), list) else []
+    emphasis = [
+        e for e in (
+            _norm_emphasis(item, index=n)
+            for n, item in enumerate(emphasis_raw, start=1)
+        )
+        if e is not None
+    ]
+
+    group = str(src.get("group") or "").strip() or _group_for_index(index)
+    return {
+        "beatIndex": index,
+        "shotId": shot_id,
+        "group": group,
+        "intent": str(src.get("intent") or beat.get("zh") or "").strip(),
+        "layout": layout,
+        "transition": transition,
+        "motion": _norm_motion(src.get("motion"), default_enter="fade"),
+        "emphasis": emphasis,
+        "assets": assets,
+    }
+
+
+def parse_director_output(raw: str, beats: list[dict[str, Any]]) -> dict[str, Any]:
+    """解析 + 规整 director 输出，返回 ``episode.visual``。
+
+    新版本不把旧 ``scenes/sceneMap`` 当成成功结果。模型吐旧契约会触发重试，
+    避免历史字段继续绑住吴道子。
     """
     cleaned = _strip_code_fence(raw)
     try:
@@ -274,67 +420,30 @@ def parse_director_output(
     if not isinstance(parsed, dict):
         raise ValueError("director 输出不是 JSON 对象")
 
-    scenes_in = parsed.get("scenes")
-    scene_map_in = parsed.get("sceneMap")
-    if not isinstance(scenes_in, dict) or not scenes_in:
-        raise ValueError("director 输出缺 scenes{} 或为空")
-    if not isinstance(scene_map_in, dict) or not scene_map_in:
-        raise ValueError("director 输出缺 sceneMap{} 或为空")
+    visual_in = parsed.get("visual") if isinstance(parsed.get("visual"), dict) else {}
+    shots_in = visual_in.get("shots") if isinstance(visual_in.get("shots"), list) else parsed.get("shots")
+    if not isinstance(shots_in, list) or not shots_in:
+        raise ValueError("director 输出缺 visual.shots[] 或为空")
 
-    # 规整 scenes
-    scenes: dict[str, dict[str, Any]] = {}
-    for sid, sc in scenes_in.items():
-        sid = str(sid)
-        sc = sc if isinstance(sc, dict) else {}
-        sketches_raw = sc.get("sketches") if isinstance(sc.get("sketches"), list) else []
-        sketches = [s for s in (_norm_sketch(x) for x in sketches_raw) if s is not None]
-        scenes[sid] = {
-            "prompt": str(sc.get("prompt") or "").strip(),
-            "group": str(sc.get("group") or "").strip(),
-            "label": "",
-            "imageFit": sc.get("imageFit") if sc.get("imageFit") in ("cover", "contain", "fill") else "contain",
-            "motion": _norm_motion(sc.get("motion"), default_enter="fade"),
-            "overlays": sc.get("overlays") if isinstance(sc.get("overlays"), list) else [],
-            "sketches": sketches,
-        }
-
-    bg_in = parsed.get("background") if isinstance(parsed.get("background"), dict) else {}
-    bg_prompt = str(bg_in.get("prompt") or "").strip()
-    if not bg_prompt:
-        bg_prompt = next((str(sc.get("prompt") or "").strip() for sc in scenes.values()
-                          if str(sc.get("prompt") or "").strip()), "")
-    background = {
-        "prompt": bg_prompt or "暖纸纸质底，极简留白背景，细腻纸张纹理，无文字，无数字。",
-        "imageFit": bg_in.get("imageFit") if bg_in.get("imageFit") in ("cover", "contain", "fill") else "cover",
-        "imageFile": "pictures/background.webp",
-    }
-
-    # sceneMap → 按 beat index 落实 scene；缺失沿用前值
-    total = len(beats)
-    raw_by_idx: dict[int, str] = {}
-    for k, v in scene_map_in.items():
+    by_index: dict[int, Any] = {}
+    for item in shots_in:
+        if not isinstance(item, dict):
+            continue
         try:
-            i = int(k)
+            idx = int(item.get("beatIndex"))
         except (TypeError, ValueError):
             continue
-        sid = str(v).strip()
-        if sid:
-            raw_by_idx[i] = sid
+        if 1 <= idx <= len(beats) and idx not in by_index:
+            by_index[idx] = item
 
-    scene_by_beat: dict[int, str] = {}
-    prev = ""
-    for i in range(1, total + 1):
-        sid = raw_by_idx.get(i) or prev
-        if not sid:
-            # 首条都没给 → 用 scenes 里第一个
-            sid = next(iter(scenes))
-        # sceneMap 指向但 scenes 没定义的 → 补空场景，避免 image KeyError
-        if sid not in scenes:
-            scenes[sid] = {
-                "prompt": "", "group": "", "label": "", "imageFit": "contain",
-                "motion": {"enter": "fade"}, "overlays": [], "sketches": [],
-            }
-        scene_by_beat[i] = sid
-        prev = sid
+    shots: list[dict[str, Any]] = []
+    for i, beat in enumerate(beats, start=1):
+        shots.append(_norm_shot(by_index.get(i), beat=beat, index=i))
 
-    return scene_by_beat, scenes, background
+    stage = _norm_stage(parsed, shots)
+    style = str(visual_in.get("style") or parsed.get("style") or "paper_card_talk").strip()
+    return {
+        "style": style or "paper_card_talk",
+        "stage": stage,
+        "shots": shots,
+    }

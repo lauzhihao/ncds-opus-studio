@@ -1,4 +1,4 @@
-/* 新增特性：分镜 / 简笔画缩略 / 作品执行态 / 节点锁定 / IMAGE 相册  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
+/* 新增特性：分镜 / 前景素材缩略 / 作品执行态 / 节点锁定 / IMAGE 相册  —— 由 global.css 按节拆分而来（保持原顺序）。改样式直接编辑本文件。 */
 /* ─── STORYBOARD（分镜）抽屉 ───────────────────────────────────── */
 .sb-list {
   display: flex;
@@ -87,7 +87,7 @@
 }
 .sb-num input:focus, .sb-at input:focus { outline: 2px solid var(--border-focus); }
 
-/* ─── IMAGE 卡片：简笔画缩略条 ────────────────────────────────── */
+/* ─── IMAGE 卡片：背景图 + 前景素材缩略条 ──────────────────────── */
 .image-bg-card,
 .image-asset-group {
   display: flex;
@@ -100,6 +100,62 @@
 }
 .image-bg-card {
   margin-top: var(--s-3);
+}
+.image-panel-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.image-panel-tabs {
+  flex: 1 1 280px;
+  min-width: 0;
+  border-bottom: 0;
+}
+.image-panel-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  padding-bottom: var(--s-2);
+  margin-left: auto;
+}
+.image-tab-panels {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.image-tab-panel {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.image-tab-panel .image-bg-card,
+.image-tab-panel .image-assets-list {
+  margin-top: 0;
+}
+.image-tab-panel .image-bg-card {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.image-assets-empty {
+  flex: 1 1 0;
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+  background: var(--bg-surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 .image-bg-head {
   display: flex;
@@ -139,6 +195,16 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.image-shot-title {
+  min-width: 0;
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.image-add-material {
+  flex: 0 0 auto;
 }
 .image-foreground-grid {
   display: grid;
@@ -200,6 +266,158 @@
   color: var(--status-failed);
   font-size: var(--text-2xs);
   line-height: 1.35;
+}
+.material-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.material-picker-top {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.8fr);
+  gap: var(--s-3);
+  align-items: center;
+}
+.material-search {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 0 var(--s-3);
+  height: 36px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+.material-search input {
+  min-width: 0;
+  flex: 1 1 0;
+  border: 0;
+  outline: 0;
+  color: var(--ink-1);
+  background: transparent;
+  font: inherit;
+}
+.material-shot-context {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+.material-shot-context span:last-child {
+  min-width: 0;
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+.material-scope-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  border-bottom: 1px solid var(--border);
+}
+.material-scope-tab {
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.material-scope-tab:hover { color: var(--ink-1); }
+.material-scope-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.material-tags {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.material-tag {
+  height: 28px;
+  padding: 0 var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--bg-surface);
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.material-tag:hover {
+  color: var(--ink-1);
+  border-color: var(--border-strong);
+}
+.material-results {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+}
+.material-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: var(--s-2);
+}
+.material-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--s-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.material-card.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.material-card img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  background: #f4f1ea;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+.material-card span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-2xs);
+}
+.material-empty {
+  flex: 1 1 0;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  padding: var(--s-5);
+  color: var(--ink-3);
+  text-align: center;
+  background: var(--bg-surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-2);
+  font-size: var(--text-xs);
+}
+.material-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--border);
 }
 .image-sketches {
   display: flex;
@@ -494,7 +712,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f4f1ea;          /* 暖纸中性底，容器图/占位都看得清 */
+  background: #f4f1ea;          /* 暖纸中性底，背景图/占位都看得清 */
   border: 1px solid var(--border);
   border-radius: var(--r-2);
   overflow: hidden;

@@ -1,6 +1,6 @@
-"""015 纸卡口播 pipeline 的引擎 step-performer（E1-b2 slice-1）。
+"""final_preview pipeline 的引擎 step-performer（E1-b2 slice-1）。
 
-把 web ``PipelineRunner`` 的 015 节点编排逻辑**原样复用**成引擎可派发的 performer
+把 web ``PipelineRunner`` 的 final_preview 节点编排逻辑复用成引擎可派发的 performer
 （契约 ``run(on_progress, **params) -> dict``，保留 ``video-jobs/`` 文件系统布局）：引擎只管
 编排+状态+事件，performer 只做该步实际工作，并通过共享的 ``02_rw/episode.json`` 与上下游耦合。
 
@@ -24,7 +24,7 @@ from typing import Any
 from ncds_opus_core.common import cancel as _cancel
 from ncds_opus_core.templates import template_dir as _template_dir
 
-from ncds_opus_factory.commands import render_015, shenkuo
+from ncds_opus_factory.commands import render_final_preview, shenkuo
 from ncds_opus_factory.common import tikhub_client
 from ncds_opus_factory.server import storyboard_director
 from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile
@@ -56,7 +56,7 @@ from ncds_opus_factory.server.pipeline_tts_tasks import PipelineTtsRun
 # 外部副作用调用的 seam（subprocess / node / gpt-image）：默认走真实 helper，测试 monkeypatch。
 _run_tts_gen = _run_tts_gen_015
 _gen_scene_image = _generate_scene_image
-_render_run = render_015.run
+_render_run = render_final_preview.run
 
 # asr seam：默认走沈括快采；测试 monkeypatch 替换。
 _resolve_aweme_id = tikhub_client.resolve_aweme_id
@@ -274,7 +274,7 @@ def run_lines_step(
     on_progress: Callable[[str], None],
     *,
     job_dir: str,
-    pipeline_id: str = "paper_card_talk_015",
+    pipeline_id: str = "final_preview",
     **_: Any,
 ) -> dict[str, Any]:
     """LINES：读 ``02_rw/draft.md`` → LLM fallback 结构化成 beats[] → 合模板骨架写 ``02_rw/episode.json``。
@@ -308,8 +308,9 @@ def run_storyboard_step(
     job_dir: str,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """STORYBOARD：读 ``episode.beats`` → director agent 切子场景 → 回填 ``beats[].scene``
-    + 写 ``scenes{}`` 到 ``02_rw/episode.json``。复用 ``_execute_storyboard`` 算法。
+    """STORYBOARD：读 ``episode.beats`` → director agent 产出逐字幕 ``visual.shots``。
+
+    ``beats[].scene`` 只保留为 TTS 粗分段；画面切换由 ``visual.shots[].beatIndex`` 驱动。
 
     kwargs 中的 domain（由 instance_runner 从 instance inputs 透传）用于取领域视觉调性；
     其余未知 kwargs 忽略（向前兼容）。
@@ -353,7 +354,7 @@ def run_storyboard_step(
         palette=palette,
         domain_image_style=domain_image_style,
     )
-    scene_by_beat, scenes, background = structure_json_with_model_fallback(
+    visual = structure_json_with_model_fallback(
         user_prompt,
         system_prompt,
         on_progress,
@@ -365,26 +366,36 @@ def run_storyboard_step(
         final_error="视觉方案生成暂时失败：备用通道都没有成功，请稍后重试。",
         log_context="storyboard",
         max_parse_attempts=3,
-        retry_hint="JSON 必须含 scenes{} 与 sceneMap{} 两个键，scenes 的每个值含 prompt 字段。",
+        retry_hint="JSON 必须含 visual.stage 与 visual.shots[]，每条 shot 必须有 beatIndex。",
     )
 
+    shots = visual.get("shots") if isinstance(visual.get("shots"), list) else []
+    group_by_beat = {
+        int(shot.get("beatIndex")): str(shot.get("group") or "").strip()
+        for shot in shots
+        if isinstance(shot, dict) and shot.get("beatIndex") is not None
+    }
     for i, b in enumerate(beats_raw, start=1):
-        b["scene"] = scene_by_beat.get(i, b.get("scene") or "")
+        b["scene"] = group_by_beat.get(i) or b.get("scene") or "main"
     ep["beats"] = beats_raw
-    ep["scenes"] = scenes
+    prev_visual = ep.get("visual") if isinstance(ep.get("visual"), dict) else {}
+    ep["visual"] = {**dict(prev_visual or {}), **visual}
+    ep["scenes"] = {}
     image_cfg = ep.get("image") if isinstance(ep.get("image"), dict) else {}
     image_cfg = dict(image_cfg or {})
-    image_cfg["background"] = background
+    stage = visual.get("stage") if isinstance(visual.get("stage"), dict) else {}
+    background = stage.get("background") if isinstance(stage.get("background"), dict) else {}
+    image_cfg["background"] = dict(background or {})
     ep["image"] = image_cfg
     ep_path.write_text(json.dumps(ep, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    sketch_total = sum(len(s.get("sketches") or []) for s in scenes.values())
-    groups = sorted({s.get("group") or sid for sid, s in scenes.items()})
-    on_progress(f"视觉方案生成完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 个前景素材")
+    asset_total = sum(len(s.get("assets") or []) for s in shots if isinstance(s, dict))
+    groups = sorted({str(s.get("group") or "").strip() for s in shots if isinstance(s, dict) and s.get("group")})
+    on_progress(f"视觉方案生成完成：{len(shots)} 句画面 · {len(groups)} 段 · {asset_total} 个前景素材")
     return {
         "episode_relpath": "02_rw/episode.json",
-        "scenes_count": len(scenes),
-        "sketches_count": sketch_total,
+        "shots_count": len(shots),
+        "assets_count": asset_total,
         "groups_count": len(groups),     # 与 web StoryboardOutputs 契约对齐（types.ts 非可选）
         "beats_count": len(beats_raw),
         "background_count": 1,
@@ -392,14 +403,14 @@ def run_storyboard_step(
 
 
 def run_tts_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) -> dict[str, Any]:
-    """TTS：按 ``02_rw/episode.json`` 的 beats[].scene spawn 015 tts_gen.py 整段合成
-    + 写回字级时间戳 → 重建 beat 级 items。复用 ``_run_tts_gen_015`` / ``_rebuild_tts_items_015``。
+    """TTS：按 ``02_rw/episode.json`` 的 beats[].scene spawn final_preview tts_gen.py 整段合成
+    + 写回字级时间戳 → 重建 beat 级 items。复用现有 tts helper。
     """
     jd = Path(job_dir)
     ep = _read_episode(jd)
     if ep is None:
         raise ValueError("episode.json not found; run rw/lines first")
-    tts_gen = _template_dir("paper_card_talk_015") / ".015-draft-assets" / "tts_gen.py"
+    tts_gen = _template_dir("final_preview") / ".final-preview-assets" / "tts_gen.py"
     return asyncio.run(PipelineTtsRun(
         runner=_ProgressFacade(on_progress),
         job_id=jd.name,
@@ -418,7 +429,7 @@ def run_image_step(
     outputs_patch: Callable[[str, Any], None] | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """IMAGE：生成 1 张全片背景 + 遍历 ``episode.scenes[].sketches`` 出前景素材 → WebP。
+    """IMAGE：生成 1 张全片背景 + 遍历 ``episode.visual.shots[].assets`` 出前景素材 → WebP。
     复用 ``_generate_scene_image``，运行中通过 outputs_patch 回推占位与已完成素材。
     ``job_id`` 仅供出图临时目录命名，取 job_dir 末段。
     """
@@ -437,7 +448,7 @@ def run_image_step(
 
 
 def run_render_step(on_progress: Callable[[str], None], *, job_dir: str, **_: Any) -> dict[str, Any]:
-    """RENDER：``render_015.run`` 出 1920x1080 MP4（依赖 episode + 04_tts/*.mp3 + 03_image/*.webp）。"""
+    """RENDER：``render_final_preview.run`` 出 1920x1080 MP4（依赖 episode + 04_tts/*.mp3 + 03_image/*.webp）。"""
     jd = Path(job_dir)
     return asyncio.run(PipelineRenderRun(
         runner=_ProgressFacade(on_progress),
@@ -447,15 +458,15 @@ def run_render_step(on_progress: Callable[[str], None], *, job_dir: str, **_: An
     ).run())
 
 
-# 015 recipe 各步 cmd → orchestration performer。键带 ``pct015_`` 前缀，与 build_full_registry
-# 的 bare command（asr/rw/tts/wst/render_015）区分；引擎按 recipe 步骤的 cmd 字符串在合并 registry
-# （build_full_registry ∪ PERFORMERS_015，见 server/state.py）里查表派发。
-PERFORMERS_015: dict[str, Callable[..., dict[str, Any]]] = {
-    "pct015_asr": run_asr_step,
-    "pct015_rw": run_rw_step,
-    "pct015_lines": run_lines_step,
-    "pct015_storyboard": run_storyboard_step,
-    "pct015_tts": run_tts_step,
-    "pct015_image": run_image_step,
-    "pct015_render": run_render_step,
+# final_preview recipe 各步 cmd → orchestration performer。键带 ``final_`` 前缀，与 build_full_registry
+# 的 bare command（asr/rw/tts/wst/render_final_preview）区分；引擎按 recipe 步骤的 cmd 字符串在合并 registry
+# （build_full_registry ∪ PERFORMERS_FINAL，见 server/state.py）里查表派发。
+PERFORMERS_FINAL: dict[str, Callable[..., dict[str, Any]]] = {
+    "final_asr": run_asr_step,
+    "final_rw": run_rw_step,
+    "final_lines": run_lines_step,
+    "final_storyboard": run_storyboard_step,
+    "final_tts": run_tts_step,
+    "final_image": run_image_step,
+    "final_render": run_render_step,
 }

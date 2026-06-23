@@ -1,0 +1,35 @@
+{
+  "id": "final-preview",
+  "name": "Final Preview",
+  "title": "成品预览模板",
+  "entry": "final-preview.html",
+  "style": ".final-preview-assets/styles.css",
+  "script": ".final-preview-assets/player.js",
+  "assets": ".final-preview-assets/",
+  "description": "1920x1080 成片预览与渲染模板。背景来自 visual.stage.background，前景素材来自 visual.shots[].assets，E 模式写回 episode.visual.finalPreview。",
+  "version": "1.0.0",
+  "features": [
+    "整屏背景图 + 内容安全区前景素材",
+    "scene 音频驱动字幕推进",
+    "底部纸底字幕默认样式",
+    "E 模式成品构图编辑",
+    "render.mjs headless 出片"
+  ],
+  "scripts": [
+    ".final-preview-assets/bootstrap.js",
+    ".final-preview-assets/dev-reload.js",
+    ".final-preview-assets/image-slot.js",
+    ".final-preview-assets/overlays.js",
+    ".final-preview-assets/player.js",
+    ".final-preview-assets/edit-mode.js"
+  ],
+  "controls": {
+    "buttons": [
+      "播放 / 暂停",
+      "重头",
+      "上一句 / 下一句",
+      "录制模式",
+      "E 成品构图编辑"
+    ]
+  }
+}

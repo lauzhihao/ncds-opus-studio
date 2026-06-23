@@ -8,6 +8,8 @@ import type {
   GuiguziResult,
   JobState,
   JobSummary,
+  MaterialScope,
+  MaterialSearchResponse,
   ParsedShare,
   PipelineDef,
   SubscriptionsConfig,
@@ -75,7 +77,7 @@ export const api = {
       if (!r.ok) throw new Error(`PATCH domain -> ${r.status}: ${await r.text()}`);
       return r.json() as Promise<{ ok: boolean; platform: string; aweme_id: string; domain: string }>;
     }),
-  // mock 开关：URL 带 ?mock=1 时种一个 015 素材的 mock 作品（开发预览用）
+  // mock 开关：URL 带 ?mock=1 时种一个 final_preview 素材的 mock 作品（开发预览用）
   ensureMock: () => post<{ job_id: string; pipeline_id: string }>('/mock/ensure'),
   getJob: (id: string) => get<JobState>(`/jobs/${id}`),
   createJob: (body: { pipeline_id: string; title?: string; inputs: Record<string, unknown> }) =>
@@ -113,6 +115,23 @@ export const api = {
       ...(opts.prompt ? { prompt: opts.prompt } : {}),
     }),
   getGuiguzi: (jobId: string) => get<GuiguziResult>(`/jobs/${jobId}/guiguzi`),
+  // 素材库占位接口：当前后端不扫描本地文件夹，只返回空索引和 TODO。
+  // TODO(material-library): 接入数据库 / 向量库索引后，这里用于吴道子素材选择框查询对象存储 URL。
+  listMaterials: (params: { jobId?: string; scope?: MaterialScope; q?: string; tags?: string[]; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params.jobId) qs.set('job_id', params.jobId);
+    if (params.scope) qs.set('scope', params.scope);
+    if (params.q) qs.set('q', params.q);
+    if (params.tags?.length) qs.set('tags', params.tags.join(','));
+    if (params.limit) qs.set('limit', String(params.limit));
+    return get<MaterialSearchResponse>(`/materials?${qs.toString()}`);
+  },
+  // TODO(material-library): 后端实现后，把素材库 material_id 固化进当前 job 的 episode.visual.shots[]。
+  attachImageMaterial: (jobId: string, body: { shot_id: string; material_id: string }) =>
+    post<{ ok: boolean; job_id: string; shot_id: string; material_id: string }>(
+      `/jobs/${jobId}/nodes/image/materials`,
+      body,
+    ),
   rewriteRwModel: (jobId: string, modelId: string) =>
     post<{ ok: boolean; job_id: string; model_id: string }>(
       `/jobs/${jobId}/nodes/rw/rewrite/${modelId}`,

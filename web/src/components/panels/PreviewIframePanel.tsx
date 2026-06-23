@@ -1,21 +1,49 @@
-// PREVIEW 节点 body：全屏 iframe，015 模板自带 edit-mode + Inspector + Tweaks 抽屉。
-//
-// 抽屉里所有微调（拖 overlay / 改字号 / 切 palette / 加删 overlay）由 015 内置的
-// edit-mode.js + inspector.jsx + tweaks.jsx 直接 fetch ./preview/{job_id}/__save_*
-// 端点回写到 video-jobs/{job_id}/02_rw/episode.json。React 这边不再持有 episode
-// 状态，不做表单——iframe 充满 body 即可。
+// PREVIEW 节点 body：全屏 iframe，final_preview 模板负责播放/检查当前 episode。
+// E 模式在 iframe 内按新 visual.finalPreview 配置做成品构图微调。
+
+import { useCallback, useEffect, useRef } from 'react';
 
 interface Props {
   jobId: string;
+  onEditModeChange?: (editing: boolean) => void;
 }
 
-export function PreviewIframePanel({ jobId }: Props) {
+export function PreviewIframePanel({ jobId, onEditModeChange }: Props) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  const focusIframe = useCallback(() => {
+    try {
+      iframeRef.current?.contentWindow?.focus();
+    } catch {
+      iframeRef.current?.focus();
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as { type?: string; editing?: unknown } | null;
+      if (!data || data.type !== 'final-preview-edit-mode') return;
+      onEditModeChange?.(data.editing === true);
+    };
+    window.addEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      onEditModeChange?.(false);
+    };
+  }, [onEditModeChange]);
+
   return (
     <iframe
+      ref={iframeRef}
       className="preview-iframe-full"
-      src={`/preview/${jobId}/015-draft.html`}
-      title="015 预览 + 编辑"
+      src={`/preview/${jobId}/final-preview.html`}
+      title="成品检查预览"
       loading="lazy"
+      onLoad={() => {
+        onEditModeChange?.(false);
+        focusIframe();
+      }}
     />
   );
 }

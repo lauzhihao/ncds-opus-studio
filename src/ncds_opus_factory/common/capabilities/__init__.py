@@ -13,7 +13,7 @@
     capabilities.fetch_top_comments               # 评论(真身 tikhub_client)
 
 边界说明：URL→文章管线（skills/video-pipeline + asr_service）是**另一条**链路（产出清洗成文章，
-喂老画布 /jobs 与引擎 015 链），不是沈括这套采集能力的实现，两者不要混用。
+喂老画布 /jobs 与 final_preview 引擎链），不是沈括这套采集能力的实现，两者不要混用。
 """
 
 from __future__ import annotations

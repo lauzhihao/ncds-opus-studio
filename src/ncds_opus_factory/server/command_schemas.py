@@ -4,7 +4,7 @@
 保持 free-form 兼容。这里只是「字段说明书」，让 iPad / 手机 UI 知道每个命令该填什么。
 
 二分（§9.4）：
-- core ``PRIMITIVE_SCHEMAS`` = wst/tst/vid/tts/render/render_015（在 ncds_opus_core）。
+- core ``PRIMITIVE_SCHEMAS`` = wst/tst/vid/tts/render/render_final_preview（在 ncds_opus_core）。
 - factory ``AGENT_SCHEMAS`` = 6 中国风 agent + asr（本文件）。asr UI ``group``
   仍是 "primitive"，但命令归 factory，故 schema 在这边。
 - ``get_schema()`` 合并 AGENT + PRIMITIVE 暴露全集（``/commands`` 不丢字段）。

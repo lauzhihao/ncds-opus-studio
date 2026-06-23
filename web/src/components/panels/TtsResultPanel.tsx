@@ -14,7 +14,6 @@ import { api } from '../../api/client';
 import type { Episode, NodeState, PipelineNodeDef, TtsItem } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useToast } from '../Toast';
-import { ProcStatusRow } from './ProcStatusRow';
 
 interface Props {
   jobId: string;
@@ -22,8 +21,6 @@ interface Props {
   nodeState: NodeState;
   onAdvanced?: () => void;
 }
-
-const NEXT_NODE = 'preview';
 
 export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   const { showToast } = useToast();
@@ -127,7 +124,7 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     }
   }
 
-  // scene 级重生（015）：重合成整个 scene，与 UI 渲染粒度一致
+  // scene 级重生：重合成整个 scene，与 UI 渲染粒度一致
   async function doRegenScene(sceneId: string) {
     setRegenBusy((m) => ({ ...m, [sceneId]: true }));
     try {
@@ -170,7 +167,6 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     setAdvanceBusy(true);
     try {
       await flushEpisode();
-      await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
       showToast('进入成片检查失败，请稍后再试');
@@ -230,20 +226,6 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
   return (
     <div className="rw-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
-
-      {/* 配音状态行：跑过就常驻（done 后不消失，与 RW 一致） */}
-      {status !== 'idle' && (
-        <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
-          <ProcStatusRow
-            row={{
-              id: 'tts',
-              label: '伯牙配音合成',
-              status: status === 'done' ? 'done' : status === 'failed' ? 'failed' : 'running',
-            }}
-            runningText="合成中"
-          />
-        </div>
-      )}
 
       <div className="rw-panel-header">
         <div

@@ -89,6 +89,9 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
   const Icon = agent.icon;
 
   const memberStatuses = agentMemberStatuses(agent, job.nodes, { angleConfirmed });
+  const renderNodeState = job.nodes.render ?? defaultIdleState('render');
+  const [renderGateOpen, setRenderGateOpen] = useState(() => renderNodeState.status !== 'idle');
+  const canAccessRenderStep = agent.id !== 'render' || renderGateOpen || renderNodeState.status !== 'idle';
 
   // 当前展示的成员：默认聚焦首个 running，否则首个未完成，否则末位。用户点 chip 后停止自动聚焦。
   const computeFocus = () => {
@@ -100,6 +103,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
   const [active, setActive] = useState(computeFocus);
   const manualRef = useRef(false);
   const [drawerWidth, setDrawerWidth] = useState(() => initialDrawerWidth(agent.id));
+  const [previewEditing, setPreviewEditing] = useState(false);
 
   // SSE 推新状态时，未手动切过 tab 则跟随聚焦。
   useEffect(() => {
@@ -204,6 +208,11 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
   const nodeDef: PipelineNodeDef | undefined = pipeline.nodes.find((n) => n.name === activeNode);
   const nodeState = job.nodes[activeNode] ?? defaultIdleState(activeNode);
   const isFullscreen = activeNode === 'preview';
+  const isPreviewEditing = isFullscreen && previewEditing;
+
+  useEffect(() => {
+    if (!isFullscreen) setPreviewEditing(false);
+  }, [isFullscreen]);
 
   function renderMember() {
     switch (activeNode) {
@@ -270,9 +279,17 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
       case 'preview':
         return (
           <div className="agent-preview-wrap">
-            <PreviewIframePanel jobId={jobId} />
-            <div className="panel-footer">
-              <button className="btn primary" onClick={() => advance('preview')}>通过审核 · 去渲染</button>
+            <PreviewIframePanel jobId={jobId} onEditModeChange={setPreviewEditing} />
+            <div className="preview-action-bar">
+              <button
+                className="btn primary"
+                onClick={() => {
+                  setRenderGateOpen(true);
+                  advance('preview');
+                }}
+              >
+                去渲染
+              </button>
             </div>
           </div>
         );
@@ -284,17 +301,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
             nodeState={nodeState}
             actionLabel="开始渲染"
             rerunLabel="重新渲染"
-            onAdvanced={() => advance('render')}
-          />
-        );
-      case 'download':
-        return (
-          <StepRunPanel
-            jobId={jobId}
-            nodeDef={nodeDef ?? { name: 'download', label: '下载', cmd: '', deps: [], out_dir: '', description: '导出成片', kind: 'output', position: { x: 0, y: 0 } }}
-            nodeState={nodeState}
-            actionLabel="完成"
-            onAdvanced={onClose}
+            locked={!canAccessRenderStep}
           />
         );
       default:
@@ -307,7 +314,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
       <div className="drawer-backdrop" onClick={onClose} />
       <aside
         ref={asideRef}
-        className={`drawer${isFullscreen ? ' fullscreen' : ''}${agent.id === 'guiguzi' ? ' wide' : ''}`}
+        className={`drawer${isFullscreen ? ' fullscreen' : ''}${isPreviewEditing ? ' preview-editing' : ''}${agent.id === 'guiguzi' ? ' wide' : ''}`}
         style={isFullscreen ? undefined : { width: drawerWidth }}
         role="dialog"
         aria-modal
@@ -338,8 +345,8 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
           </button>
         </div>
 
-        {/* 成员步进 chips：agent 的状态监控面板 */}
-        {members.length > 1 && (
+        {/* 成员步进 chips：agent 的状态监控面板。成片是单一审片->渲染工作流，内部隐性切换。 */}
+        {members.length > 1 && agent.id !== 'render' && (
           <div className="agent-steps" role="tablist" aria-label={`${agent.name} 步骤`}>
             {members.map((m, i) => {
               const st = memberStatuses[i];

@@ -1,4 +1,4 @@
-"""paper_card_talk_015 pipeline 声明（v7 · 10 节点全串行）。
+"""final_preview pipeline 声明（v7 · 10 节点全串行）。
 
 DAG 形态（线性 10 节点）：
     [input] → [asr] → [rw] → [lines] → [storyboard] → [image] → [tts] → [preview] → [render] → [download]
@@ -13,8 +13,8 @@ DAG 形态（线性 10 节点）：
                产出全片统一背景 + 切分子场景 + 设计前景素材（scenes[].sketches）。
 - image      : 出 1 张全片背景 + 遍历 sketches 出白底前景素材（gpt-image-2），落 03_image/
 - tts        : 按最终 beats[].scene 整段合成配音，落 04_tts/scene-<sid>.mp3 + 字级时间戳
-- preview    : iframe 全屏 HTML（edit-mode + Inspector + Tweaks 抽屉），回写 02_rw/episode.json
-- render     : render_015 命令 → 1920x1080 MP4
+- preview    : iframe 全屏 HTML（E 模式成品构图编辑），回写 02_rw/episode.json
+- render     : render_final_preview 命令 → 1920x1080 MP4
 - download   : UI-only 成品下载卡
 """
 
@@ -23,9 +23,9 @@ from __future__ import annotations
 from ncds_opus_core.pipelines.types import NodePosition, PipelineDef, PipelineNode
 
 PIPELINE = PipelineDef(
-    id="paper_card_talk_015",
-    name="Paper Card Talk · 015",
-    description="抖音爆款 → 暖纸卡片口播 1920x1080 MP4（015 模板，scene 整段配音 + 字级时间戳）",
+    id="final_preview",
+    name="Final Preview",
+    description="抖音爆款 → 成品预览模板 1920x1080 MP4（scene 整段配音 + 字级时间戳）",
     nodes=(
         PipelineNode(
             name="input",
@@ -103,7 +103,7 @@ PIPELINE = PipelineDef(
         PipelineNode(
             name="render",
             label="RENDER",
-            cmd="render_015",
+            cmd="render_final_preview",
             deps=("preview",),
             out_dir="06_render",
             description="64x极速渲染1080P视频文件",

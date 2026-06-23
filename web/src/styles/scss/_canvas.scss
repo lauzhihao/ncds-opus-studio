@@ -5,9 +5,8 @@
 .canvas-page {
   height: 100vh;
   display: grid;
-  /* topbar / wolong-bar / 画布 三行；之前只有 56px 1fr 两行，wolong-bar 吃掉 1fr 被拉伸，
-     画布落到隐式第三行、溢出窗口底部看不到底。auto 让 wolong-bar 取自然高度，画布占满剩余 1fr。 */
-  grid-template-rows: 56px auto 1fr;
+  /* topbar / 画布 两行。卧龙已作为最后一个 agent 节点呈现，不再单独占顶部进度条。 */
+  grid-template-rows: 56px 1fr;
   padding-bottom: var(--s-4);          /* 画布底部与窗口底保持间距 */
 }
 .canvas-frame {
@@ -513,5 +512,4 @@
   border-right: 2px solid var(--ink-3);
   border-bottom: 2px solid var(--ink-3);
 }
-
 

@@ -22,7 +22,7 @@ from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 from ncds_opus_factory.server import pipeline_runner as pr
 from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 from ncds_opus_factory.server import pipeline_storyboard_tasks as storyboard_tasks
-from ncds_opus_factory.server.engine.recipes import PAPER_CARD_TALK_015
+from ncds_opus_factory.server.engine.recipes import FINAL_PREVIEW
 from ncds_opus_factory.server.schemas import TaskMeta
 
 
@@ -37,9 +37,9 @@ class _FakeProc:
 
 
 def test_core_pipeline_order_matches_engine_recipe():
-    """`/jobs` facade 和 engine recipe 必须共享同一条 015 顺序。"""
-    pipeline = get_pipeline("paper_card_talk_015")
-    assert pipeline.topological_order() == PAPER_CARD_TALK_015.topological_order()
+    """`/jobs` facade 和 engine recipe 必须共享同一条 final_preview 顺序。"""
+    pipeline = get_pipeline("final_preview")
+    assert pipeline.topological_order() == FINAL_PREVIEW.topological_order()
     assert pipeline.node("image").deps == ("storyboard",)
     assert pipeline.node("tts").deps == ("image",)
     assert pipeline.node("preview").deps == ("tts",)
@@ -51,7 +51,7 @@ def test_run_image_allowed_after_storyboard_before_tts(
 ):
     """画面资产应由吴道子在 storyboard 后直接启动，不再等待伯牙 tts。"""
     runner = pr.PipelineRunner(tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     state = runner.get_job(job.job_id)
     for node in ("asr", "rw", "lines", "storyboard"):
         state.nodes[node].status = "done"
@@ -75,7 +75,7 @@ def test_run_node_active_is_idempotent_and_does_not_restart(
 ):
     """运行中的节点再次收到 run 请求时，不重置、不二次启动。"""
     runner = pr.PipelineRunner(tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     state = runner.get_job(job.job_id)
     for node in ("asr", "rw", "lines", "storyboard"):
         state.nodes[node].status = "done"
@@ -133,7 +133,7 @@ def test_run_node_with_task_runner_enqueues_pipeline_node(
 
     runner = pr.PipelineRunner(tmp_path)
     runner.attach_task_runner(FakeTaskRunner())
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     state = runner.get_job(job.job_id)
     for node in ("asr", "rw", "lines", "storyboard"):
         state.nodes[node].status = "done"
@@ -157,11 +157,11 @@ def test_run_node_with_task_runner_enqueues_pipeline_node(
 
 def test_get_job_reconciles_orphan_running_node(tmp_path: Path):
     runner = pr.PipelineRunner(tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     state = runner._load(job.job_id)
     state.nodes["image"].status = "running"
     state.nodes["image"].started_at = time.time() - 60
-    state.nodes["image"].progress = "[29/33] S1-13b 容器图生成中…"
+    state.nodes["image"].progress = "[29/33] S1-13b 前景素材生成中…"
     state.nodes["image"].task_id = "i_orphan_engine"
     runner._save(state)
 
@@ -189,7 +189,7 @@ def test_get_job_reconciles_active_pipeline_task_over_failed_facade(tmp_path: Pa
             self.store = FakeStore(meta)
 
     runner = pr.PipelineRunner(tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     meta = TaskMeta(
         task_id="pipeline_node_1780000000000abcdef12",
         cmd="pipeline_node",
@@ -318,7 +318,7 @@ def test_rw_model_helpers_assert_known_model_and_mock_short_circuit(
 
     state = pr.JobState(
         job_id="j1",
-        pipeline_id="paper_card_talk_015",
+        pipeline_id="final_preview",
         title="t",
         created_at=1.0,
         updated_at=1.0,
@@ -341,7 +341,7 @@ def test_execute_lines_writes_episode_with_template_config(
     monkeypatch: pytest.MonkeyPatch,
 ):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     rw_dir = tmp_path / job.job_id / "02_rw"
     rw_dir.mkdir(parents=True)
     (rw_dir / "draft.md").write_text("# 草稿\n\n第一段。第二段。", encoding="utf-8")
@@ -380,7 +380,7 @@ def test_execute_asr_collect_uses_extracted_run_context(
     import ncds_opus_factory.common.tikhub_client as tc
 
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {
+    job = runner.create_job("final_preview", "t", {
         "shares": [
             {"url": "https://v.douyin.com/ok"},
             {"url": "https://v.douyin.com/bad"},
@@ -426,7 +426,7 @@ def test_execute_asr_collect_uses_extracted_run_context(
 
 def test_select_rw_model_copies_selected_draft(tmp_path: Path):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     rw_dir = tmp_path / job.job_id / "02_rw"
     model_dir = rw_dir / "opus"
     model_dir.mkdir(parents=True)
@@ -457,7 +457,7 @@ def test_regen_scene_image_from_preview_updates_image_outputs(
     monkeypatch: pytest.MonkeyPatch,
 ):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     runner.write_episode(job.job_id, {
         "image": {"size": "1024x1024", "quality": "high", "noTextHint": "no text"},
         "beats": [{"scene": "s1"}],
@@ -492,7 +492,7 @@ def test_regen_scene_image_from_preview_updates_image_outputs(
 
 def test_select_image_variant_copies_candidate_to_main(tmp_path: Path):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     img_dir = tmp_path / job.job_id / "03_image"
     img_dir.mkdir(parents=True)
     (img_dir / "s1.webp").write_bytes(b"old-main")
@@ -618,13 +618,17 @@ def test_generate_scene_image_cancel_kills_subprocess(
 
 def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     runner.write_episode(job.job_id, {
-        "beats": [{"scene": "ch1"}, {"scene": "s1"}, {"scene": "s2"}],
-        "scenes": {
-            "ch1": {"prompt": "章节卡"},
-            "s1": {"prompt": "场景一", "sketches": [{"prompt": "简笔画1"}]},
-            "s2": {"prompt": ""},
+        "beats": [{"scene": "g1"}, {"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [
+                {"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一",
+                 "assets": [{"id": "a1", "prompt": "asset one"}]},
+                {"beatIndex": 2, "shotId": "b002", "group": "g1", "intent": "画面二",
+                 "assets": [{"id": "a1", "prompt": "asset two"}]},
+            ],
         },
         "image": {"size": "1536x1024", "quality": "auto", "sketchStylePrefix": "白底黑剪影"},
     })
@@ -640,22 +644,24 @@ def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.M
     out = asyncio.run(runner._execute_image(job.job_id))
 
     assert (out["ok"], out["skipped"], out["failed"]) == (1, 0, 0)
-    assert out["sketch_ok"] == 1
-    assert "ch1" not in calls
-    assert "background" in calls and "s1-sk1" in calls and "s1" not in calls
+    assert out["asset_ok"] == 2
+    assert "background" in calls and "b001-a1" in calls and "b002-a1" in calls
     assert (tmp_path / job.job_id / "03_image" / "background.webp").is_file()
-    assert (tmp_path / job.job_id / "03_image" / "s1-sk1.webp").is_file()
+    assert (tmp_path / job.job_id / "03_image" / "b001-a1.webp").is_file()
 
 
 def test_execute_image_idempotent_skip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     img_dir = tmp_path / job.job_id / "03_image"
     img_dir.mkdir(parents=True)
     (img_dir / "background.webp").write_bytes(b"existing")
     runner.write_episode(job.job_id, {
-        "beats": [{"scene": "s1"}],
-        "scenes": {"s1": {"prompt": "场景一"}},
+        "beats": [{"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [{"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一", "assets": []}],
+        },
         "image": {"n": 1},
     })
     monkeypatch.setattr(
@@ -669,15 +675,18 @@ def test_execute_image_idempotent_skip(tmp_path: Path, monkeypatch: pytest.Monke
 
 def test_execute_image_skip_preserves_selected_variant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     img_dir = tmp_path / job.job_id / "03_image"
     img_dir.mkdir(parents=True)
     (img_dir / "background-v1.webp").write_bytes(b"variant-one")
     (img_dir / "background-v2.webp").write_bytes(b"variant-two")
     (img_dir / "background.webp").write_bytes(b"variant-two")
     runner.write_episode(job.job_id, {
-        "beats": [{"scene": "s1"}],
-        "scenes": {"s1": {"prompt": "场景一"}},
+        "beats": [{"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [{"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一", "assets": []}],
+        },
         "image": {"n": 2},
     })
     monkeypatch.setattr(
@@ -696,10 +705,13 @@ def test_execute_image_skip_preserves_selected_variant(tmp_path: Path, monkeypat
 
 def test_execute_image_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     runner.write_episode(job.job_id, {
-        "beats": [{"scene": "s1"}],
-        "scenes": {"s1": {"prompt": "唯一场景"}},
+        "beats": [{"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [{"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一", "assets": []}],
+        },
         "image": {"retries": 0},
     })
     monkeypatch.setattr(
@@ -716,10 +728,13 @@ def test_execute_image_retries_transient_timeout_without_leaking_traceback(
     monkeypatch: pytest.MonkeyPatch,
 ):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     runner.write_episode(job.job_id, {
-        "beats": [{"scene": "s1"}],
-        "scenes": {"s1": {"prompt": "唯一场景"}},
+        "beats": [{"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [{"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一", "assets": []}],
+        },
         "image": {"retries": 1, "retryBackoffSeconds": 0, "n": 1},
     })
     calls = {"n": 0}
@@ -754,10 +769,13 @@ def test_execute_image_failure_progress_is_friendly(
     monkeypatch: pytest.MonkeyPatch,
 ):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     runner.write_episode(job.job_id, {
-        "beats": [{"scene": "s1"}],
-        "scenes": {"s1": {"prompt": "唯一场景"}},
+        "beats": [{"scene": "g1"}],
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [{"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一", "assets": []}],
+        },
         "image": {"retries": 0},
     })
     progress: list[str] = []
@@ -782,7 +800,7 @@ def test_execute_image_failure_progress_is_friendly(
 
 def test_execute_tts_uses_extracted_run_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     runner.write_episode(job.job_id, {
         "beats": [
             {"zh": "一", "scene": "s1"},
@@ -791,7 +809,7 @@ def test_execute_tts_uses_extracted_run_context(tmp_path: Path, monkeypatch: pyt
         ],
         "scenes": {},
     })
-    tpl = tmp_path / "template" / ".015-draft-assets"
+    tpl = tmp_path / "template" / ".final-preview-assets"
     tpl.mkdir(parents=True)
     (tpl / "tts_gen.py").write_text("# stub\n", encoding="utf-8")
     monkeypatch.setattr(pr, "_template_dir", lambda _name: tmp_path / "template")
@@ -819,10 +837,10 @@ def test_execute_tts_uses_extracted_run_context(tmp_path: Path, monkeypatch: pyt
 
 
 def test_execute_render_uses_extracted_run_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from ncds_opus_factory.commands import render_015
+    from ncds_opus_factory.commands import render_final_preview
 
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     runner.write_episode(job.job_id, {"beats": [], "scenes": {}})
     audio_dir = tmp_path / job.job_id / "04_tts"
     audio_dir.mkdir(parents=True)
@@ -840,7 +858,7 @@ def test_execute_render_uses_extracted_run_context(tmp_path: Path, monkeypatch: 
             "workdir": kwargs["workdir"],
         }
 
-    monkeypatch.setattr(render_015, "run", fake_render)
+    monkeypatch.setattr(render_final_preview, "run", fake_render)
 
     out = asyncio.run(runner._execute_render(job.job_id))
 
@@ -854,7 +872,7 @@ def test_execute_render_uses_extracted_run_context(tmp_path: Path, monkeypatch: 
 
 def test_execute_storyboard_fills_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     runner.write_episode(job.job_id, {
         "meta": {"title": "T"},
         "image": {},
@@ -867,13 +885,17 @@ def test_execute_storyboard_fills_scenes(tmp_path: Path, monkeypatch: pytest.Mon
         "scenes": {},
     })
     director_json = json.dumps({
-        "scenes": {
-            "s1": {"prompt": "场景一", "group": "g1", "imageFit": "contain",
-                   "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
-            "s2": {"prompt": "场景二", "group": "g1", "imageFit": "contain",
-                   "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
+        "visual": {
+            "stage": {"background": {"prompt": "统一背景", "imageFit": "cover"}},
+            "shots": [
+                {"beatIndex": 1, "shotId": "b001", "group": "g1", "intent": "画面一",
+                 "assets": [{"id": "a1", "prompt": "asset one"}]},
+                {"beatIndex": 2, "shotId": "b002", "group": "g1", "intent": "画面二",
+                 "assets": [{"id": "a1", "prompt": "asset two"}]},
+                {"beatIndex": 3, "shotId": "b003", "group": "g2", "intent": "画面三",
+                 "assets": [{"id": "a1", "prompt": "asset three"}]},
+            ],
         },
-        "sceneMap": {"1": "s1", "2": "s1", "3": "s2"},
     }, ensure_ascii=False)
 
     def fake_fallback(_user_prompt: str, _system_prompt: str, _on_progress, *, parse, **_kwargs: Any) -> Any:
@@ -882,16 +904,18 @@ def test_execute_storyboard_fills_scenes(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(storyboard_tasks, "structure_json_with_model_fallback", fake_fallback)
     out = asyncio.run(runner._execute_storyboard(job.job_id))
 
-    assert out["scenes_count"] == 2
-    assert out["groups_count"] == 1
+    assert out["shots_count"] == 3
+    assert out["assets_count"] == 3
+    assert out["groups_count"] == 2
     got = json.loads((tmp_path / job.job_id / "02_rw" / "episode.json").read_text(encoding="utf-8"))
-    assert set(got["scenes"]) == {"s1", "s2"}
-    assert [b["scene"] for b in got["beats"]] == ["s1", "s1", "s2"]
+    assert got["scenes"] == {}
+    assert [s["shotId"] for s in got["visual"]["shots"]] == ["b001", "b002", "b003"]
+    assert [b["scene"] for b in got["beats"]] == ["g1", "g1", "g2"]
 
 
 def test_execute_rw_uses_extracted_run_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     state = runner.get_job(job.job_id)
     state.nodes["asr"].status = "done"
     state.nodes["asr"].outputs = {
@@ -955,7 +979,7 @@ def test_guiguzi_threads_domain_from_job_inputs(tmp_path: Path, monkeypatch: pyt
     from ncds_opus_factory.commands import guiguzi as gz
 
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {"domain": "finance"})
+    job = runner.create_job("final_preview", "t", {"domain": "finance"})
     seen: dict[str, object] = {}
 
     def fake_analyze(items, on_progress=gz._noop, require_comment=True, domain=None, **kw):
@@ -986,7 +1010,7 @@ def test_guiguzi_no_domain_passes_none(tmp_path: Path, monkeypatch: pytest.Monke
     from ncds_opus_factory.commands import guiguzi as gz
 
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
-    job = runner.create_job("paper_card_talk_015", "t", {})
+    job = runner.create_job("final_preview", "t", {})
     seen: dict[str, object] = {}
 
     def fake_analyze(items, on_progress=gz._noop, require_comment=True, domain=None, **kw):

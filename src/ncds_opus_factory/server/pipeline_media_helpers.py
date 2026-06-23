@@ -1,4 +1,4 @@
-"""Shared media/process helpers for pipeline runner and 015 performers."""
+"""Shared media/process helpers for pipeline runner and final_preview performers."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def _run_tts_gen_015(
     only: str | None = None,
     force: bool = False,
 ) -> None:
-    """同步调 015 tts_gen.py 按 scene 整段合成 + 写回 episode.json 时间戳。"""
+    """同步调 final_preview tts_gen.py 按 scene 整段合成 + 写回 episode.json 时间戳。"""
     cmd = [
         sys.executable, str(script),
         "--episode", str(episode_path.resolve()),

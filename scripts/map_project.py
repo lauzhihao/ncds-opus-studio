@@ -154,7 +154,7 @@ PRIMITIVES = [
     ("/vid", "视频生成(DashScope)", "packages/core/src/ncds_opus_core/commands/vid.py", "core"),
     ("/tts", "批量 TTS(DashScope CosyVoice)", "packages/core/src/ncds_opus_core/commands/tts.py", "core"),
     ("/render", "离线录屏 + ffmpeg 合成 MP4", "packages/core/src/ncds_opus_core/commands/render.py", "core"),
-    ("/render_015", "015 纸卡模板渲染", "packages/core/src/ncds_opus_core/commands/render_015.py", "core"),
+    ("/render_final_preview", "成品预览模板渲染", "packages/core/src/ncds_opus_core/commands/render_final_preview.py", "core"),
     ("/asr", "本地媒体下载 + ASR 转写", "src/ncds_opus_factory/commands/asr.py", "factory 专属"),
 ]
 
@@ -187,7 +187,7 @@ def extract_runtime_summary() -> list[str]:
     """Node runner / worker / adapter + Python pipeline / gpt_image 网关。"""
     lines: list[str] = [
         "- HTTP surfaces: `/jobs` = web `/studio` 主路径(PipelineRunner facade); `/tasks` = Flutter app/外部任务主路径(TaskRunner + nof-worker); `/instances` = engine driver API(已存在,尚未替代前端主路径)",
-        "- Engine strangler: 默认未设 `NOF_ENGINE_NODES` 时 rw/lines/storyboard/tts/image/render 经 `/jobs` facade 走 engine; asr 固定 legacy `_execute_asr_collect`; `RECIPE_REGISTRY` 当前只有 `paper_card_talk_015`",
+        "- Engine strangler: 默认未设 `NOF_ENGINE_NODES` 时 rw/lines/storyboard/tts/image/render 经 `/jobs` facade 走 engine; asr 固定 legacy `_execute_asr_collect`; `RECIPE_REGISTRY` 当前只有 `final_preview`",
         "- Three-process runtime: redis(队列) + nof-server(:8810 producer/SSE/serve) + nof-worker(唯一离线任务执行体)",
     ]
 

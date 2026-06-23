@@ -174,7 +174,7 @@ class InstanceRunner:
         """执行单步：派发 → 状态机推进 → 事件/落盘。返回该步终态 StepState。
 
         闸门判据是 ``intervention`` 而非 ``performer``（design §4）：
-        - 有 intervention 的步（含**无执行体的人工编辑步**，如 015 的 lines/storyboard/preview）：
+        - 有 intervention 的步（含**无执行体的人工编辑步**，如 final_preview 的 preview）：
           出草稿后停在 ``awaiting_review``，等 driver/人介入——绝不静默直通。
         - 真·无介入的直通步（input/output/纯 process）：直接标 done。
         - 其余有执行体步：跑完直接 done。
