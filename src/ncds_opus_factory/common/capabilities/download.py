@@ -21,7 +21,8 @@ import sys
 import time
 from pathlib import Path
 
-from ncds_opus_factory.common import cancel, tikhub_client
+from ncds_opus_core.common import cancel
+from ncds_opus_factory.common import tikhub_client
 from ncds_opus_factory.common.tikhub_client import (
     download_cover,
     download_video,

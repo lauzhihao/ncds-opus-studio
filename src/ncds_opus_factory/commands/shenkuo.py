@@ -31,7 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from ncds_opus_factory.common import benchmark_store, cancel, capabilities, tikhub_client, works_repo
+from ncds_opus_core.common import cancel
+from ncds_opus_factory.common import benchmark_store, capabilities, tikhub_client, works_repo
 
 ROOT = Path(__file__).resolve().parents[3]
 BENCH = ROOT / "state" / "benchmark"
@@ -562,6 +563,8 @@ def run(
         return ret
 
     # 作者模式:拉作品列表 -> 写指标层 -> (refresh_only 止步) -> 选高赞 top -> 逐条采集
+    if author is None:
+        raise ValueError("需要 --author <sec_uid>")
     author_dir = BENCH / f"author_{author}"
     author_dir.mkdir(parents=True, exist_ok=True)
     on_progress(f"沈括启动: 拉作者作品(sec_uid={author[:16]}...)")

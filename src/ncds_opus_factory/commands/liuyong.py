@@ -20,9 +20,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ncds_opus_core.common.node_runtime import resolve_node
 from ncds_opus_core.runners import runner_path
 from ncds_opus_factory.common import ai_taste, quality_rubric, rubric_store
-from ncds_opus_factory.common.node_runtime import resolve_node
 
 ROOT = Path(__file__).resolve().parents[3]
 # rewrite 引擎已迁入 ncds_opus_core.runners（P1.6）；用 core 定位器取，不再从 repo 根拼 scripts/

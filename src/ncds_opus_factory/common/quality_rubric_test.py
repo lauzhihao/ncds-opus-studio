@@ -74,6 +74,28 @@ def test_prompt_embeds_text():
     assert "我的独特待评稿XYZ" in quality_rubric.build_rubric_prompt("我的独特待评稿XYZ")
 
 
+# --- judge 可用性检查 ---
+
+def test_check_judge_available_uses_cli_detection(monkeypatch):
+    """codex/agy 分支会走 shutil.which；deepseek 兼容旧 ds 别名。"""
+    seen: list[str] = []
+
+    def fake_which(name: str) -> str | None:
+        seen.append(name)
+        return f"/bin/{name}" if name == "scodex" else None
+
+    monkeypatch.setattr(quality_rubric, "is_opus_available", lambda: False)
+    monkeypatch.setattr(quality_rubric.shutil, "which", fake_which)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    assert quality_rubric._check_judge_available("opus") is False
+    assert quality_rubric._check_judge_available("codex") is True
+    assert quality_rubric._check_judge_available("agy") is False
+    assert quality_rubric._check_judge_available("deepseek") is True
+    assert quality_rubric._check_judge_available("ds") is True
+    assert seen == ["scodex", "agy"]
+
+
 # --- score 优雅降级(绝不抛异常) ---
 
 def test_score_degrades_when_no_judge_available(monkeypatch):
@@ -102,19 +124,38 @@ def test_score_uses_first_available_judge(monkeypatch):
     called: list[str] = []
 
     def fake_available(mid: str) -> bool:
-        return mid in ("opus", "ds")  # opus 可用, codex/agy 不可用
+        return mid in ("opus", "deepseek")  # opus 可用, codex/agy 不可用
     monkeypatch.setattr(quality_rubric, "_check_judge_available", fake_available)
 
     def tracking_call(prompt: str, model_id: str, timeout: int) -> str:
         called.append(model_id)
         if model_id == "opus":
             raise RuntimeError("opus failed")
-        # ds 返回 mock JSON
+        # deepseek 返回 mock JSON
         return '{"dims":{"节奏":8,"真实性":7,"精炼度":6,"直接性":7,"信任度":8},"issues":[]}'
 
     monkeypatch.setattr(quality_rubric, "_call_judge", tracking_call)
 
     r = quality_rubric.score("一段稿子", avoid_models=set())
     assert r["available"] is True
-    assert r["judge_model"] == "ds"
-    assert called == ["opus", "ds"]
+    assert r["judge_model"] == "deepseek"
+    assert called == ["opus", "deepseek"]
+
+
+def test_refine_prefers_deepseek_model_id(monkeypatch):
+    """RW 抽屉传入 deepseek 时，refine 应优先使用 deepseek judge。"""
+    called: list[str] = []
+
+    def fake_available(mid: str) -> bool:
+        return mid == "deepseek"
+
+    def tracking_call(prompt: str, model_id: str, timeout: int) -> str:
+        called.append(model_id)
+        return "优化后的完整口播稿。" * 30
+
+    monkeypatch.setattr(quality_rubric, "_check_judge_available", fake_available)
+    monkeypatch.setattr(quality_rubric, "_call_judge", tracking_call)
+
+    out = quality_rubric.refine("原稿正文。" * 30, ["第 2 段节奏偏平"], prefer_models={"deepseek"})
+    assert out
+    assert called == ["deepseek"]

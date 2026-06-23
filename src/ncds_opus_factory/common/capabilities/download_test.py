@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ncds_opus_factory.common import cancel
+from ncds_opus_core.common import cancel
 from ncds_opus_factory.common.capabilities import download
 
 

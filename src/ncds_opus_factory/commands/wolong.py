@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from ncds_opus_factory.common import cancel
+from ncds_opus_core.common import cancel
 from ncds_opus_factory.common.round_store import RoundStore
 from ncds_opus_factory.commands import wolong_rounds
 

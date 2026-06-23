@@ -28,7 +28,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from ncds_opus_factory.common import cancel
+from ncds_opus_core.common import cancel
 from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.queue import RedisQueue, get_default_queue
 from ncds_opus_factory.server.schemas import Review, TaskMeta

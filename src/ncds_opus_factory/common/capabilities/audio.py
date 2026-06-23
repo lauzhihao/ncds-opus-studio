@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from ncds_opus_factory.common import cancel
+from ncds_opus_core.common import cancel
 
 from ._base import ProgressFn, noop
 

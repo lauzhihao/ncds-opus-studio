@@ -161,7 +161,7 @@ class PipelineRwOperationsMixin:
         on_progress(f"按 {len(issues)} 条建议优化启动")
         refined = await asyncio.to_thread(quality_rubric.refine, text, issues, prefer_models={model_id})
         if not refined or len(refined.strip()) < 200:
-            raise RuntimeError("优化未返回有效稿（已保留原稿）")
+            raise ValueError("优化未返回有效稿（已保留原稿）")
         draft_path.write_text(refined.strip() + "\n", encoding="utf-8")
         on_progress("优化稿写盘完成，重跑质检")
 

@@ -153,13 +153,6 @@ function QcReport({
                 type="button"
                 className="btn sm primary rw-qc-refine-btn"
                 disabled={!canRefine}
-                title={
-                  refining
-                    ? '优化中…'
-                    : canRefine
-                      ? '让模型按上述建议优化所有稿件（保留爆款骨架），改完自动重跑质检'
-                      : '需先等执行完成'
-                }
                 onClick={onRefine}
               >
                 <Sparkles size={11} strokeWidth={1.9} />
@@ -168,7 +161,7 @@ function QcReport({
             )}
           </div>
           {rub.issues.slice(0, 3).map((it, i) => (
-            <span key={i} className="rw-qc-issue" title={it}>
+            <span key={i} className="rw-qc-issue">
               {it}
             </span>
           ))}
@@ -394,7 +387,7 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced, onReconnec
         <button
           className="btn primary sm"
           title="清空 4 个模型 draft 及下游产物后重新跑"
-          disabled={actionBusy}
+          disabled={actionBusy || refineBusy}
           onClick={() => setPendingRerun(true)}
         >
           <RefreshCw size={12} strokeWidth={1.9} /> 重新执行

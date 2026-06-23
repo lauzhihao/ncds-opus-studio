@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from typing import Any
 
@@ -24,15 +25,18 @@ from ncds_opus_factory.common.agy_cli import call_agy
 from ncds_opus_factory.common.deepseek_cli import call_deepseek
 from ncds_opus_factory.common.opus_cli import call_opus, is_opus_available
 
-# 质检 judge 优先级（靠前优先尝试）。id 与 MODEL_CANDIDATES.id 对齐，避免_models 据此传递。
-JUDGE_PRIORITY: list[str] = ["opus", "codex", "agy", "ds"]
+# 质检 judge 优先级（靠前优先尝试）。id 与 MODEL_CANDIDATES.id 对齐，avoid/prefer_models 据此传递。
+JUDGE_PRIORITY: list[str] = ["opus", "codex", "agy", "deepseek"]
+_JUDGE_MODEL_ALIASES: dict[str, str] = {
+    "ds": "deepseek",
+}
 
 # 每个 judge 对应的 runner 类型和实际模型名
 _JUDGE_MODEL_MAP: dict[str, str] = {
-    "opus":   "claude-opus-4-8",
-    "codex":  "gpt-5.5-codex",
-    "agy":    "gemini-3.5-flash",
-    "ds":     "deepseek-v4-pro",
+    "opus":     "claude-opus-4-8",
+    "codex":    "gpt-5.5-codex",
+    "agy":      "gemini-3.5-flash",
+    "deepseek": "deepseek-v4-pro",
 }
 
 DEFAULT_TIMEOUT_SECONDS = 600
@@ -43,6 +47,14 @@ GRADE_EXCELLENT = 45
 GRADE_GOOD = 35
 
 
+def _canonical_judge_model_id(model_id: str) -> str:
+    return _JUDGE_MODEL_ALIASES.get(model_id, model_id)
+
+
+def _canonical_judge_model_ids(model_ids: set[str] | None) -> set[str]:
+    return {_canonical_judge_model_id(model_id) for model_id in (model_ids or set())}
+
+
 def available() -> bool:
     """任意一个 judge 模型是否就绪。不可用时第 2 层优雅降级。"""
     return any(_check_judge_available(mid) for mid in JUDGE_PRIORITY)
@@ -50,13 +62,14 @@ def available() -> bool:
 
 def _check_judge_available(model_id: str) -> bool:
     """检查指定 judge 模型在本机是否可用。"""
+    model_id = _canonical_judge_model_id(model_id)
     if model_id == "opus":
         return is_opus_available()
     elif model_id == "codex":
         return shutil.which("scodex") is not None
     elif model_id == "agy":
         return shutil.which("agy") is not None
-    elif model_id == "ds":
+    elif model_id == "deepseek":
         return bool(os.environ.get("DEEPSEEK_API_KEY"))
     return False
 
@@ -109,6 +122,7 @@ def _call_scodex_judge(prompt: str, model_id: str, timeout: int) -> str:
 
 def _call_judge(prompt: str, model_id: str, timeout: int) -> str:
     """按 model_id 选择合适的 runner 调用 judge，返回 raw text。"""
+    model_id = _canonical_judge_model_id(model_id)
     model = _JUDGE_MODEL_MAP.get(model_id)
     if not model:
         raise ValueError(f"unknown judge model: {model_id}")
@@ -118,7 +132,7 @@ def _call_judge(prompt: str, model_id: str, timeout: int) -> str:
         return _call_scodex_judge(prompt, model, timeout)
     elif model_id == "agy":
         return call_agy(prompt, timeout_seconds=timeout)
-    elif model_id == "ds":
+    elif model_id == "deepseek":
         return call_deepseek(prompt, model=model, timeout_seconds=timeout)
     raise ValueError(f"unknown judge model: {model_id}")
 
@@ -245,8 +259,9 @@ def score(
     所有 judge 不可用 / 全部调用失败 -> 优雅降级，返回 available=False+skipped。
     avoid_models 传入改写所使用的模型 id 集合（如 ``{"agy"}``），避免自评偏差。
     """
-    candidates = [m for m in JUDGE_PRIORITY if m not in (avoid_models or set())]
-    fallback = [m for m in JUDGE_PRIORITY if m in (avoid_models or set())]
+    avoid_model_ids = _canonical_judge_model_ids(avoid_models)
+    candidates = [m for m in JUDGE_PRIORITY if m not in avoid_model_ids]
+    fallback = [m for m in JUDGE_PRIORITY if m in avoid_model_ids]
     ordered = candidates + fallback
 
     prompt = build_rubric_prompt(text)
@@ -273,7 +288,7 @@ def score(
 
     all_models = [m for m in JUDGE_PRIORITY if _check_judge_available(m)]
     if not all_models:
-        return {"available": False, "skipped": "无可用的 judge 模型(本机未安装 opus/scodex/agy/ds)"}
+        return {"available": False, "skipped": "无可用的 judge 模型(本机未安装 opus/scodex/agy/deepseek)"}
     return {"available": False, "skipped": f"rubric 打分失败: {'; '.join(errors)}"}
 
 
@@ -322,9 +337,11 @@ def refine(
     if not available() or not text.strip() or not issues:
         return None
 
-    preferred = [m for m in JUDGE_PRIORITY if m in (prefer_models or set())]
-    candidates = [m for m in JUDGE_PRIORITY if m not in (avoid_models or set()) and m not in (prefer_models or set())]
-    fallback = [m for m in JUDGE_PRIORITY if m in (avoid_models or set())]
+    prefer_model_ids = _canonical_judge_model_ids(prefer_models)
+    avoid_model_ids = _canonical_judge_model_ids(avoid_models)
+    preferred = [m for m in JUDGE_PRIORITY if m in prefer_model_ids]
+    candidates = [m for m in JUDGE_PRIORITY if m not in avoid_model_ids and m not in prefer_model_ids]
+    fallback = [m for m in JUDGE_PRIORITY if m in avoid_model_ids]
     ordered = preferred + candidates + fallback
 
     prompt = build_refine_prompt(text, issues)
