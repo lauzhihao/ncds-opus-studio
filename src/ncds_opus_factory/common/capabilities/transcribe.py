@@ -1,48 +1,30 @@
-"""转写能力：调 skills/tingwu-asr(听悟/Paraformer) + 听写稿清洗(qwen 优先,本地兜底)。
-
-底层原语，供沈括等上层组合。monkeypatch tingwu 的 key 用主仓库 .env（而非 openclaw 默认）。
-"""
+"""ASR 能力：听悟原始听写 + 内部清洗后处理。"""
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import sys
 from pathlib import Path
 
-from ._base import REPO_ROOT, ProgressFn, noop
-
-MAIN_ENV = REPO_ROOT / ".env"  # 仓库根 .env(已 gitignore,模板见 .env.example)
-TINGWU_DIR = REPO_ROOT / "skills" / "tingwu-asr" / "scripts"
-
-
-def read_dashscope_key() -> str | None:
-    """优先 env DASHSCOPE_API_KEY,其次主仓库 .env;都没有则返回 None(让 tingwu 走 openclaw 默认)。"""
-    if os.getenv("DASHSCOPE_API_KEY"):
-        return os.environ["DASHSCOPE_API_KEY"]
-    if MAIN_ENV.exists():
-        for line in MAIN_ENV.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("DASHSCOPE_API_KEY="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return None
+from ._base import ProgressFn, noop, read_dashscope_key
+from . import tingwu
 
 
 def transcribe(video_path: Path, on_progress: ProgressFn = noop) -> tuple[dict | None, str]:
-    """调 tingwu_transcribe.transcribe_file,返回 (结果 dict, 纯文本)。"""
-    if str(TINGWU_DIR) not in sys.path:
-        sys.path.insert(0, str(TINGWU_DIR))
-    import tingwu_transcribe as tw  # type: ignore
-
-    key = read_dashscope_key()
-    if key:
-        tw.get_api_key = lambda: key  # 用主仓库 .env 的 key,而非 openclaw 默认
-    result = tw.transcribe_file(str(video_path))
-    if result is None:
+    """调用唯一听悟 adapter，返回 (raw_response, raw_text)。"""
+    try:
+        on_progress("听悟 ASR 听写中...")
+        result = tingwu.transcribe_file(video_path)
+    except Exception as exc:  # noqa: BLE001 - 单条采集失败由上层降级/记录
+        on_progress(f"听悟 ASR 失败: {type(exc).__name__}")
         return None, ""
-    text = tw.extract_text(result)
-    result_dict = json.loads(json.dumps(result, default=lambda o: getattr(o, "__dict__", str(o))))
-    return result_dict, text
+    result_dict = {
+        "backend": result.backend,
+        "model": result.model,
+        "dataId": result.data_id,
+        "rawResponse": result.raw_response,
+    }
+    return json.loads(json.dumps(result_dict, ensure_ascii=False)), result.text
 
 
 def clean_transcript(raw: str, on_progress: ProgressFn = noop) -> str | None:

@@ -216,7 +216,7 @@ class VideoPipelineTests(unittest.TestCase):
 
             result = self.module.AsrTranscriptionResult(
                 status="success",
-                backendUsed="tingwu-v2",
+                backendUsed="tingwu",
                 rawText="transcript",
                 rawTextPath=str(transcript_path),
                 errorKind=None,

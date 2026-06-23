@@ -47,9 +47,9 @@ PYTHONPATH=src python3 -m ncds_opus_factory shenkuo --aweme <aweme_id>   # 单�
 
 ## 复用 / 坑
 
-- 复用:`common/tikhub_client`(下载 + 新写的按作者拉) / `skills/tingwu-asr/tingwu_transcribe`(转写) / `ffmpeg` / `rembg`。
+- 复用:`common/tikhub_client`(下载 + 按作者拉) / `common/capabilities/tingwu.py`(听悟 vendor adapter) / `ffmpeg` / `rembg`。
 - **不用** `commands/asr.py`(它把结果发飞书,违背离线) / `pipelines/douyin_processing/download_and_transcribe.py`(yt-dlp+本地 whisper 老垃圾)。
-- 转写 key:`tingwu_transcribe.get_api_key` 默认读 openclaw;沈括 monkeypatch 成主仓库 `.env` 的 `DASHSCOPE_API_KEY`。
+- 转写 key:统一由 capabilities 基座读取环境变量 / 主仓库 `.env` 的 `DASHSCOPE_API_KEY`。
 - 抠图依赖:`rembg`+`onnxruntime`(装在 python3,`pip install --break-system-packages`)。
 - 截帧抠图质量:对标号是浅纸背景 + 黑剪影/图标,rembg 抠深色前景质量待验,v0 先跑通。
 

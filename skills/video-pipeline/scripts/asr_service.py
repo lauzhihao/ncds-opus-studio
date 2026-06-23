@@ -6,31 +6,20 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from functools import lru_cache
-from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-
-try:
-    import dashscope
-    from dashscope import Files as DashscopeFiles
-    from dashscope.audio.asr import Transcription as DashscopeTranscription
-except ImportError:
-    dashscope = None
-    DashscopeFiles = None
-    DashscopeTranscription = None
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from ncds_opus_factory.common.capabilities.transcribe import read_dashscope_key
+from ncds_opus_factory.common.capabilities import tingwu as tingwu_adapter
 
 
 def resolve_binary(name: str, env_var: str | None = None, *, required: bool = True) -> str | None:
@@ -67,9 +56,6 @@ CHUNKED_PROOFREAD_MODELS = [
     (OPENAI_CODEX_PROVIDER, OPENAI_CODEX_MODEL_NAME),
 ]
 
-TINGWU_SCRIPT_TIMEOUT_SECONDS = 1800
-TINGWU_MAX_POLLS = 120
-TINGWU_POLL_INTERVAL_SECONDS = 3
 CHUNK_SECONDS = 120
 MAX_WORKERS = 8
 
@@ -123,8 +109,7 @@ class TranscriptionResult:
         return getattr(path, name)
 
 
-class TingwuBackendUnavailableError(RuntimeError):
-    pass
+TingwuBackendUnavailableError = tingwu_adapter.TingwuUnavailableError
 
 
 def load_openclaw_config() -> dict:
@@ -136,16 +121,10 @@ def load_openclaw_config() -> dict:
 
 
 def load_dashscope_key() -> str | None:
-    return read_dashscope_key()
-
-
-def load_runtime_config() -> dict[str, Any]:
-    config_path = os.path.expanduser("~/.openclaw/config.json")
-    if not os.path.exists(config_path):
-        return {}
-    with open(config_path, encoding="utf-8") as handle:
-        data = json.load(handle)
-    return data if isinstance(data, dict) else {}
+    try:
+        return tingwu_adapter.resolve_api_key()
+    except tingwu_adapter.TingwuUnavailableError:
+        return None
 
 
 def get_default_agent_id() -> str:
@@ -277,36 +256,12 @@ def get_openai_codex_access_token(
     return None
 
 
-def get_tingwu_backend() -> str:
-    configured = os.environ.get("OPENCLAW_TINGWU_BACKEND")
-    if configured and configured.strip():
-        return configured.strip().lower()
-
-    config_backend = load_runtime_config().get("tingwu_backend")
-    if isinstance(config_backend, str) and config_backend.strip():
-        return config_backend.strip().lower()
-    return "dashscope"
-
-
-def get_tingwu_v2_script_path() -> Path:
-    configured = os.environ.get("OPENCLAW_TINGWU_SCRIPT")
-    if configured and os.path.exists(configured):
-        return Path(configured).resolve()
-    return Path(__file__).resolve().parents[2] / "tingwu-asr" / "scripts" / "tingwu_v2_transcribe.py"
-
-
 def is_whisper_usable() -> bool:
     return bool(WHISPER and os.path.isfile(WHISPER))
 
 
 def is_cloud_asr_usable() -> bool:
-    backend = get_tingwu_backend()
-    if backend == "legacy":
-        return bool(load_dashscope_key()) and dashscope is not None and DashscopeTranscription is not None and DashscopeFiles is not None
-    script_path = get_tingwu_v2_script_path()
-    if script_path.exists():
-        return True
-    return bool(load_dashscope_key()) and dashscope is not None and DashscopeTranscription is not None and DashscopeFiles is not None
+    return tingwu_adapter.is_configured()
 
 
 def build_proofread_prompt(text: str) -> str:
@@ -689,214 +644,15 @@ def transcribe_via_whisper(audio_path: Path, language: str = "Chinese") -> Path:
     raise RuntimeError("合并转写结果失败")
 
 
-def dashscope_field(value, key: str, default=None):
-    if value is None:
-        return default
-    if isinstance(value, dict):
-        return value.get(key, default)
-    return getattr(value, key, default)
-
-
-def upload_file_to_tingwu(audio_path: Path, api_key: str) -> str:
-    if DashscopeFiles is None:
-        raise TingwuBackendUnavailableError("dashscope files unavailable")
-    upload_response = DashscopeFiles.upload(file_path=str(audio_path.resolve()), purpose="file-extract", api_key=api_key)
-    if getattr(upload_response, "status_code", None) != HTTPStatus.OK:
-        raise RuntimeError(getattr(upload_response, "message", "tingwu file upload failed"))
-
-    upload_output = dashscope_field(upload_response, "output", {}) or {}
-    uploaded_files = upload_output.get("uploaded_files", [])
-    if not uploaded_files:
-        raise RuntimeError("tingwu file upload returned no uploaded_files")
-
-    file_id = uploaded_files[0].get("file_id")
-    if not file_id:
-        raise RuntimeError("tingwu file upload returned no file_id")
-
-    detail_response = DashscopeFiles.get(file_id, api_key=api_key)
-    if getattr(detail_response, "status_code", None) != HTTPStatus.OK:
-        raise RuntimeError(getattr(detail_response, "message", "tingwu file detail fetch failed"))
-
-    detail_output = dashscope_field(detail_response, "output", {}) or {}
-    file_url = detail_output.get("url")
-    if not file_url:
-        raise RuntimeError("tingwu file detail returned no url")
-    return file_url
-
-
-def download_tingwu_text(transcription_url: str) -> str:
-    request = Request(transcription_url, headers={"User-Agent": "openclaw-video-pipeline/1.0"})
-    with urlopen(request, timeout=120) as response:
-        data = json.loads(response.read().decode("utf-8"))
-
-    text_parts: list[str] = []
-    for transcript in data.get("transcripts", []) or []:
-        text = transcript.get("text", "")
-        if text:
-            text_parts.append(str(text))
-    return "\n".join(text_parts).strip()
-
-
-def extract_tingwu_text(output) -> str:
-    text_parts: list[str] = []
-    for item in dashscope_field(output, "results", []) or []:
-        transcription = dashscope_field(item, "transcription", "")
-        if transcription:
-            text_parts.append(str(transcription))
-            continue
-        transcription_url = dashscope_field(item, "transcription_url", "")
-        if transcription_url:
-            downloaded_text = download_tingwu_text(str(transcription_url))
-            if downloaded_text:
-                text_parts.append(downloaded_text)
-    return "".join(text_parts).strip()
-
-
-def wait_for_tingwu_result(task, api_key: str):
-    wait_method = getattr(DashscopeTranscription, "wait", None)
-    if callable(wait_method):
-        return wait_method(task, api_key=api_key)
-
-    fetch_method = getattr(DashscopeTranscription, "fetch", None)
-    if callable(fetch_method):
-        for _ in range(TINGWU_MAX_POLLS):
-            status_response = fetch_method(task, api_key=api_key)
-            status_output = dashscope_field(status_response, "output")
-            status = dashscope_field(status_output, "task_status")
-            if status in {"SUCCEEDED", "FAILED"}:
-                return status_response
-            time.sleep(TINGWU_POLL_INTERVAL_SECONDS)
-        raise RuntimeError(f"tingwu polling timeout after {TINGWU_MAX_POLLS} attempts")
-
-    get_result = getattr(DashscopeTranscription, "async_get_result", None)
-    if callable(get_result):
-        task_id = dashscope_field(dashscope_field(task, "output"), "task_id") or task
-        for _ in range(TINGWU_MAX_POLLS):
-            status_response = get_result(task_id)
-            status_output = dashscope_field(status_response, "output")
-            status = dashscope_field(status_output, "task_status")
-            if status in {"SUCCEEDED", "FAILED"}:
-                return status_response
-            time.sleep(TINGWU_POLL_INTERVAL_SECONDS)
-        raise RuntimeError(f"tingwu polling timeout after {TINGWU_MAX_POLLS} attempts")
-
-    raise TingwuBackendUnavailableError("dashscope transcription polling unavailable")
-
-
-def transcribe_via_tingwu_legacy(audio_path: Path) -> Path:
-    if dashscope is None or DashscopeTranscription is None or DashscopeFiles is None:
-        raise TingwuBackendUnavailableError("dashscope unavailable")
-    api_key = load_dashscope_key()
-    if not api_key:
-        raise TingwuBackendUnavailableError("dashscope api key missing")
-    try:
-        dashscope.api_key = api_key
-    except Exception as exc:
-        raise TingwuBackendUnavailableError(f"dashscope setup failed: {exc}") from exc
-
-    file_url = upload_file_to_tingwu(audio_path, api_key)
-    try:
-        response = DashscopeTranscription.async_call(model="paraformer-v1", file_urls=[file_url])
-    except AttributeError as exc:
-        raise TingwuBackendUnavailableError(str(exc)) from exc
-    if getattr(response, "status_code", None) != HTTPStatus.OK:
-        raise RuntimeError(f"{getattr(response, 'status_code', None)} {getattr(response, 'message', '')}")
-
-    response_output = getattr(response, "output", None)
-    task_id = dashscope_field(response_output, "task_id", None)
-    if not task_id:
-        raise RuntimeError("tingwu task_id missing")
-
-    status_response = wait_for_tingwu_result(response, api_key)
-    status_code = getattr(status_response, "status_code", None)
-    status_message = getattr(status_response, "message", "")
-    status_output = dashscope_field(status_response, "output", None)
-    if status_code != HTTPStatus.OK:
-        raise RuntimeError(f"{status_code} {status_message}")
-
-    status = dashscope_field(status_output, "task_status", None)
-    if status == "FAILED":
-        raise RuntimeError(status_message or "tingwu transcription failed")
-    if status != "SUCCEEDED":
-        raise RuntimeError(f"tingwu finished with unexpected status: {status}")
-
-    text = extract_tingwu_text(status_output)
-    if not text:
-        raise RuntimeError("tingwu transcription result missing text")
+def transcribe_via_tingwu(audio_path: Path) -> Path:
+    result = tingwu_adapter.transcribe_file(audio_path)
     txt_path = build_raw_transcript_output_path(audio_path)
-    txt_path.write_text(text, encoding="utf-8")
+    txt_path.write_text(result.text.strip(), encoding="utf-8")
     return txt_path
 
 
-def parse_tingwu_script_output(stdout: str) -> dict[str, Any]:
-    lines = [line.strip() for line in (stdout or "").splitlines() if line.strip()]
-    for line in reversed(lines):
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            return payload
-    raise RuntimeError("tingwu script returned no json payload")
-
-
-def transcribe_via_tingwu_v2_script(audio_path: Path) -> Path:
-    script_path = get_tingwu_v2_script_path()
-    if not script_path.exists():
-        raise TingwuBackendUnavailableError(f"tingwu script missing: {script_path}")
-
-    result = subprocess.run(
-        [sys.executable, str(script_path), str(audio_path)],
-        capture_output=True,
-        text=True,
-        timeout=TINGWU_SCRIPT_TIMEOUT_SECONDS,
-    )
-    payload = parse_tingwu_script_output(result.stdout)
-    if result.returncode != 0:
-        raise RuntimeError(str(payload.get("error") or result.stderr.strip() or "tingwu script failed"))
-
-    if payload.get("status") != "success":
-        raise RuntimeError(str(payload.get("error") or f"tingwu script returned unexpected status: {payload.get('status')}"))
-
-    txt_path = build_raw_transcript_output_path(audio_path)
-    text = payload.get("text")
-    text_path = payload.get("textPath")
-    if isinstance(text, str) and text.strip():
-        txt_path.write_text(text.strip(), encoding="utf-8")
-        return txt_path
-    if isinstance(text_path, str) and text_path.strip():
-        candidate = Path(text_path)
-        if candidate.exists():
-            content = candidate.read_text(encoding="utf-8").strip()
-            if content:
-                txt_path.write_text(content, encoding="utf-8")
-                return txt_path
-    raise RuntimeError("tingwu script payload missing text")
-
-
 def run_cloud_asr(audio_path: Path) -> tuple[str, Path]:
-    preferred_backend = get_tingwu_backend()
-    if preferred_backend == "legacy":
-        backends = [
-            ("tingwu-legacy", transcribe_via_tingwu_legacy),
-            ("tingwu-v2", transcribe_via_tingwu_v2_script),
-        ]
-    else:
-        backends = [
-            ("tingwu-v2", transcribe_via_tingwu_v2_script),
-            ("tingwu-legacy", transcribe_via_tingwu_legacy),
-        ]
-
-    last_error: Exception | None = None
-    for backend_name, backend in backends:
-        try:
-            return backend_name, backend(audio_path)
-        except Exception as exc:
-            last_error = exc
-            continue
-    if last_error is None:
-        raise TingwuBackendUnavailableError("no tingwu backend configured")
-    raise last_error
+    return "tingwu", transcribe_via_tingwu(audio_path)
 
 
 def transcribe_audio(audio_path: Path, language: str = "Chinese") -> TranscriptionResult:
@@ -905,8 +661,8 @@ def transcribe_audio(audio_path: Path, language: str = "Chinese") -> Transcripti
         result = build_transcription_success(
             backend_used=backend_used,
             txt_path=txt_path,
-            fallback_triggered=backend_used != "tingwu-v2",
-            fallback_reason="tingwu-v2 failed" if backend_used == "tingwu-legacy" else None,
+            fallback_triggered=False,
+            fallback_reason=None,
         )
         persist_transcription_result(result, audio_path)
         return result

@@ -47,18 +47,18 @@ description: 使用阿里云通义听悟（DashScope/Paraformer）提取音视�
 
 ## 脚本位置
 
-- 旧实现：`scripts/tingwu_transcribe.py`
-- 新实现：`scripts/tingwu_v2_transcribe.py`
+- 唯一实现：`src/ncds_opus_factory/common/capabilities/tingwu.py`
+- CLI wrapper：`scripts/tingwu_v2_transcribe.py`
+- 旧命令名 wrapper：`scripts/tingwu_transcribe.py`
 
 说明：
 - 聊天侧 `/asr` 主链路默认仍由 `skills/video-pipeline/scripts/video_pipeline.py` 驱动。
-- 当前默认优先级为：`scripts/tingwu_v2_transcribe.py` -> 旧版 DashScope `audio.asr.Transcription` 实现 -> 本地 `whisper`。
-- 当 `OPENCLAW_TINGWU_BACKEND=legacy` 或 `~/.openclaw/config.json` 中设置 `"tingwu_backend": "legacy"` 时，会先尝试旧版 DashScope 实现，再回退到 `tingwu_v2_transcribe.py` 和本地 `whisper`。
-- 新脚本基于 `dashscope.multimodal.tingwu.tingwu.TingWu` 的离线任务接口，保留旧脚本以便回退和对照。
+- 听悟 API 调用只保留 `capabilities/tingwu.py` 一处：本地文件上传为临时 URL、提交离线任务、轮询、提取原始文本。
+- `whisper` fallback 属于 ASR capability 内部降级策略，不属于听悟 vendor adapter。
+- 听写稿清洗属于 ASR 后处理，不在 vendor adapter 中实现。
 
 ### 使用流程
 
 1. 确认文件路径。
-2. 调用旧脚本：`python3 scripts/tingwu_transcribe.py <文件路径>`
-3. 调用新脚本：`python3 scripts/tingwu_v2_transcribe.py <文件路径>`
-4. 新脚本默认输出单行 JSON 到 stdout，便于被 `video_pipeline.py` 解析；调试日志输出到 stderr。
+2. 调用 wrapper：`python3 scripts/tingwu_v2_transcribe.py <文件路径>`
+3. wrapper 默认输出单行 JSON 到 stdout；调试日志输出到 stderr。
