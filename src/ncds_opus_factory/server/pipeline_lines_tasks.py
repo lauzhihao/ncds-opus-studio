@@ -4,33 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ncds_opus_core.templates import template_dir as _template_dir
 
-from ncds_opus_factory.server.pipeline_rw_helpers import (
-    DEFAULT_OPUS_MODEL_ID,
-    _ModelUnavailable,
-    _build_codex_user_prompt,
-    _call_agy_for_rw,
-    _call_deepseek_for_rw,
-    _call_opus_for_rw,
-    _call_scodex_for_rw,
-    _check_model_available,
+from ncds_opus_factory.server.pipeline_llm_fallback import (
+    parse_llm_json_text,
+    structure_json_with_model_fallback,
 )
-
-logger = logging.getLogger(__name__)
-
-LINES_MODEL_FALLBACKS: list[dict[str, str]] = [
-    {"id": "agy", "label": "AGY", "runner": "agy", "model": "gemini-3.5-flash"},
-    {"id": "ds", "label": "DeepSeek", "runner": "deepseek", "model": "deepseek-v4-pro"},
-    {"id": "scodex", "label": "SCodex", "runner": "scodex", "model": "gpt-5.5-codex"},
-    {"id": "opus", "label": "Opus", "runner": "opus", "model": DEFAULT_OPUS_MODEL_ID},
-]
 
 
 @dataclass
@@ -75,19 +58,6 @@ class PipelineLinesRun:
         self.runner._push_progress(self.job_id, "lines", text)
 
 
-def _parse_lines_json(raw: str) -> Any:
-    """Parse LLM JSON output, tolerating fenced code blocks."""
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", cleaned)
-        if inner:
-            cleaned = inner.group(1).strip()
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"模型输出非法 JSON：{exc}；tail={cleaned[-300:]}") from exc
-
-
 def structure_lines_json_with_fallback(
     user_prompt: str,
     system_prompt: str,
@@ -101,60 +71,19 @@ def structure_lines_json_with_fallback(
     Each model gets one chance. Any launcher/model/parse error is logged with stack
     and the next model is tried. The final user-facing error stays friendly.
     """
-    failures: list[str] = []
-    for cand in LINES_MODEL_FALLBACKS:
-        model_key = cand["id"]
-        try:
-            on_progress("正在准备视觉方案...")
-            raw = _call_lines_model(cand, user_prompt, system_prompt, callers=callers)
-            parsed = _parse_lines_json(raw)
-            on_progress("视觉方案准备完成")
-            return parsed
-        except Exception as exc:  # noqa: BLE001 - fallback boundary, full stack goes to logs
-            failures.append(f"{model_key}: {exc}")
-            logger.exception(
-                "[lines] model %s failed while structuring draft; falling back",
-                model_key,
-            )
-            on_progress("当前通道未成功，正在切换备用通道...")
-
-    logger.error("[lines] all fallback models failed: %s", " | ".join(failures))
-    raise RuntimeError(
-        "视觉方案准备暂时失败：备用通道都没有成功，请稍后重试。"
+    return structure_json_with_model_fallback(
+        user_prompt,
+        system_prompt,
+        on_progress,
+        parse=parse_llm_json_text,
+        target_profile="paper_card_talk_lines",
+        start_progress="正在准备视觉方案...",
+        success_progress="视觉方案准备完成",
+        failover_progress="当前通道未成功，正在切换备用通道...",
+        final_error="视觉方案准备暂时失败：备用通道都没有成功，请稍后重试。",
+        log_context="lines",
+        callers=callers,
     )
-
-
-def _call_lines_model(
-    cand: dict[str, str],
-    user_prompt: str,
-    system_prompt: str,
-    *,
-    callers: Mapping[str, Callable[[str, str, str], str]] | None = None,
-) -> str:
-    model_key = cand["id"]
-    if callers is not None and model_key in callers:
-        return callers[model_key](user_prompt, system_prompt, cand["model"])
-
-    available, reason = _check_model_available(cand)
-    if not available:
-        raise _ModelUnavailable(reason)
-
-    runner = cand["runner"]
-    if runner == "agy":
-        return _call_agy_for_rw(user_prompt, system_prompt, cand["model"])
-    if runner == "deepseek":
-        return _call_deepseek_for_rw(user_prompt, system_prompt, cand["model"])
-    if runner == "scodex":
-        combined = _build_codex_user_prompt(
-            system_prompt=system_prompt,
-            task_prompt=user_prompt,
-            target_profile="paper_card_talk_lines",
-            expect_json=True,
-        )
-        return _call_scodex_for_rw(combined, cand["model"])
-    if runner == "opus":
-        return _call_opus_for_rw(user_prompt, system_prompt, cand["model"])
-    raise _ModelUnavailable(f"unknown runner: {runner}")
 
 
 def _episode_from_lines_response(

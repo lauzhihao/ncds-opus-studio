@@ -244,6 +244,11 @@ class SelectModelBody(BaseModel):
     model_id: str
 
 
+class SelectImageVariantBody(BaseModel):
+    scene_id: str
+    image_relpath: str
+
+
 @router.post("/jobs/{job_id}/nodes/rw/rewrite/{model_id}")
 async def rewrite_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
     try:
@@ -287,6 +292,18 @@ async def regen_image_scene(job_id: str, scene_id: str) -> dict[str, Any]:
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "job_id": job_id, "scene_id": scene_id}
+
+
+@router.put("/jobs/{job_id}/nodes/image/select")
+async def select_image_variant(job_id: str, body: SelectImageVariantBody) -> dict[str, Any]:
+    """选择某个已生成候选为 scene 主图；下游仍读取标准 03_image/{scene}.webp。"""
+    try:
+        rel = PIPELINE_RUNNER.select_image_variant(job_id, body.scene_id, body.image_relpath)
+    except KeyError as e:
+        raise HTTPException(404, _exc_msg(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "job_id": job_id, "scene_id": body.scene_id, "image_relpath": rel}
 
 
 @router.post("/jobs/{job_id}/nodes/image/regen-sketch/{scene_id}/{n}")

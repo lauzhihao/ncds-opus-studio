@@ -23,6 +23,20 @@ def _ok(on_progress=None, **kw):
     return {"ok": True}
 
 
+def test_pipeline_source_allowed_for_internal_canvas_tasks(tmp_path: Path):
+    """web 画布节点由 server 入队、worker 执行，source=pipeline 必须可持久化。"""
+    store = TaskStore(tmp_path / "tasks")
+
+    meta = store.create(
+        "pipeline_node",
+        {"job_id": "job_1", "node_name": "image"},
+        source="pipeline",
+    )
+
+    assert meta.source == "pipeline"
+    assert store.get_meta(meta.task_id).source == "pipeline"
+
+
 async def _wait_status(store: TaskStore, ids: list[str], want: str, timeout: float = 8.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -330,14 +344,14 @@ def test_shutdown_requests_cooperative_stop_without_user_cancel(tmp_path: Path):
 # S3 步3 防双投测试（fakeredis，不连真 Redis）
 # ---------------------------------------------------------------------------
 
-def test_recover_clears_redis_stale_before_disk_scan(tmp_path: Path):
-    """recover DEL 先于 disk-scan 重投：Redis List 残留 + 磁盘 pending，每个 task_id 只执行一次。
+def test_recover_keeps_redis_queue_and_claim_skips_duplicates(tmp_path: Path):
+    """recover 不清 Redis List：残留 + 补投产生重复条目，也只执行一次。
 
     场景：
     - 磁盘有一个 pending task_id（模拟上次 lpush 后进程崩溃，task 残留 pending）。
     - Redis List 里也有同一 task_id（模拟旧进程已 lpush 但没 BRPOP）。
-    - recover 必须先 DEL List，再 disk-scan 全量重投一次。
-    - 断言：run_fn 只被调用一次（不是两次）——CAS 兜底第二次 _run 也能防重。
+    - recover 不允许 DEL List；会补投一次，因此 Redis List 出现重复 task_id。
+    - 断言：run_fn 只被调用一次（不是两次）——Redis claim 兜底第二次 _run 跳过。
     """
     # 用简单计数器（不依赖 _dispatch_task_id 注入，那是 wolong-only 逻辑）
     run_count = {"n": 0}
@@ -357,21 +371,19 @@ def test_recover_clears_redis_stale_before_disk_scan(tmp_path: Path):
         # 模拟 Redis List 里预先有该 task_id（旧进程已 lpush，但进程崩了没 brpop）
         await runner._rq.lpush("x", tid)
 
-        # recover 先 DEL List（清掉上面那条残留），再 disk-scan（disk 还是 pending，重投一次）
+        # recover 不清旧 List；disk 还是 pending，会补投一次。
         await runner.recover_and_start()
         # cancel 所有 worker（防 brpop 等 5s 拖慢测试，测试直接驱动 _run）
         for w in runner._workers:
             w.cancel()
 
-        # 直接断言 DEL 生效：Redis 残留 1 条 + 磁盘 pending 1 条，DEL 清残留后只重投 1 次
-        # → List 恰好 1 条(不是 2)。workers 刚 cancel、事件循环未 yield 给它们故未消费，
-        # 此处 llen 非竞态。这条直接守护「DEL 先于重投」决策——少了它仅靠 CAS 也能 exactly-once，
-        # 但 List 会残留双份(膨胀 + 多一次被 CAS 丢弃的空跑)。
-        assert await runner._rq._client.llen("nof:q:x") == 1, "DEL 未清残留：List 应恰好 1 条"
+        # workers 刚 cancel、事件循环未 yield 给它们故未消费，此处 llen 非竞态。
+        # 旧条目被保留 + recover 补投一次，List 恰好 2 条；重复由 Redis claim 跳过。
+        assert await runner._rq._client.llen("nof:q:x") == 2, "recover 不应清空 Redis 旧队列"
 
         # 直接调 _run 模拟出队执行
-        # _run 是幂等 CAS（只跑 pending）：第一次执行后 status=completed，
-        # 第二次 CAS 检查到非 pending，静默跳过——不会双跑
+        # _run 是 Redis claim 幂等：第一次 pending->running->completed，
+        # 第二次 claim 检查到非 pending，静默跳过——不会双跑
         await runner._run(tid, "x")
         await runner._run(tid, "x")  # 第二次 CAS skip
 
@@ -379,7 +391,7 @@ def test_recover_clears_redis_stale_before_disk_scan(tmp_path: Path):
 
     store, tid = asyncio.run(main())
     assert store.get_meta(tid).status == "completed", "task 应已 completed"
-    # 关键断言：只执行一次（DEL 清掉残留 + CAS 兜底，两层防双投）
+    # 关键断言：只执行一次（重复队列条目由 Redis claim 防双投）
     assert run_count["n"] == 1, (
         f"每个 task_id 应恰好执行一次，实际执行 {run_count['n']} 次"
     )
@@ -431,3 +443,25 @@ def test_recover_orphan_running_requeued_once(tmp_path: Path):
     assert run_count.get("hit", 0) == 1, (
         f"孤儿恢复后应恰好执行一次，实际 {run_count.get('hit', 0)} 次"
     )
+
+
+def test_recover_redis_running_disk_pending_requeued(tmp_path: Path):
+    """Redis 已 claim 为 running、磁盘仍 pending 时，recover 复位并清 inflight。"""
+    async def main():
+        store = TaskStore(tmp_path / "tasks")
+        meta = store.create("x", {})
+        runner = tr.TaskRunner(store, {"x": _ok})
+
+        await runner._rq.register_task(meta.task_id, "x", status="running", created_at=meta.created_at)
+        await runner._rq.add_inflight(meta.task_id)
+
+        await runner.recover_and_start()
+        for w in runner._workers:
+            w.cancel()
+
+        assert store.get_meta(meta.task_id).status == "pending"
+        assert await runner._rq.task_status(meta.task_id) == "pending"
+        assert not await runner.is_inflight(meta.task_id)
+        assert await runner._rq._client.llen("nof:q:x") == 1
+
+    asyncio.run(main())

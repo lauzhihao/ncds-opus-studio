@@ -42,9 +42,10 @@ class PipelineEngineBridgeMixin:
         await engine.reset_step(iid, node_name, force=True)
         # 闭合签名：各 pct015_* performer 不能盲 splat config，driver 按节点装配 step_inputs。
         step_inputs = self._engine_step_inputs(job, node_name)
-        # 引擎路径无 TaskRunner task_id；用实例 iid 作节点追踪句柄，失败时前端可复制上报。
+        # 纯引擎路径无 TaskRunner task_id 时，用实例 iid 作节点追踪句柄。
+        # web /jobs 运行时已由 pipeline_node 任务承载，不能再用 iid 覆盖 facade task_id。
         node = job.nodes.get(node_name)
-        if node is not None and node.task_id != iid:
+        if getattr(self, "_task_runner", None) is None and node is not None and node.task_id != iid:
             node.task_id = iid
             self._save(job)
         # 把 performer 的 on_progress 回桥到 facade JobState.nodes[node].progress + /jobs SSE，

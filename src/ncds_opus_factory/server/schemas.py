@@ -21,8 +21,8 @@ ReviewDecision = Literal["approved", "rejected"]
 
 # 任务发起方（docs/WOLONG-DESIGN.md §3）。缺省 None 视为 user（向后兼容旧请求/旧任务）：
 #   user=移动端手发  wolong=卧龙派单段  gate=验收/终态事件触发的续跑段
-#   cron=订阅传感器  retro=离线复盘
-TaskSource = Literal["user", "wolong", "gate", "cron", "retro"]
+#   cron=订阅传感器  retro=离线复盘  pipeline=web 画布节点内部调度
+TaskSource = Literal["user", "wolong", "gate", "cron", "retro", "pipeline"]
 
 # 决策是谁写的（docs/WOLONG-DESIGN.md §4.7/§5.1 的防火墙字段）：
 #   user=Leader 人工验收  wolong=卧龙预筛预测  system=后端自动归档(免验收任务)

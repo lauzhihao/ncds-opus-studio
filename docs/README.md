@@ -3,7 +3,7 @@
 **ncds-opus-factory** = 内容生产引擎：底层能力（asr/rw/wst/tts/render…）+ FastAPI server（:8810，含 `/studio` 前端）。
 项目说明/执行规约见仓库根 [CLAUDE.md](../CLAUDE.md) 与 [AGENTS.md](../AGENTS.md)；本目录只放设计/契约文档。
 
-> **运行时（S3 后）**：redis(队列) + `nof-server`(:8810，入队+SSE) + `nof-worker`(执行)。重启 server 不打断在跑任务。设计见 backlog/docs/S3-redis-worker-design.md；红线见 CLAUDE.md §6；命令见下「本地运行」。
+> **运行时（S3 后）**：redis(队列 + 执行状态协调) + `nof-server`(:8810，入队+SSE) + `nof-worker`(执行)。重启 server 不打断在跑任务；Redis 不重启时任务调度状态连续。设计见 backlog/docs/S3-redis-worker-design.md；红线见 CLAUDE.md §6；命令见下「本地运行」。
 
 ## 本地运行（runbook）
 
@@ -17,12 +17,12 @@ uv pip install --python .venv/bin/python3 <pkg>
 不要用全局 pip，也不要假设 `.venv/bin/pip` 存在（历史上 3.13 残留 pip 会把包静默装进 `lib/python3.13/site-packages`，运行时 import 不到；再看到 `.venv/lib/python3.13/` 说明被污染，直接删）。
 
 ### 三进程（按序起）
-离线任务执行已从 nof-server 拆到独立 `nof-worker`，跨进程队列走 Redis：
-1. `redis-server`（队列信道，先起；`brew services start redis` 或临时 `redis-server`）
+离线任务执行已从 nof-server 拆到独立 `nof-worker`，跨进程队列和执行协调走 Redis：
+1. `redis-server`（任务中间件，先起；`brew services start redis` 或临时 `redis-server`）
 2. `nof-server`（:8810，HTTP/SSE/入队，纯 producer 不执行任务；`NOF_SERVER_HOST`/`NOF_SERVER_PORT` 可覆盖）
 3. `nof-worker`（`.venv/bin/python3 -m ncds_opus_factory.server.worker`，唯一消费+执行+写状态）
 
-Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退出。同 cmd 只能起一个 nof-worker（出队 CAS 单进程语义）。重启 nof-server 不打断 worker 在跑任务。launchd 常驻见 `bin/install_nof_worker.sh`。
+Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退出。同 cmd 仍只起一个 nof-worker（任务 claim 已在 Redis，但 wolong/round 文件与外部账号池仍是单 worker 业务假设）。重启 nof-server 不打断 worker 在跑任务。launchd 常驻见 `bin/install_nof_worker.sh`。
 
 **后端热重载（dev）**：worker 拆分后 8810 是纯 producer，任务都在 worker 跑，给 nof-server 加 `--reload` 已**不再**误杀长任务（旧红线作废）。dev 起法：
 ```bash

@@ -55,6 +55,13 @@ class _AlwaysErrorClient:
     """所有操作都抛 ConnectionError 的假 client，模拟 Redis 完全不可达。"""
     async def lpush(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
     async def brpop(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
+    async def hset(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
+    async def hget(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
+    async def hgetall(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
+    async def sadd(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
+    async def srem(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
+    async def smembers(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
+    async def sismember(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
     async def ping(self, *a, **kw): raise redis.exceptions.ConnectionError("down")
     async def aclose(self): pass
 
@@ -291,6 +298,13 @@ class _TimeoutErrorClient:
     async def brpop(self, *a, **kw):
         raise redis.exceptions.TimeoutError("socket timeout")
     async def lpush(self, *a, **kw): pass
+    async def hset(self, *a, **kw): pass
+    async def hget(self, *a, **kw): return None
+    async def hgetall(self, *a, **kw): return {}
+    async def sadd(self, *a, **kw): pass
+    async def srem(self, *a, **kw): pass
+    async def smembers(self, *a, **kw): return set()
+    async def sismember(self, *a, **kw): return False
     async def ping(self, *a, **kw): return True
     async def aclose(self): pass
 

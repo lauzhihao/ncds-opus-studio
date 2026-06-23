@@ -8,6 +8,8 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -126,45 +128,89 @@ def _generate_scene_image(
     quality: str,
     target: Path,
     job_id: str,
-) -> None:
-    """单 scene 出图：subprocess 调 gpt_image_gen.py → Pillow PNG→WebP → 落 target。"""
+    n: int = 1,
+) -> list[Path]:
+    """单 scene 出图：subprocess 调 gpt_image_gen.py → Pillow PNG→WebP。
+
+    n=1 时直接落 ``target``；n>1 时落 ``*-v1.webp`` ... ``*-vN.webp``，
+    并把 v1 复制为标准主图 ``target``，让下游渲染继续按固定文件名取图。
+    """
     from ncds_opus_core.gpt_image import script_path as _gpt_image_script
 
     gen_script = _gpt_image_script("gpt_image_gen.py")
     if not gen_script.is_file():
         raise RuntimeError(f"gpt_image_gen.py not found at {gen_script}")
 
-    gen_out_dir = GPT_IMAGE_OUTPUT_ROOT / f"job-{job_id}-{scene_id}"
-    shutil.rmtree(gen_out_dir, ignore_errors=True)
+    try:
+        count = int(n or 1)
+    except (TypeError, ValueError):
+        count = 1
+    count = max(1, min(4, count))
+    gen_out_dir = GPT_IMAGE_OUTPUT_ROOT / f"job-{job_id}-{scene_id}-{uuid.uuid4().hex[:8]}"
     gen_out_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
         sys.executable, str(gen_script),
         "--out-dir", str(gen_out_dir),
         "--size", size,
-        "--quality", quality,
+        "--n", str(count),
         "--overwrite",
         "--prompt", prompt,
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=IMAGE_GEN_TIMEOUT_SEC)
-    if res.returncode != 0:
-        tail = (res.stderr or res.stdout or "").strip()[-500:]
-        raise RuntimeError(f"gpt-image gen failed: {tail}")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    checker = _cancel.current()
+    deadline = time.monotonic() + IMAGE_GEN_TIMEOUT_SEC
+    while proc.poll() is None:
+        if checker():
+            _terminate_proc_group(proc)
+            raise _cancel.TaskCancelled("cancelled during gpt-image subprocess")
+        if time.monotonic() > deadline:
+            _terminate_proc_group(proc)
+            raise RuntimeError(f"gpt-image gen timed out after {IMAGE_GEN_TIMEOUT_SEC}s")
+        time.sleep(0.25)
 
-    local_png = gen_out_dir / "image_01.png"
-    if not local_png.is_file():
-        raise RuntimeError(f"expected {local_png} not found after gen")
+    stdout, stderr = proc.communicate()
+    if proc.returncode != 0:
+        tail = (stderr or stdout or "").strip()[-500:]
+        raise RuntimeError(f"gpt-image gen failed: {tail}")
 
     try:
         from PIL import Image
     except ImportError as exc:
         raise RuntimeError("Pillow not installed; pip install Pillow") from exc
 
-    img = Image.open(local_png).convert("RGB")
-    tmp = target.with_suffix(target.suffix + ".part")
-    img.save(tmp, format="WEBP", quality=85, method=6)
-    tmp.rename(target)
+    def variant_target(index: int) -> Path:
+        if count == 1:
+            return target
+        return target.with_name(f"{target.stem}-v{index}{target.suffix}")
+
+    saved: list[Path] = []
+    for index in range(1, count + 1):
+        local_png = gen_out_dir / f"image_{index:02d}.png"
+        if not local_png.is_file():
+            continue
+        out = variant_target(index)
+        img = Image.open(local_png).convert("RGB")
+        tmp = out.with_suffix(out.suffix + ".part")
+        img.save(tmp, format="WEBP", quality=85, method=6)
+        tmp.rename(out)
+        saved.append(out)
+
+    if not saved:
+        expected = gen_out_dir / "image_01.png"
+        raise RuntimeError(f"expected {expected} not found after gen")
+
+    if count > 1:
+        shutil.copyfile(saved[0], target)
+
     shutil.rmtree(gen_out_dir, ignore_errors=True)
+    return saved
 
 
 def _read_episode(job_dir: Path) -> dict[str, Any] | None:

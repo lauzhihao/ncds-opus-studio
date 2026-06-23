@@ -420,6 +420,53 @@
   border-radius: var(--r-1);
 }
 
+.ig-variants {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s-2);
+}
+.ig-variant {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: #f4f1ea;
+  cursor: pointer;
+}
+.ig-variant:hover:not(:disabled) { border-color: var(--border-strong); }
+.ig-variant.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.ig-variant:disabled {
+  cursor: default;
+  opacity: 0.78;
+}
+.ig-variant img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ig-variant span {
+  position: absolute;
+  left: var(--s-2);
+  bottom: var(--s-2);
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
 .ig-editor { display: flex; gap: var(--s-2); align-items: stretch; }
 .ig-prompt { flex: 1; resize: vertical; }
 .ig-redo { flex: 0 0 auto; align-self: flex-end; }

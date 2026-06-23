@@ -3,7 +3,7 @@
 // 数据源：02_rw/episode.json 的 scenes{}（director 产出，含每个子场景的容器图 prompt
 //         与 sketches[]）+ beats[].scene（子场景归属）。本面板按 scene.group 分段展示，
 //         允许就地编辑容器 prompt / 简笔画 prompt / pos / at.match，防抖整份回写 episode。
-// 顶部右：生成视觉方案 / 停止 / 重新执行；底部右：确认视觉方案 → runNode('tts') 交给伯牙。
+// 顶部右：生成视觉方案 / 停止 / 重新执行；底部右：确认视觉方案 → runNode('image') 生成画面资产。
 //
 // 风格对齐 BEATS/TTS：panel-hint banner + proc-rows 状态行 + section-h loading。
 
@@ -26,7 +26,7 @@ interface Props {
   onAdvanced?: () => void;
 }
 
-const NEXT_NODE = 'tts';
+const NEXT_NODE = 'image';
 const PREFLIGHT_NODE = 'lines';
 
 function isActive(status: NodeState['status']): boolean {
@@ -70,6 +70,17 @@ function friendlyPreflightProgress(progress: string | null | undefined): string 
   }
   if (/台词结构|结构化为 beats|beats|Opus|opus|AGY|DeepSeek|SCodex|模型/.test(msg)) {
     return '正在准备视觉方案...';
+  }
+  return msg;
+}
+
+function friendlyStoryboardProgress(progress: string | null | undefined): string | null {
+  const msg = (progress ?? '').trim();
+  if (!msg) return null;
+  if (/切换备用通道/.test(msg)) return '当前通道未成功，正在切换备用通道...';
+  if (/视觉方案生成完成|个子场景|幅简笔画/.test(msg)) return msg;
+  if (/director agent|分镜|beats|Opus|opus|AGY|DeepSeek|SCodex|模型/.test(msg)) {
+    return '正在生成视觉方案...';
   }
   return msg;
 }
@@ -267,8 +278,8 @@ export function StoryboardPanel({
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      showToast('交给伯牙失败，请稍后再试');
-      console.error('[StoryboardPanel] advance to boya failed', e);
+      showToast('启动画面资产生成失败，请稍后再试');
+      console.error('[StoryboardPanel] advance to image failed', e);
     } finally {
       setAdvanceBusy(false);
     }
@@ -307,6 +318,7 @@ export function StoryboardPanel({
       : status === 'failed' ? ' · FAILED'
       : '';
   const hasPending = pendingEpRef.current != null;
+  const storyboardProgress = friendlyStoryboardProgress(nodeState.progress);
 
   const groups = useMemo(
     () => (episode?.scenes ? groupScenes(episode.scenes) : []),
@@ -439,8 +451,8 @@ export function StoryboardPanel({
         {renderActionBtn()}
       </div>
 
-      {(status === 'running' || status === 'queued') && nodeState.progress && (
-        <div className="dim-mono">{nodeState.progress}</div>
+      {(status === 'running' || status === 'queued') && storyboardProgress && (
+        <div className="dim-mono">{storyboardProgress}</div>
       )}
 
       {status !== 'done' ? null : (
@@ -488,11 +500,11 @@ export function StoryboardPanel({
             <button
               type="button"
               className="btn primary sm"
-              title="确认视觉方案 · 交给伯牙配音"
+              title="确认视觉方案 · 生成画面资产"
               disabled={advanceBusy || actionBusy || status !== 'done'}
               onClick={doAdvance}
             >
-              <Play size={12} strokeWidth={2} fill="currentColor" /> 交给伯牙
+              <Play size={12} strokeWidth={2} fill="currentColor" /> 生成画面资产
             </button>
           </div>
         </>

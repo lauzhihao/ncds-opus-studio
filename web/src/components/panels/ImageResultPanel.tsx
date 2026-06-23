@@ -1,6 +1,6 @@
 // 吴道子「画面资产」面板：包装当前 image 节点，按 scenes 卡片栅格展示 /
-// 编辑 prompt / 单图重生 / 下载图片。当前 backend DAG 仍要求 tts 先完成，
-// 因此前端把 idle 状态封装成「等待伯牙声音完成后补齐画面资产」。
+// 编辑 prompt / 单图重生 / 下载图片。画面资产只依赖吴道子的视觉方案，
+// 完成后再交给伯牙配音。
 //
 // 数据来源
 //   - episode.json scenes 字典 → prompt 的 source of truth（可编辑回写）
@@ -13,6 +13,7 @@ import { ChevronLeft, ChevronRight, Download, ImageOff, Play, RefreshCw, Square,
 
 import { api } from '../../api/client';
 import type { Episode, ImageItem, NodeState, PipelineNodeDef } from '../../api/types';
+import { friendlyProgressText } from '../../utils/progress';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useToast } from '../Toast';
 import { ProcStatusRow } from './ProcStatusRow';
@@ -21,13 +22,12 @@ interface Props {
   jobId: string;
   nodeDef: PipelineNodeDef;
   nodeState: NodeState;
-  ttsNodeState: NodeState;
   onAdvanced?: () => void;
 }
 
-const NEXT_NODE = 'preview';
+const NEXT_NODE = 'tts';
 
-export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAdvanced }: Props) {
+export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   const { showToast } = useToast();
   const items = useMemo<ImageItem[]>(
     () => (nodeState.outputs?.items as ImageItem[] | undefined) ?? [],
@@ -133,9 +133,6 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAd
     }
   }
 
-  const ttsState = ttsNodeState;
-  const waitingForBoya = status === 'idle' && ttsState.status !== 'done';
-
   async function doAdvance() {
     setAdvanceBusy(true);
     try {
@@ -143,21 +140,14 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAd
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      showToast('进入成片检查失败，请稍后再试');
-      console.error('[ImageResultPanel] advance to preview failed', e);
+      showToast('交给伯牙失败，请稍后再试');
+      console.error('[ImageResultPanel] advance to boya failed', e);
     } finally {
       setAdvanceBusy(false);
     }
   }
 
   function renderActionBtn() {
-    if (waitingForBoya) {
-      return (
-        <button className="btn primary sm" disabled title="等待伯牙声音完成后继续">
-          <Play size={12} strokeWidth={2} /> {ttsState.status === 'failed' ? '先修声音' : '等待伯牙'}
-        </button>
-      );
-    }
     if (status === 'running' || status === 'queued') {
       return (
         <button className="btn primary sm" disabled={actionBusy} onClick={doCancel}>
@@ -198,12 +188,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAd
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
   if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
-  } else if (waitingForBoya && ttsState.status === 'failed') {
-    hint = { tone: 'error', text: '伯牙声音生成失败；请先回到伯牙重试，再继续画面资产。' };
-  } else if (waitingForBoya) {
-    hint = { tone: 'info', text: '等待伯牙声音完成后继续生成画面资产。' };
   } else if (status === 'idle') {
-    hint = { tone: 'info', text: '伯牙声音已完成，可以按 scene 生成容器图和简笔画资产。' };
+    hint = { tone: 'info', text: '可以按 scene 生成容器图和简笔画资产。' };
   } else if (items.length === 0 && status === 'done') {
     hint = { tone: 'info', text: '暂无画面资产；可重新生成，或检查视觉方案里的 scene。' };
   }
@@ -211,26 +197,6 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAd
   return (
     <div className="rw-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
-
-      {waitingForBoya && (
-        <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
-          <ProcStatusRow
-            row={{
-              id: 'boya-audio',
-              label: '伯牙声音结果',
-              status: ttsState.status === 'failed'
-                ? 'failed'
-                : ttsState.status === 'done'
-                  ? 'done'
-                  : ttsState.status === 'queued' || ttsState.status === 'running'
-                    ? 'running'
-                    : 'pending',
-              detail: ttsState.error || ttsState.progress || undefined,
-            }}
-            runningText="合成中"
-          />
-        </div>
-      )}
 
       {/* 画面资产状态行：跑过就常驻（done 后不消失，与声音面板一致） */}
       {status !== 'idle' && (
@@ -263,7 +229,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAd
 
       {/* 批量生成较慢（每 scene 一次 gpt-image-2），running 时保留逐条进度明细 */}
       {(status === 'running' || status === 'queued') && nodeState.progress && (
-        <div className="dim-mono">{nodeState.progress}</div>
+        <div className="dim-mono">{friendlyProgressText('image', nodeState.progress)}</div>
       )}
 
       {items.length === 0 ? null : (
@@ -278,6 +244,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAd
                   item={it}
                   prompt={prompt}
                   busy={!!regenBusy[it.scene_id]}
+                  bust={nodeState.finished_at}
                   disabled={actionBusy || advanceBusy || status !== 'done'}
                   onPromptChange={(v) => patchPrompt(it.scene_id, v)}
                   onRegen={() => doRegen(it.scene_id)}
@@ -290,11 +257,11 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAd
             <button
               type="button"
               className="btn primary sm"
-              title="确认画面资产 · 进入成片检查"
+              title="确认画面资产 · 交给伯牙配音"
               disabled={advanceBusy || actionBusy || status !== 'done'}
               onClick={doAdvance}
             >
-              <Play size={12} strokeWidth={2} fill="currentColor" /> 进入成片检查
+              <Play size={12} strokeWidth={2} fill="currentColor" /> 交给伯牙
             </button>
           </div>
         </>
@@ -303,7 +270,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAd
       <ConfirmDialog
         open={pendingRerun}
         title="重新生成画面资产？"
-        message={<>会清空所有图片产物以及下游成片状态，然后整体重新生成画面资产。</>}
+        message={<>会清空所有图片产物以及下游声音和成片状态，然后整体重新生成画面资产。</>}
         confirmLabel="重新执行"
         danger
         onConfirm={async () => {
@@ -336,6 +303,7 @@ function ImageCard({
   item,
   prompt,
   busy,
+  bust,
   disabled,
   onPromptChange,
   onRegen,
@@ -345,6 +313,7 @@ function ImageCard({
   item: ImageItem;
   prompt: string;
   busy: boolean;
+  bust: number | null;
   disabled: boolean;
   onPromptChange: (v: string) => void;
   onRegen: () => void;
@@ -352,8 +321,26 @@ function ImageCard({
 }) {
   const { showToast } = useToast();
   const hasImage = !!item.image_relpath;
+  const bustQs = bust ? `?v=${bust}` : '';
+  const fileUrl = (rel: string) => `/jobs/${jobId}/files/${rel}${bustQs}`;
+  const variants = (item.variants ?? []).filter((v) => !!v.image_relpath);
+  const selectedVariant = item.selected_variant_relpath || variants.find((v) => v.selected)?.image_relpath || variants[0]?.image_relpath || item.image_relpath;
   const sketches = item.sketches ?? [];
   const [skBusy, setSkBusy] = useState<Record<number, boolean>>({});
+  const [variantBusy, setVariantBusy] = useState<string | null>(null);
+
+  async function doSelectVariant(rel: string) {
+    if (disabled || busy || variantBusy || rel === selectedVariant) return;
+    setVariantBusy(rel);
+    try {
+      await api.selectImageVariant(jobId, item.scene_id, rel);
+    } catch (e) {
+      showToast('候选图切换失败，请稍后再试');
+      console.error('[ImageCard] 候选图切换失败', e);
+    } finally {
+      setVariantBusy(null);
+    }
+  }
 
   async function doRegenSketch(n: number) {
     setSkBusy((m) => ({ ...m, [n]: true }));
@@ -385,9 +372,9 @@ function ImageCard({
         onClick={onOpen}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
       >
-        {hasImage ? (
+        {item.image_relpath ? (
           <img
-            src={`/jobs/${jobId}/files/${item.image_relpath}`}
+            src={fileUrl(item.image_relpath)}
             alt={item.scene_id}
             loading="lazy"
             draggable={false}
@@ -401,13 +388,35 @@ function ImageCard({
         {busy && <div className="image-card-busy">生成中…</div>}
       </div>
 
+      {variants.length > 1 && (
+        <div className="image-variants" aria-label={`${item.scene_id} 候选图`}>
+          {variants.map((variant) => {
+            const active = variant.image_relpath === selectedVariant;
+            const picking = variantBusy === variant.image_relpath;
+            return (
+              <button
+                key={variant.image_relpath}
+                type="button"
+                className={`image-variant${active ? ' active' : ''}`}
+                title={active ? `候选 ${variant.index} · 当前主图` : `设候选 ${variant.index} 为主图`}
+                disabled={disabled || busy || !!variantBusy}
+                onClick={() => doSelectVariant(variant.image_relpath)}
+              >
+                <img src={fileUrl(variant.image_relpath)} alt="" loading="lazy" draggable={false} />
+                <span className="image-variant-index">{picking ? '…' : variant.index}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {sketches.length > 0 && (
         <div className="image-sketches">
           {sketches.map((sk) => (
             <div key={sk.index} className="image-sketch" title={sk.prompt}>
               {sk.image_relpath ? (
                 <img
-                  src={`/jobs/${jobId}/files/${sk.image_relpath}`}
+                  src={fileUrl(sk.image_relpath)}
                   alt={`sk${sk.index}`}
                   loading="lazy"
                   draggable={false}
@@ -490,11 +499,13 @@ function ImageGallery({
   onRegen: (sceneId: string) => void;
   onClose: () => void;
 }) {
+  const { showToast } = useToast();
   const clamp = useCallback(
     (i: number) => Math.max(0, Math.min(items.length - 1, i)),
     [items.length],
   );
   const [cur, setCur] = useState(() => clamp(startIndex));
+  const [variantBusy, setVariantBusy] = useState<string | null>(null);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -511,6 +522,21 @@ function ImageGallery({
   const busy = !!regenBusy[item.scene_id];
   const bustQs = bust ? `?v=${bust}` : '';
   const fileUrl = (rel: string) => `/jobs/${jobId}/files/${rel}${bustQs}`;
+  const variants = (item.variants ?? []).filter((v) => !!v.image_relpath);
+  const selectedVariant = item.selected_variant_relpath || variants.find((v) => v.selected)?.image_relpath || variants[0]?.image_relpath || item.image_relpath;
+
+  async function doSelectVariant(rel: string) {
+    if (disabled || busy || variantBusy || rel === selectedVariant) return;
+    setVariantBusy(rel);
+    try {
+      await api.selectImageVariant(jobId, item.scene_id, rel);
+    } catch (e) {
+      showToast('候选图切换失败，请稍后再试');
+      console.error('[ImageGallery] 候选图切换失败', e);
+    } finally {
+      setVariantBusy(null);
+    }
+  }
 
   // 门户挂到 body：脱离抽屉(可能带 transform 动画)的包含块，保证 fixed 遮罩铺满视口
   return createPortal(
@@ -559,6 +585,28 @@ function ImageGallery({
             <ChevronRight size={24} strokeWidth={1.8} />
           </button>
         </div>
+
+        {variants.length > 1 && (
+          <div className="ig-variants" aria-label={`${item.scene_id} 候选图`}>
+            {variants.map((variant) => {
+              const active = variant.image_relpath === selectedVariant;
+              const picking = variantBusy === variant.image_relpath;
+              return (
+                <button
+                  key={variant.image_relpath}
+                  type="button"
+                  className={`ig-variant${active ? ' active' : ''}`}
+                  title={active ? `候选 ${variant.index} · 当前主图` : `设候选 ${variant.index} 为主图`}
+                  disabled={disabled || busy || !!variantBusy}
+                  onClick={() => doSelectVariant(variant.image_relpath)}
+                >
+                  <img src={fileUrl(variant.image_relpath)} alt="" loading="lazy" draggable={false} />
+                  <span>{picking ? '…' : variant.index}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* 仅当前图显示：prompt 编辑 + 重做 */}
         <div className="ig-editor">

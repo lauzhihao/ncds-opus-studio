@@ -209,6 +209,7 @@ async def _cleanup_round_tasks(round_id: str) -> None:
             continue
         if m.status in ("pending", "running"):
             try:
+                await RUNNER.cancel_task(m.task_id)
                 STORE.update_status(m.task_id, "cancelled")
                 STORE.append_progress(m.task_id, f"round {round_id} 已终局,任务随之取消")
                 logger.info("[rounds] 清场取消: %s", m.task_id)

@@ -133,6 +133,41 @@ def test_delete_clears_queue():
 
 
 # ---------------------------------------------------------------------------
+# task hash / claim：Redis 是执行协调真相源
+# ---------------------------------------------------------------------------
+
+def test_register_task_and_claim_once():
+    """登记 pending 任务后只能被 claim 一次，第二次 claim 被 Redis 状态挡住。"""
+    async def _run():
+        queue, _ = make_queue()
+        await queue.register_task("task-1", "shenkuo", status="pending", source="user")
+
+        assert await queue.task_status("task-1") == "pending"
+        assert await queue.claim_task("task-1") is True
+        assert await queue.task_status("task-1") == "running"
+        assert await queue.claim_task("task-1") is False
+        assert await queue.is_inflight("task-1") is True
+
+        await queue.mark_task_status("task-1", "completed")
+        await queue.remove_inflight("task-1")
+        assert await queue.task_status("task-1") == "completed"
+        assert await queue.is_inflight("task-1") is False
+    asyncio.run(_run())
+
+
+def test_cancelled_task_cannot_be_claimed():
+    """取消写进 Redis 后，队列里即便还有旧 task_id 也不能再被 worker claim。"""
+    async def _run():
+        queue, _ = make_queue()
+        await queue.register_task("task-cancel", "liuyong", status="pending")
+        await queue.mark_task_status("task-cancel", "cancelled")
+
+        assert await queue.claim_task("task-cancel") is False
+        assert await queue.task_status("task-cancel") == "cancelled"
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
 # incr_quota：正常放行
 # ---------------------------------------------------------------------------
 

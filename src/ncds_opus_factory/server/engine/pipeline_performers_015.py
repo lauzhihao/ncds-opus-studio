@@ -6,8 +6,7 @@
 
 slice-1 范围（最小后端验证）：
 - ``lines``：复用 shared lines 结构化算法与模型 fallback。
-- ``storyboard``：真实复用 ``_execute_storyboard`` 的 opus 结构化算法
-  （经 :func:`_opus_structure` 间接层，便于测试注入桩；不重写算法）。
+- ``storyboard``：复用 shared JSON fallback 与 director 输出解析，不绑死单一模型。
 - ``asr/rw/tts/image/render`` 的真实包装（asr=shenkuo.collect_one 快采；rw=多模型；
   tts/image/render=真实 helper/子进程），外部副作用经 seam 便于测试注入。
 
@@ -18,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -36,6 +34,7 @@ from ncds_opus_factory.server.pipeline_lines_tasks import (
     _episode_from_lines_response,
     structure_lines_json_with_fallback,
 )
+from ncds_opus_factory.server.pipeline_llm_fallback import structure_json_with_model_fallback
 from ncds_opus_factory.server.pipeline_media_helpers import (
     _generate_scene_image,
     _read_episode,
@@ -47,7 +46,6 @@ from ncds_opus_factory.server.pipeline_rw_helpers import (
     MODEL_CANDIDATES,
     _apply_rw_qc,
     _build_rw_prompt,
-    _call_opus_for_rw,
     _invoke_rw_candidate,
     _ModelUnavailable,
     _rw_source_text,
@@ -78,67 +76,6 @@ class _ProgressFacade:
 
     def _push_progress(self, _job_id: str, _node_name: str, text: str) -> None:
         self._on_progress(text)
-
-
-def _opus_structure(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-8") -> str:
-    """opus 结构化调用的间接层：默认走真实 opus 启动器；测试 monkeypatch 成桩。"""
-    return _call_opus_for_rw(user_prompt, system_prompt, model_id)
-
-
-def _parse_opus_json(raw: str) -> Any:
-    """容忍 ```json ... ``` 包裹，解析 opus 输出为 Python 对象。"""
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        inner = re.match(r"^```[a-zA-Z]*\s*\n([\s\S]*?)\n```\s*$", cleaned)
-        if inner:
-            cleaned = inner.group(1).strip()
-    return json.loads(cleaned)
-
-
-def _opus_json_with_retry(
-    user_prompt: str,
-    system_prompt: str,
-    on_progress: Callable[[str], None],
-    *,
-    parse: Callable[[str], Any] | None = None,
-    model_id: str = "claude-opus-4-8",
-    max_attempts: int = 3,
-    retry_hint: str = "",
-) -> Any:
-    """调 opus 出结构化结果，解析失败就带纠正提示重试。
-
-    opus 偶发在字符串值里塞未转义字符（典型：中文内容里的英文双引号），
-    导致单行 JSON 解析在中段炸（``Expecting ',' delimiter``）。这里不做正则硬修
-    （怕改坏中文正文），改用 LLM 自纠：把上次报错回传，要求只输出合法 JSON 并转义特殊字符。
-
-    ``parse`` 默认 :func:`_parse_opus_json`（lines 用）；storyboard 传
-    ``parse_director_output`` 的偏函数。``retry_hint`` 追加进纠正提示说明所需结构。
-    只捕获 ``parse`` 抛的 ``ValueError``（含 ``json.JSONDecodeError``）/ ``RuntimeError`` 来重试；
-    ``_opus_structure`` 自身的启动器错误（如 401）在 try 外，立即上抛、不重试。
-    """
-    parse = parse or _parse_opus_json
-    last_exc: Exception | None = None
-    last_raw = ""
-    prompt = user_prompt
-    for attempt in range(1, max_attempts + 1):
-        last_raw = _opus_structure(prompt, system_prompt, model_id)
-        try:
-            return parse(last_raw)
-        except (ValueError, RuntimeError) as exc:
-            last_exc = exc
-            if attempt < max_attempts:
-                on_progress(f"opus 输出无法解析（第 {attempt}/{max_attempts} 次）：{exc}；带纠正提示重试…")
-            # 纠正提示：始终基于原始 user_prompt 重建，避免多轮叠加污染。
-            prompt = (
-                user_prompt
-                + "\n\n[严格要求] 上一次输出无法解析（报错："
-                + f"{exc}）。只输出一个合法的 JSON 对象，禁止任何代码块/解释/前后缀；"
-                + '字符串值内的英文双引号必须转义为 \\", 反斜杠转义为 \\\\, 换行转义为 \\n。'
-                + (("\n" + retry_hint) if retry_hint else "")
-            )
-    raise RuntimeError(
-        f"opus 输出无法解析（重试 {max_attempts} 次仍失败）：{last_exc}；tail={last_raw.strip()[-300:]}"
-    )
 
 
 def _episode_path(job_dir: Path) -> Path:
@@ -407,10 +344,18 @@ def run_storyboard_step(
         palette=palette,
         domain_image_style=domain_image_style,
     )
-    on_progress(f"调 director agent 分镜（{len(beats_in)} beats）…")
-    scene_by_beat, scenes = _opus_json_with_retry(
-        user_prompt, system_prompt, on_progress,
+    scene_by_beat, scenes = structure_json_with_model_fallback(
+        user_prompt,
+        system_prompt,
+        on_progress,
         parse=lambda raw: storyboard_director.parse_director_output(raw, beats_raw),
+        target_profile="paper_card_talk_storyboard",
+        start_progress="正在生成视觉方案...",
+        success_progress="视觉方案生成完成",
+        failover_progress="当前通道未成功，正在切换备用通道...",
+        final_error="视觉方案生成暂时失败：备用通道都没有成功，请稍后重试。",
+        log_context="storyboard",
+        max_parse_attempts=3,
         retry_hint="JSON 必须含 scenes{} 与 sceneMap{} 两个键，scenes 的每个值含 prompt 字段。",
     )
 
@@ -422,7 +367,7 @@ def run_storyboard_step(
 
     sketch_total = sum(len(s.get("sketches") or []) for s in scenes.values())
     groups = sorted({s.get("group") or sid for sid, s in scenes.items()})
-    on_progress(f"完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 幅简笔画")
+    on_progress(f"视觉方案生成完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 幅简笔画")
     return {
         "episode_relpath": "02_rw/episode.json",
         "scenes_count": len(scenes),

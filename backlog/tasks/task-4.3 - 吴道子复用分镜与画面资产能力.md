@@ -23,11 +23,11 @@ priority: high
 - 图片资产：复用 `image` 节点、`PipelineImageRun` 及现有图片结果展示、下载、重试能力。
 - 产物契约：保留当前 episode / scene / asset 路径结构，不引入 figure_talk、stickman 或旧模板。
 
-由于当前 backend DAG 是 `storyboard -> tts -> image`，第一版要把这个技术事实封装成用户可理解的阶段：
+当前 backend DAG 应与产品阶段一致：
 
 1. 吴道子前半段完成视觉方案和分镜。
-2. 伯牙完成声音。
-3. 声音完成后，画面资产生成仍归属吴道子的视觉结果，可由前端自动推进或明确提示继续生成画面。
+2. 吴道子继续生成画面资产。
+3. 画面资产确认后，交给伯牙完成声音。
 
 ## Implementation Notes
 
@@ -40,7 +40,7 @@ priority: high
 <!-- AC:BEGIN -->
 - [ ] #1 吴道子视觉方案使用当前 `storyboard` 节点产物，分镜内容、场景提示词、镜头结构能正常展示
 - [ ] #2 图片资产使用当前 `image` 节点产物，已生成图片能在吴道子视觉工作台中查看、下载、重试
-- [ ] #3 当前 `storyboard -> tts -> image` 的技术顺序被 UI 封装成可理解流程；用户不会卡在未知的 `image` 节点
+- [ ] #3 当前 `storyboard -> image -> tts` 的技术顺序与 UI 一致；用户不会在吴道子画面资产阶段被伯牙声音卡住
 - [ ] #4 代码中不新增对旧 `commands/wudaozi.py`、figure_talk 模板或 stickman 资产的依赖
 - [ ] #5 一条已有 job 的历史 storyboard/image 输出能被新工作台正确读取和展示
 <!-- AC:END -->

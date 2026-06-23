@@ -13,8 +13,9 @@ state.py 各建一套指同一磁盘 + 各连同一 Redis。
     NOF_PLANNER=0         停用排产策略 loop
 
 ⚠️ blocker#1(同 cmd 单 worker)：步5→步6 切换窗口内，**不要同时跑 8810 和 nof-worker**——
-两个 recover_and_start 会各 DEL 队列 + 各起 BRPOP consumer，同 cmd 两消费者踩 CAS。
-步6 把 8810 的 consumer/loop 删掉后才是稳态(8810 纯入队，worker 唯一消费)。
+两个 recover_and_start 会各起 BRPOP consumer；Redis claim 能防同 task 双跑，但
+wolong 等业务仍按单 worker 运行假设设计。步6 把 8810 的 consumer/loop 删掉后
+才是稳态(8810 纯入队，worker 唯一消费)。
 """
 
 from __future__ import annotations
@@ -97,7 +98,7 @@ async def _amain() -> None:
 
         # 先挂 on_terminal 钩子再 recover(别漏积压任务的终态事件)，与 app.py startup 一致。
         RUNNER.on_terminal = rounds_gate.handle_terminal
-        # DEL 旧 List + disk-scan 全量重投 + 起 per-cmd BRPOP consumer
+        # Redis 协调恢复 + 起 per-cmd BRPOP consumer（不清空 Redis 队列）
         recovered = await RUNNER.recover_and_start()
         if recovered:
             logger.info("[nof-worker] restart recovered: %d backlog tasks re-enqueued", recovered)

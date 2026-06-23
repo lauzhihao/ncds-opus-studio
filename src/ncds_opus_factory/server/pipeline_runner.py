@@ -63,6 +63,7 @@ class PipelineRunner(
         self._refresh_tasks: dict[str, asyncio.Task[Any]] = {}
         self._guiguzi_tasks: dict[str, asyncio.Task[Any]] = {}
         self._engine: Any = None
+        self._task_runner: Any = None
         self._event_seq: dict[str, int] = {}
 
         _all = {"lines", "storyboard", "tts", "image", "render"}

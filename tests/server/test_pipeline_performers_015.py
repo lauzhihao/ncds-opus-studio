@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from ncds_opus_factory.server import pipeline_llm_fallback as llm_fallback
 from ncds_opus_factory.server.engine import pipeline_performers_015 as perf
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
@@ -60,6 +61,18 @@ def _fake_opus(user_prompt: str, system_prompt: str, model_id: str = "claude-opu
 def _fake_lines_fallback(user_prompt: str, system_prompt: str, on_progress, **_: Any) -> Any:
     on_progress("正在准备视觉方案...")
     return json.loads(_LINES_JSON)
+
+
+def _fake_storyboard_fallback(
+    user_prompt: str,
+    system_prompt: str,
+    on_progress,
+    *,
+    parse,
+    **_: Any,
+) -> Any:
+    on_progress("正在生成视觉方案...")
+    return parse(_DIRECTOR_JSON)
 
 
 # --------------------------------------------------------------------------- #
@@ -125,7 +138,7 @@ def test_run_lines_step_propagates_fallback_error(tmp_path: Path, monkeypatch: p
 # B2) storyboard performer：真实算法 + director 桩 → 回填 scene + 写 scenes{}
 # --------------------------------------------------------------------------- #
 def test_run_storyboard_step_fills_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(perf, "_opus_structure", _fake_opus)
+    monkeypatch.setattr(perf, "structure_json_with_model_fallback", _fake_storyboard_fallback)
     jd = tmp_path / "job"
     (jd / "02_rw").mkdir(parents=True)
     ep = {
@@ -153,11 +166,11 @@ def test_run_storyboard_step_retries_bad_json_then_succeeds(tmp_path: Path, monk
     """director opus 第一次出非法 JSON，带纠正提示重试后出合法分镜 → storyboard 成功。"""
     calls = {"n": 0}
 
-    def flaky_opus(user_prompt: str, system_prompt: str, model_id: str = "claude-opus-4-7") -> str:
+    def flaky_model(*_args: Any, **_kwargs: Any) -> str:
         calls["n"] += 1
         return _BAD_DIRECTOR_JSON if calls["n"] == 1 else _DIRECTOR_JSON
 
-    monkeypatch.setattr(perf, "_opus_structure", flaky_opus)
+    monkeypatch.setattr(llm_fallback, "_call_json_model", flaky_model)
     jd = tmp_path / "job"
     (jd / "02_rw").mkdir(parents=True)
     ep = {
@@ -218,9 +231,9 @@ _RECIPE_015E2E = Recipe(
         RecipeStep(step_id="rw", cmd="rw_stub", deps=["asr"], intervention="content_edit"),
         RecipeStep(step_id="lines", cmd="lines", deps=["rw"], intervention="content_edit"),
         RecipeStep(step_id="storyboard", cmd="storyboard", deps=["lines"], intervention="content_edit"),
-        RecipeStep(step_id="tts", cmd="tts_stub", deps=["storyboard"], expensive=True),
-        RecipeStep(step_id="image", cmd="image_stub", deps=["tts"], expensive=True),
-        RecipeStep(step_id="preview", deps=["image"], intervention="content_edit"),  # 无 performer 的人工闸
+        RecipeStep(step_id="image", cmd="image_stub", deps=["storyboard"], expensive=True),
+        RecipeStep(step_id="tts", cmd="tts_stub", deps=["image"], expensive=True),
+        RecipeStep(step_id="preview", deps=["tts"], intervention="content_edit"),  # 无 performer 的人工闸
         RecipeStep(step_id="render", cmd="render_stub", deps=["preview"], expensive=True),
         RecipeStep(step_id="download", kind="output", deps=["render"]),
     ],
@@ -229,7 +242,7 @@ _RECIPE_015E2E = Recipe(
 
 def test_engine_drives_real_015_chain_to_mp4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(perf, "structure_lines_json_with_fallback", _fake_lines_fallback)
-    monkeypatch.setattr(perf, "_opus_structure", _fake_opus)
+    monkeypatch.setattr(perf, "structure_json_with_model_fallback", _fake_storyboard_fallback)
     registry = {
         "asr_stub": _asr_stub, "rw_stub": _rw_stub,
         "lines": perf.run_lines_step, "storyboard": perf.run_storyboard_step,
@@ -259,7 +272,7 @@ def test_engine_drives_real_015_chain_to_mp4(tmp_path: Path, monkeypatch: pytest
     expected_gates = {s.step_id for s in _RECIPE_015E2E.steps if s.intervention}
     assert set(gated_observed) == expected_gates == {"rw", "lines", "storyboard", "preview"}
 
-    # 产物链：lines 写 beats → storyboard 回填 scenes → tts 标 audioFile → render 出 mp4
+    # 产物链：lines 写 beats → storyboard 回填 scenes → image → tts 标 audioFile → render 出 mp4
     ep = json.loads((job_dir / "02_rw" / "episode.json").read_text(encoding="utf-8"))
     assert len(ep["beats"]) == 3
     assert all(b["scene"] for b in ep["beats"])        # storyboard 回填了 scene
@@ -311,10 +324,11 @@ def test_run_image_step_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.
     })
     calls: list[str] = []
 
-    def _fake_gen(*, scene_id, prompt, size, quality, target, job_id):
+    def _fake_gen(*, scene_id, prompt, size, quality, target, job_id, n=1):
         calls.append(scene_id)
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         Path(target).write_bytes(b"webp")
+        return [Path(target)]
 
     monkeypatch.setattr(perf, "_gen_scene_image", _fake_gen)
     out = perf.run_image_step(_noop, job_dir=str(jd))
@@ -330,7 +344,7 @@ def test_run_image_step_idempotent_skip(tmp_path: Path, monkeypatch: pytest.Monk
     jd = tmp_path / "job"
     (jd / "03_image").mkdir(parents=True)
     (jd / "03_image" / "s1.webp").write_bytes(b"existing")     # 预先存在 → 跳过、不重生
-    _seed_episode(jd, {"beats": [{"scene": "s1"}], "scenes": {"s1": {"prompt": "场景一"}}, "image": {}})
+    _seed_episode(jd, {"beats": [{"scene": "s1"}], "scenes": {"s1": {"prompt": "场景一"}}, "image": {"n": 1}})
     monkeypatch.setattr(perf, "_gen_scene_image",
                         lambda **k: pytest.fail("不应重生已存在的容器图"))
     out = perf.run_image_step(_noop, job_dir=str(jd))
@@ -392,28 +406,33 @@ def test_run_image_step_captures_generation_failure(tmp_path: Path, monkeypatch:
     _seed_episode(jd, {
         "beats": [{"scene": "s1"}, {"scene": "s2"}],
         "scenes": {"s1": {"prompt": "好场景"}, "s2": {"prompt": "坏场景"}},
-        "image": {},
+        "image": {"retries": 0},
     })
 
-    def _gen(*, scene_id, prompt, size, quality, target, job_id):
+    def _gen(*, scene_id, prompt, size, quality, target, job_id, n=1):
         if scene_id == "s2":
             raise RuntimeError("gpt-image boom")
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         Path(target).write_bytes(b"webp")
+        return [Path(target)]
 
     monkeypatch.setattr(perf, "_gen_scene_image", _gen)
     out = perf.run_image_step(_noop, job_dir=str(jd))
     assert (out["ok"], out["failed"]) == (1, 1)          # s1 成、s2 异常被捕获，run 仍返回
     s2 = next(it for it in out["items"] if it["scene_id"] == "s2")
-    assert s2["image_relpath"] is None and "boom" in s2["error"]
+    assert s2["image_relpath"] is None and "图片生成失败" in s2["error"]
 
 
 def test_run_image_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     jd = tmp_path / "job"
-    _seed_episode(jd, {"beats": [{"scene": "s1"}], "scenes": {"s1": {"prompt": "唯一场景"}}, "image": {}})
+    _seed_episode(jd, {
+        "beats": [{"scene": "s1"}],
+        "scenes": {"s1": {"prompt": "唯一场景"}},
+        "image": {"retries": 0},
+    })
     monkeypatch.setattr(perf, "_gen_scene_image",
                         lambda **k: (_ for _ in ()).throw(RuntimeError("boom")))
-    with pytest.raises(RuntimeError, match="all .* scene image generations failed"):
+    with pytest.raises(RuntimeError, match="所有画面资产都生成失败"):
         perf.run_image_step(_noop, job_dir=str(jd))
 
 

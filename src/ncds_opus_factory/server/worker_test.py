@@ -17,6 +17,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ncds_opus_factory.server import worker
+from ncds_opus_factory.server.label_store import LabelStore
+from ncds_opus_factory.server.task_store import TaskStore
 
 
 # ---------------------------------------------------------------------------
@@ -143,8 +145,9 @@ def test_worker_ping_fail_fast(monkeypatch):
 # 可选测试 4：maintenance 模块抽取校验
 # ---------------------------------------------------------------------------
 
-def test_maintenance_extracted():
+def test_maintenance_extracted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """maintenance 模块的常量和函数可正常 import，空 STORE 上 backfill_labels_once 返回 0。"""
+    from ncds_opus_factory.server import state as state_mod
     from ncds_opus_factory.server.maintenance import (
         CRON_TTL_HOURS,
         DISCARD_TTL_HOURS,
@@ -157,6 +160,9 @@ def test_maintenance_extracted():
         sweep_discarded_once,
     )
 
+    monkeypatch.setattr(state_mod, "STORE", TaskStore(tmp_path / "tasks"))
+    monkeypatch.setattr(state_mod, "LABELS", LabelStore(tmp_path / "labels"))
+
     # 常量可访问
     assert isinstance(DISCARD_TTL_HOURS, float)
     assert isinstance(CRON_TTL_HOURS, float)
@@ -164,7 +170,7 @@ def test_maintenance_extracted():
     assert isinstance(_ROUND_RECONCILE_INTERVAL_S, float)
 
     # 函数可调用（空 STORE 返回 0，不抛异常）
-    # STORE 已被 conftest 的 _isolated_state_dir 指向 tmp，list_tasks() 返回空列表
+    # 测试内显式注入空 STORE/LABELS，避免全量测试顺序污染全局 state 单例。
     result = backfill_labels_once()
     assert result == 0
 

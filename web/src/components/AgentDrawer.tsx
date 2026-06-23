@@ -198,7 +198,6 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
             jobId={jobId}
             nodeDef={nodeDef!}
             nodeState={nodeState}
-            ttsNodeState={job.nodes.tts ?? defaultIdleState('tts')}
             onAdvanced={() => advance('image')}
           />
         );
@@ -288,7 +287,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
         )}
 
         <div className="body">
-          {!isFullscreen && <NodeStatusBar nodeState={nodeState} jobId={jobId} />}
+          {!isFullscreen && <NodeStatusBar nodeState={nodeState} />}
           {renderMember()}
         </div>
       </aside>

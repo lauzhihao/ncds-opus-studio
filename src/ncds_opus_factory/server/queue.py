@@ -1,9 +1,10 @@
 """
 server/queue.py — async Redis 封装，供 8810 producer 与 nof-worker consumer 共用。
 
-设计依据：S3-redis-worker-design.md 决策 A/B/D。
+设计依据：Redis 作为任务中间件与执行协调中心。
 - key 前缀统一 nof:
 - LPUSH 入 + BRPOP 出 = FIFO（先进先出，与 asyncio.Queue 一致）
+- task hash 记录 pending/running/terminal 状态，worker 通过 Redis claim 领取
 - lpush 连接故障直接抛出（调用方 8810 据此走 503+meta failed 降级）
 - brpop 连接故障内部捕获，指数退避后返回 None（让 worker while 循环自然重试）
 - incr_quota 使用 Redis 原子计数，越额 DECR 回退保证跨进程并发下不超发
@@ -18,6 +19,7 @@ from typing import Optional
 import redis.asyncio as aioredis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
+from redis.exceptions import WatchError
 # TimeoutError 是 RedisError 的子类（与 ConnectionError 兄弟关系）。
 # brpop 设了 socket_timeout 时，服务端正常空轮询（无新任务）会在 socket 层
 # 先于服务端 nil 超时，抛 RedisTimeoutError 而非返回 None——这是正常现象，
@@ -46,9 +48,26 @@ def _queue_key(cmd: str) -> str:
     return f"{_PREFIX}q:{cmd}"
 
 
+def _task_key(task_id: str) -> str:
+    """任务协调 hash key：nof:task:{task_id}"""
+    return f"{_PREFIX}task:{task_id}"
+
+
 def _quota_key(bucket: str, date: str) -> str:
     """配额 key：nof:quota:{date}:{bucket}"""
     return f"{_PREFIX}quota:{date}:{bucket}"
+
+
+def _decode(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode()
+    return str(value)
+
+
+def _now_ms() -> str:
+    return str(int(time.time() * 1000))
 
 
 class RedisQueue:
@@ -130,6 +149,104 @@ class RedisQueue:
         """DEL nof:q:{cmd}，worker recover 启动时清空旧队列。"""
         key = _queue_key(cmd)
         await self._client.delete(key)
+
+    # -------------------------------------------------------------------------
+    # 任务协调状态（Redis 是执行调度真相源）
+    # -------------------------------------------------------------------------
+
+    _TASK_INDEX_KEY = f"{_PREFIX}tasks"
+    _TASK_TERMINAL = {"completed", "failed", "cancelled"}
+
+    async def register_task(
+        self,
+        task_id: str,
+        cmd: str,
+        *,
+        status: str = "pending",
+        source: str | None = None,
+        created_at: str | None = None,
+        round_id: str | None = None,
+        parent_task_id: str | None = None,
+        intent_key: str | None = None,
+    ) -> None:
+        """登记任务协调 hash，并加入全局 task index。
+
+        这里是 server producer 与 worker recover 的共同入口。TaskStore 继续作为
+        UI/SSE 的持久视图，但 worker 能否领取、重启后要不要补投，以 Redis hash
+        的 ``status`` 为准。
+        """
+        mapping = {
+            "task_id": task_id,
+            "cmd": cmd,
+            "status": status,
+            "updated_at_ms": _now_ms(),
+        }
+        optional = {
+            "source": source,
+            "created_at": created_at,
+            "round_id": round_id,
+            "parent_task_id": parent_task_id,
+            "intent_key": intent_key,
+        }
+        mapping.update({k: str(v) for k, v in optional.items() if v is not None})
+        key = _task_key(task_id)
+        await self._client.hset(key, mapping=mapping)
+        await self._client.sadd(self._TASK_INDEX_KEY, task_id)
+
+    async def task_status(self, task_id: str) -> str | None:
+        """读取 Redis 中的任务协调状态。"""
+        value = await self._client.hget(_task_key(task_id), "status")
+        return _decode(value)
+
+    async def mark_task_status(self, task_id: str, status: str, *, error: str | None = None) -> None:
+        """直接设置任务协调状态，并写更新时间。
+
+        用于取消、恢复、终态回写，以及 worker recover 把孤儿 running 复位 pending。
+        """
+        mapping = {"status": status, "updated_at_ms": _now_ms()}
+        if error is not None:
+            mapping["error"] = error
+        if status in self._TASK_TERMINAL:
+            mapping["finished_at_ms"] = _now_ms()
+        await self._client.hset(_task_key(task_id), mapping=mapping)
+
+    async def claim_task(self, task_id: str) -> bool:
+        """原子领取任务：仅当 Redis status=pending 时改为 running。
+
+        使用 WATCH/MULTI 以兼容 fakeredis 测试环境；真实 Redis 下同样是 CAS。
+        这替代了旧的「读磁盘 meta 后无 await 置 running」单进程原子假设。
+        """
+        key = _task_key(task_id)
+        while True:
+            async with self._client.pipeline() as pipe:
+                try:
+                    await pipe.watch(key)
+                    status = _decode(await pipe.hget(key, "status"))
+                    if status != "pending":
+                        await pipe.unwatch()
+                        return False
+                    now = _now_ms()
+                    pipe.multi()
+                    pipe.hset(key, mapping={"status": "running", "started_at_ms": now, "updated_at_ms": now})
+                    pipe.sadd(self._INFLIGHT_KEY, task_id)
+                    await pipe.execute()
+                    return True
+                except WatchError:
+                    continue
+
+    async def list_task_ids(self) -> list[str]:
+        """列出 Redis 已登记任务 id。"""
+        values = await self._client.smembers(self._TASK_INDEX_KEY)
+        return sorted(v for raw in values if (v := _decode(raw)))
+
+    async def task_info(self, task_id: str) -> dict[str, str]:
+        """读取任务协调 hash，返回字符串字典。"""
+        raw = await self._client.hgetall(_task_key(task_id))
+        return {
+            str(_decode(k)): str(_decode(v))
+            for k, v in raw.items()
+            if _decode(k) is not None and _decode(v) is not None
+        }
 
     # -------------------------------------------------------------------------
     # 配额原子计数（决策 B）

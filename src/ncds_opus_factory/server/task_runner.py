@@ -3,15 +3,13 @@
 每个 command.run 都是「同步阻塞函数 + on_progress(text) 回调」的统一形态，
 执行仍在 asyncio.to_thread 的工作线程里跑。P2 调度化（docs/WOLONG-DESIGN.md §2）：
 
-1. submit()/requeue() 统一投 per-cmd Redis List 队列，不再 fire-and-forget——多实例
-   执行必须收口：沈括撞 TikHub 限流、卧龙耗 sclaude 账号池、柳永吃 scodex 子进程。
-2. worker 在 app startup 钩子里拉起（RUNNER 在 import 期构建，当时无 event loop）；
-   出队做 pending→running 的 CAS：排队中被取消、cancel→restore 双入队都不会双跑
-   （检查与置位之间无 await，单事件循环上原子）。
-3. 启动恢复：队列切为 Redis List（S3 步3），recover 第一步强制 DEL 所有 cmd List，
-   然后磁盘 disk-scan 全量重投——磁盘是真相源，Redis 旧 List 任何残留都作废，
-   杜绝"List 残留 + disk-scan 又投"双份。孤儿 running 复位为 pending 再入队；
-   超过恢复期限的直接判 failed（可见可重发，不留僵尸）。
+1. submit()/requeue() 统一登记 Redis task hash + 投 per-cmd Redis List 队列，
+   server 只生产，worker 只消费。
+2. worker 出队后通过 Redis WATCH/MULTI 做 pending→running claim；排队中取消、
+   cancel→restore 双入队、重复 List 条目都不会双跑。
+3. 启动恢复：Redis 是执行协调真相源。worker 不再 DEL 队列；只补登记旧磁盘任务，
+   并把 Redis 中 pending/running 的未终态任务补投给队列。磁盘保留为 UI/SSE
+   持久视图，不再作为清空 Redis 后重建队列的依据。
 4. 配额：派单类（user/wolong/cron）受每日配额，超额直接 failed 并注明原因；
    续跑/复盘类（gate/retro）豁免——闸门任务不能因配额死掉（§4.5）。
 5. 投递：source=cron 的任务完成即自动归档（reviewer=system 写 review）——
@@ -63,11 +61,13 @@ _DEFAULT_CONCURRENCY: dict[str, int] = {
     "guiguzi": 4,
     "wst": 5,        # 文生图
     "tst": 5,        # 图生图
+    "pipeline_node": 2,  # web 画布节点；image 内部自带并发，外层不要放太开
     "_default": 4,
 }
 _DEFAULT_DAILY_QUOTA: dict[str, int] = {
     "wolong": 8,
     "shenkuo": 40,
+    "pipeline_node": 500,
     "_default": 100,
     # 独立配额桶(§4.5):cron 订阅刷新不与人发的深采抢额度;gate/retro 是
     # 流程控制任务,单独记账——不是无限豁免,这两个上限是失控链的最后刹车
@@ -127,8 +127,7 @@ class TaskRunner:
         self.store = store
         self.registry = registry
         self.labels = labels
-        # 配额真相源改为 Redis 原子计数（S3 步2），跨进程不再翻倍
-        # 队列机制改为 Redis List（S3 步3），_queues 内存队列已删除
+        # 配额、队列、执行协调状态都走 Redis；磁盘 TaskStore 是展示/审计镜像。
         self._rq = redis_queue or get_default_queue()
         self._workers: list[asyncio.Task] = []
         self._started = False
@@ -136,8 +135,7 @@ class TaskRunner:
         # 终态钩子(round 事件接线,§4.2):app startup 注入 rounds_gate.handle_terminal,
         # 不在此 import——避免 server 子模块循环依赖
         self.on_terminal: Callable[..., Any] | None = None
-        # 在途集合已改为 Redis Set（S3 步7，blocker#6）：
-        # 跨进程可见（8810 restore 路由读，worker _run 写），见 queue.py add/remove/is_inflight
+        # 在途集合和任务状态均在 Redis 中跨进程可见，见 queue.py。
 
     def list_commands(self) -> list[str]:
         return sorted(self.registry.keys())
@@ -205,17 +203,31 @@ class TaskRunner:
             round_id=round_id, intent_key=intent_key,
         )
         # 配额判定移到 _run 出队侧（Redis incr_quota 原子判，跨进程不翻倍）。
-        # 顺序约束（S3 决策 E 死约束）：dedup 扫 store(同步) → store.create(同步) → 最后才 await lpush。
+        # 顺序约束：dedup 扫 store(同步) → store.create(同步) → Redis 登记 → 最后才 lpush。
         # 严禁把 await 挪到 create 之前——planner/rounds_gate「检查→submit」
         # 两次并发 maybe_resume 在同一 event loop 上仍协作式串行，
         # 第一次 create 落盘后第二次扫 store 能看到，从而防卧龙双投。
         try:
+            await self._rq.register_task(
+                meta.task_id,
+                meta.cmd,
+                status="pending",
+                source=meta.source,
+                created_at=meta.created_at,
+                round_id=meta.round_id,
+                parent_task_id=meta.parent_task_id,
+                intent_key=meta.intent_key,
+            )
             await self._enqueue(cmd, meta.task_id)
         except (RedisConnectionError, RedisError) as exc:
             # lpush 连不上 Redis：决策 D——将 meta 标为 failed，避免留下幽灵 pending 任务。
             # 不静默吞异常：抛 EnqueueUnavailable 让路由层返回 503+task_id（前端可追踪）。
             err_msg = f"enqueue failed: redis unavailable ({exc})"
             self.store.update_status(meta.task_id, "failed", error=err_msg)
+            try:
+                await self._rq.mark_task_status(meta.task_id, "failed", error=err_msg)
+            except Exception:  # noqa: BLE001
+                pass
             logger.error("[TaskRunner] submit failed, task marked failed: %s (%s)", meta.task_id, exc)
             raise EnqueueUnavailable(meta.task_id) from exc
         return meta.task_id
@@ -226,13 +238,35 @@ class TaskRunner:
         与 submit 同走队列：恢复的任务同样受并发额度约束（不再绕过调度）。
         """
         try:
+            meta = self.store.get_meta(task_id)
+            if meta is not None:
+                await self._rq.register_task(
+                    task_id,
+                    cmd,
+                    status="pending",
+                    source=meta.source,
+                    created_at=meta.created_at,
+                    round_id=meta.round_id,
+                    parent_task_id=meta.parent_task_id,
+                    intent_key=meta.intent_key,
+                )
+            else:
+                await self._rq.register_task(task_id, cmd, status="pending")
             await self._enqueue(cmd, task_id)
         except (RedisConnectionError, RedisError) as exc:
             # restore 时 redis 挂：同样置 failed 防幽灵，并向上抛告知调用方失败原因。
             err_msg = f"requeue failed: redis unavailable ({exc})"
             self.store.update_status(task_id, "failed", error=err_msg)
+            try:
+                await self._rq.mark_task_status(task_id, "failed", error=err_msg)
+            except Exception:  # noqa: BLE001
+                pass
             logger.error("[TaskRunner] requeue failed, task marked failed: %s (%s)", task_id, exc)
             raise EnqueueUnavailable(task_id) from exc
+
+    async def cancel_task(self, task_id: str) -> None:
+        """把取消写入 Redis 协调状态，阻止 queued duplicate 后续被 worker claim。"""
+        await self._rq.mark_task_status(task_id, "cancelled")
 
     async def _enqueue(self, cmd: str, task_id: str) -> None:
         """LPUSH 入 Redis List（左进 BRPOP 右出 = FIFO，旧的先跑）。
@@ -244,35 +278,27 @@ class TaskRunner:
         之间无 await 的协作式原子性（防卧龙双投）依赖 create 先于 lpush 落盘。
         """
         if not self._started:
-            # 嵌入方/测试没跑 recover_and_start 时别静默吞任务
-            logger.warning("[TaskRunner] runner 未启动,任务 %s 将滞留队列直到 recover_and_start", task_id)
+            # nof-server 是 producer-only：本地 runner 不启动也会正常 LPUSH 给 nof-worker。
+            logger.info("[TaskRunner] producer-only enqueue: %s", task_id)
         await self._rq.lpush(cmd, task_id)
 
     # ------------------------------------------------------------
     # 启动：恢复积压 + 拉起 worker（必须在运行中的 event loop 上调用）
     # ------------------------------------------------------------
     async def recover_and_start(self) -> int:
-        """扫描 store 恢复积压，按额度拉起 worker。返回重新入队的任务数。
+        """恢复未完成任务并拉起 worker。返回补投任务数。
 
-        队列切 Redis（S3 步3）后的 recover 协议：
-        1. 先 DEL 所有 cmd 的旧 Redis List——磁盘是真相源，重启以 disk-scan 全量重建队列，
-           Redis 旧 List 任何残留都作废，杜绝「残留 + disk-scan 又投」双份同一 task_id。
-        2. disk-scan：孤儿 running 复位 pending、超龄判 failed、补写 auto_archive，收集 backlog。
-        3. 按 reversed(backlog)（旧的先跑）await _enqueue（lpush）全量重投。
-        4. 才起 per-cmd BRPOP worker。
+        Redis 是执行协调真相源，worker 启动绝不能清空队列：
+        1. 扫描磁盘 TaskStore 只做兼容补登记、终态镜像和旧任务救援。
+        2. Redis 中 pending/running 视为未完成任务；running 是上个 worker 的孤儿，
+           复位为 pending 后补投队列。
+        3. 队列里可能已有旧条目，补投导致的重复条目由 claim_task 原子跳过。
+        4. 最后起 per-cmd BRPOP worker。
         """
         if self._started:
             return 0
         self._started = True
         self._shutdown_requested = False
-
-        # 第一步：DEL 所有 cmd 的旧 Redis List + 清 inflight Set（必须在 disk-scan 重投之前）。
-        # 磁盘是真相源，重启以磁盘 pending 全量重建队列，Redis 旧队列作废。
-        # clear_inflight：进程重启后内存里没有真正在途的任务；Redis inflight Set 若残留上次
-        # 进程崩溃前来不及 SREM 的脏 task_id，restore 路由会永久 409（blocker#6 正确性要求）。
-        for cmd in self.registry:
-            await self._rq.delete(cmd)
-        await self._rq.clear_inflight()
 
         cutoff = datetime.now() - timedelta(hours=RECOVER_MAX_AGE_HOURS)
         backlog: list[TaskMeta] = []
@@ -300,7 +326,17 @@ class TaskRunner:
                         if refreshed is not None:
                             meta = refreshed
                     self._maybe_auto_archive(meta, result)
-                if meta.status not in ("pending", "running"):
+                if meta.status in ("completed", "failed", "cancelled"):
+                    await self._rq.register_task(
+                        meta.task_id,
+                        meta.cmd,
+                        status=meta.status,
+                        source=meta.source,
+                        created_at=meta.created_at,
+                        round_id=meta.round_id,
+                        parent_task_id=meta.parent_task_id,
+                        intent_key=meta.intent_key,
+                    )
                     continue
                 # 种子/演示任务（t_demo_*/t_mock_*）不参与恢复——绝不能重启时真跑起来
                 if (
@@ -308,21 +344,74 @@ class TaskRunner:
                     or not _RECOVERABLE_TASK_ID_RE.match(meta.task_id)
                 ):
                     continue
+                redis_status = await self._rq.task_status(meta.task_id)
+                if redis_status in ("completed", "failed", "cancelled"):
+                    # Redis 已有终态时不允许旧磁盘状态把任务重新投出去。
+                    continue
                 created = datetime.fromisoformat(meta.created_at)
                 if created < cutoff:
                     msg = f"服务重启恢复:积压超过 {RECOVER_MAX_AGE_HOURS:.0f}h,自动判失败(可重新发起)"
                     self.store.append_error(meta.task_id, msg)
                     self.store.update_status(meta.task_id, "failed", error=msg)
+                    await self._rq.register_task(
+                        meta.task_id,
+                        meta.cmd,
+                        status="failed",
+                        source=meta.source,
+                        created_at=meta.created_at,
+                        round_id=meta.round_id,
+                        parent_task_id=meta.parent_task_id,
+                        intent_key=meta.intent_key,
+                    )
                     continue
                 if meta.status == "running":
                     # 上次进程死在执行中：复位回 pending 重新入队
                     self.store.reset_for_requeue(meta.task_id)
                     self.store.append_progress(meta.task_id, "服务重启:上次执行中断,已重新入队")
+                    await self._rq.remove_inflight(meta.task_id)
+                elif redis_status == "running":
+                    self.store.append_progress(meta.task_id, "服务重启:上次领取中断,已重新入队")
+                    await self._rq.remove_inflight(meta.task_id)
+                await self._rq.register_task(
+                    meta.task_id,
+                    meta.cmd,
+                    status="pending",
+                    source=meta.source,
+                    created_at=meta.created_at,
+                    round_id=meta.round_id,
+                    parent_task_id=meta.parent_task_id,
+                    intent_key=meta.intent_key,
+                )
                 backlog.append(meta)
             except Exception:  # noqa: BLE001 — 单条坏数据跳过,恢复不能成为启动单点
                 logger.exception("[TaskRunner] recover 跳过 %s", meta.task_id)
 
-        # 旧的先跑（list_tasks 最新在前,反转即按 created_at 升序）
+        # Redis index 里存在、但磁盘扫描没覆盖的未完成任务也要补投。正常路径下
+        # 它们应该都有磁盘 meta；这里主要防止 worker 重启时只靠 List 残留而无人补投。
+        seen = {m.task_id for m in backlog}
+        for task_id in await self._rq.list_task_ids():
+            if task_id in seen:
+                continue
+            info = await self._rq.task_info(task_id)
+            cmd = info.get("cmd")
+            status = info.get("status")
+            if cmd not in self.registry or status not in ("pending", "running"):
+                continue
+            meta = self.store.get_meta(task_id)
+            if meta is None:
+                await self._rq.mark_task_status(task_id, "failed", error="task meta missing on worker recover")
+                continue
+            if status == "running":
+                if meta.status == "running":
+                    self.store.reset_for_requeue(task_id)
+                    self.store.append_progress(task_id, "服务重启:上次执行中断,已重新入队")
+                await self._rq.mark_task_status(task_id, "pending")
+                await self._rq.remove_inflight(task_id)
+            backlog.append(meta)
+            seen.add(task_id)
+
+        # 旧的先跑（list_tasks 最新在前,反转即按 created_at 升序）。
+        # 不清旧 Redis List；重复条目由 claim_task 防双跑。
         for meta in reversed(backlog):
             await self._enqueue(meta.cmd, meta.task_id)
 
@@ -387,12 +476,19 @@ class TaskRunner:
         return bool(meta and meta.status == "cancelled")
 
     async def _run(self, task_id: str, cmd: str) -> None:
-        # 出队 CAS：只有 pending 才接手（排队中被取消/restore 双入队的旧条目在此丢弃）。
-        # get_meta 与 update_status 之间无 await,单事件循环上等效原子。
+        # 出队 CAS：只有 Redis status=pending 才接手。磁盘状态只作为展示镜像和
+        # cancel checker 的输入，不再承担跨进程领取原子性。
         meta = self.store.get_meta(task_id)
         if meta is None or meta.status != "pending":
+            if meta is not None and meta.status in ("completed", "failed", "cancelled"):
+                await self._rq.mark_task_status(task_id, meta.status, error=meta.error)
             logger.info("[TaskRunner] task %s skipped at dequeue (status=%s)",
                         task_id, meta.status if meta else "missing")
+            return
+        if not await self._rq.claim_task(task_id):
+            redis_status = await self._rq.task_status(task_id)
+            logger.info("[TaskRunner] task %s skipped by redis claim (status=%s)",
+                        task_id, redis_status or "missing")
             return
         # Redis 配额原子判定（S3 步2 决策 B）：判定收口到 worker 出队侧，跨进程不翻倍。
         # 位置：出队 CAS 之后、置 running 之前；语义等价原 submit 闸门，但时机变成「出队时」。
@@ -406,13 +502,12 @@ class TaskRunner:
             )
             self.store.append_error(task_id, msg)
             self.store.update_status(task_id, "failed", error=msg)
+            await self._rq.mark_task_status(task_id, "failed", error=msg)
             # 系统任务被配额拒绝也自动归档，不准在收件箱点红灯
             self._maybe_auto_archive(meta, None)
             logger.warning("[TaskRunner] quota exceeded at dequeue: bucket=%s task=%s", key, task_id)
             return
         self.store.update_status(task_id, "running")
-        # S3 步7：改 Redis SADD，让 8810 restore 路由跨进程可见
-        await self._rq.add_inflight(task_id)
         params = meta.params
         # 卧龙派单段:注入任务 id 让 round_id 确定化(round_<task_id>)——
         # 重启重跑同一任务收敛到同一个 round,绝不双倍生产
@@ -439,10 +534,12 @@ class TaskRunner:
             # 执行中被取消:工作线程无法强杀,跑完后结果作废,保持 cancelled
             if self._is_cancelled(task_id):
                 logger.info("[TaskRunner] task %s finished after cancel, result discarded", task_id)
+                await self._rq.mark_task_status(task_id, "cancelled")
                 return
             self.store.write_result(task_id, result)
             self.store.append_done(task_id, result)
             self.store.update_status(task_id, "completed")
+            await self._rq.mark_task_status(task_id, "completed")
             # 命令可选回传展示标题/副题(如沈括用作品标题替代任务卡上的分享链接)
             if isinstance(result, dict) and (result.get("task_title") or result.get("task_subtitle")):
                 self.store.set_display(task_id, result.get("task_title"), result.get("task_subtitle"))
@@ -471,6 +568,7 @@ class TaskRunner:
         except cancel.TaskCancelled:
             if self._is_cancelled(task_id):
                 logger.info("[TaskRunner] task %s stopped after user cancel", task_id)
+                await self._rq.mark_task_status(task_id, "cancelled")
                 return
             if self._shutdown_requested:
                 try:
@@ -483,10 +581,12 @@ class TaskRunner:
         except BaseException as exc:  # noqa: BLE001 - 任何异常都需要记录
             if self._is_cancelled(task_id):
                 logger.info("[TaskRunner] task %s errored after cancel, kept cancelled", task_id)
+                await self._rq.mark_task_status(task_id, "cancelled")
                 return
             err_text = f"{type(exc).__name__}: {exc}"
             self.store.append_error(task_id, err_text)
             self.store.update_status(task_id, "failed", error=err_text)
+            await self._rq.mark_task_status(task_id, "failed", error=err_text)
             # cron/round 系统任务失败也自动归档:机器自闭环,失败行不准点红灯
             self._maybe_auto_archive(meta, None)
             await self._fire_terminal(meta, "failed", None)

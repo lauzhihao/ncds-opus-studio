@@ -81,6 +81,11 @@ class PipelineStateStoreMixin:
                 continue
             try:
                 data = json.loads(sf.read_text(encoding="utf-8"))
+                try:
+                    state = self.reconcile_runtime_state(self._load(data["job_id"]), emit=True)
+                    data = asdict(state)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[pipeline] reconcile %s failed: %s", data.get("job_id"), exc)
                 running_node: str | None = None
                 for name, n in (data.get("nodes") or {}).items():
                     if (n or {}).get("status") in ("running", "queued"):
@@ -161,7 +166,7 @@ class PipelineStateStoreMixin:
         return state
 
     def get_job(self, job_id: str) -> JobState:
-        return self._load(job_id)
+        return self.reconcile_runtime_state(self._load(job_id), emit=True)
 
     def get_episode(self, job_id: str) -> dict[str, Any] | None:
         ep = self.video_jobs_dir / job_id / "02_rw" / "episode.json"

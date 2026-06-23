@@ -21,7 +21,7 @@
   padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4);
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: var(--r-3);
+  border-radius: 0; /* 右下角通知使用直角标签语言 */
   box-shadow: var(--shadow-4);
   font-family: var(--font-sans);
   font-size: var(--text-sm);

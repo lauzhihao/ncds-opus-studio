@@ -19,7 +19,9 @@ priority: high
 
 父任务 task-1，依赖 S1(task-1.1 事件源落盘)+S2(task-1.2 cancel 跨进程)。新建 server/worker.py + pyproject script nof-worker。把 TaskRunner worker 消费协程 + subscription/retro/planner/sweeper loop 从 app.py startup 挪进 nof-worker；8810 startup 不再拉 worker，只保留入队(写 task_store)+读状态+SSE(tail events.jsonl)。两进程各建 RUNNER/STORE、共享 NOF_STATE_DIR 下 task_store 与 video-jobs。约定：状态由 worker 单写、HTTP 只入队。
 
-> **决策更新(2026-06-15)**：跨进程**任务队列改用 Redis**(用户拍板：仅 S3 队列引入 Redis；S1 事件 events.jsonl / S2 取消 flag 保持文件不变)。即"入队/出队"这条 IPC 走 Redis —— HTTP 端 LPUSH 派单、nof-worker 端 BRPOP 阻塞消费、防重领靠 Redis 原子语义，取代原计划的"写 task_store + 文件锁/单写者轮询"。**状态真相源仍是文件**(pipeline_state.json + task_store meta，worker 单写)；Redis 只承载"待办队列"这一信道。落地连带项：① 加 redis client 依赖(`uv pip install --python .venv/bin/python3 redis`)；② `REDIS_URL` 配置(.env，默认 `redis://127.0.0.1:6379`)；③ Redis 连不上时的降级/显式报错路径(不能静默吞任务)；④ 入队需幂等/可恢复(重启重投不双倍生产，复用现有 round_<task_id> 收敛)。本机已装 redis-server(homebrew)但当前未常驻——见 S4。
+> **决策更新(2026-06-15)**：跨进程**任务队列改用 Redis**(用户拍板：仅 S3 队列引入 Redis；S1 事件 events.jsonl / S2 取消 flag 保持文件不变)。即"入队/出队"这条 IPC 走 Redis —— HTTP 端 LPUSH 派单、nof-worker 端 BRPOP 阻塞消费、防重领靠 Redis 原子语义，取代原计划的"写 task_store + 文件锁/单写者轮询"。本机已装 redis-server(homebrew)但当前未常驻——见 S4。
+>
+> **安全修订(2026-06-23)**：上一段中的旧口径“状态真相源仍是文件、Redis 只承载待办队列”已作废。最新实现以 Redis 作为任务中间件与执行协调中心：server 登记 `nof:task:{task_id}` 并 LPUSH，worker 用 Redis claim 原子领取，completed/failed/cancelled 均回写 Redis；TaskStore/events.jsonl 保留为 UI/SSE 持久视图。worker 启动不再 DEL Redis 队列，Redis 不重启时任务调度状态应连续安全。
 >
 > **完整设计(决策 A-G + 6 个必修 blocker + 11 步有序迁移 + 测试计划)见 [BACKLOG/docs/S3-redis-worker-design.md](../docs/S3-redis-worker-design.md)**。范围 **scope (a)**(用户拍板 2026-06-15)：只搬 TaskRunner 类任务，画布/引擎(run_node/run_step)留 8810、S3.x 迁(前置=EngineEventBus 改文件 tail)。AC#5 cancel 接线本期落 8810(执行所在进程，flag 文件信号 S3.x 迁 worker 不返工)。
 

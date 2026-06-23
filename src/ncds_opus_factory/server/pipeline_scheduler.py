@@ -23,7 +23,18 @@ class PipelineSchedulerMixin:
 
     _CANCEL_WATCHER_INTERVAL_SEC: float = 0.5
     _CANCEL_GRACE_SEC: float = 15.0
+    _ORPHAN_GRACE_SEC: float = 10.0
+    _PIPELINE_TASK_CMD: str = "pipeline_node"
     _LEGACY_ONLY_NODES: set[str] = {"asr", "rw"}
+
+    def attach_task_runner(self, task_runner: Any) -> None:
+        """Inject the process-wide TaskRunner.
+
+        Production server uses this to enqueue long-running `/jobs` node work
+        into nof-worker. Bare test runners leave it unset and keep the legacy
+        in-process execution path.
+        """
+        self._task_runner = task_runner
 
     def _cancel_flag(self, job_id: str, node_name: str) -> Path:
         return self.video_jobs_dir / job_id / "cancel" / f"{node_name}.flag"
@@ -61,6 +72,14 @@ class PipelineSchedulerMixin:
         if node.kind in ("input", "output"):
             raise ValueError(f"node {node_name} is UI-only, not runnable")
 
+        current = state.nodes[node_name]
+        if current.status in {"queued", "running"}:
+            self._emit(job_id, {
+                "type": "node_status", "job_id": job_id, "node": node_name,
+                "state": asdict(current),
+            })
+            return
+
         if params:
             cfg = dict(state.node_configs.get(node_name) or {})
             cfg.update(params)
@@ -94,10 +113,68 @@ class PipelineSchedulerMixin:
         self._save(state)
         self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(state.nodes[node_name])})
 
+        task_runner = getattr(self, "_task_runner", None)
+        if task_runner is not None:
+            try:
+                task_id = await task_runner.submit(
+                    self._PIPELINE_TASK_CMD,
+                    {"job_id": job_id, "node_name": node_name},
+                    source="pipeline",
+                )
+            except Exception:
+                failed = self._load(job_id)
+                fn = failed.nodes[node_name]
+                fn.status = "failed"
+                fn.finished_at = time.time()
+                fn.error = "节点调度失败，请稍后重试"
+                self._save(failed)
+                self._emit(
+                    job_id,
+                    {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(fn)},
+                )
+                raise
+            queued = self._load(job_id)
+            qn = queued.nodes[node_name]
+            qn.task_id = task_id
+            self._save(queued)
+            self._emit(
+                job_id,
+                {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(qn)},
+            )
+            return
+
         key = (job_id, node_name)
         if key in self._running_nodes and not self._running_nodes[key].done():
             return
         self._running_nodes[key] = asyncio.create_task(self._execute(job_id, node_name))
+
+    def run_pipeline_node_task(
+        self,
+        *,
+        job_id: str,
+        node_name: str,
+        on_progress: Callable[[str], None],
+        **_: Any,
+    ) -> dict[str, Any]:
+        """TaskRunner command: execute a queued pipeline node inside nof-worker."""
+
+        async def _run() -> dict[str, Any]:
+            on_progress(f"pipeline node {job_id}/{node_name} started")
+            active = self._find_pipeline_task(job_id, node_name, statuses={"running", "pending"})
+            if active is not None:
+                self._stamp_pipeline_task(job_id, node_name, active.task_id)
+            await self._execute(job_id, node_name)
+            state = self._load(job_id)
+            node = state.nodes[node_name]
+            if node.status == "done":
+                return {"job_id": job_id, "node": node_name, "outputs": node.outputs}
+            if node.error == "cancelled":
+                raise _cancel.TaskCancelled(f"pipeline node cancelled: {job_id}/{node_name}")
+            if node.status == "failed":
+                raise RuntimeError(node.error or f"pipeline node failed: {job_id}/{node_name}")
+            raise RuntimeError(f"pipeline node ended with status={node.status}: {job_id}/{node_name}")
+
+        return asyncio.run(_run())
 
     async def _execute(self, job_id: str, node_name: str) -> None:
         try:
@@ -214,6 +291,24 @@ class PipelineSchedulerMixin:
         """取消节点。幂等：内存里没有活着的 task 也视为取消成功。"""
         _cancel.set_flag(self._cancel_flag(job_id, node_name))
 
+        try:
+            state_for_task = self._load(job_id)
+            task_id = state_for_task.nodes.get(node_name).task_id if state_for_task.nodes.get(node_name) else None
+        except FileNotFoundError:
+            task_id = None
+        except KeyError:
+            task_id = None
+        task_runner = getattr(self, "_task_runner", None)
+        if task_runner is not None and task_id:
+            try:
+                meta = task_runner.store.get_meta(task_id)
+                if meta is not None and meta.status in ("pending", "running"):
+                    await task_runner.cancel_task(task_id)
+                    task_runner.store.update_status(task_id, "cancelled")
+                    task_runner.store.append_progress(task_id, "pipeline node 已被用户取消")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[pipeline] cancel task mirror failed: %s", exc)
+
         enrich = self._enrich_tasks.get(job_id)
         enrich_cancelled = False
         if enrich is not None and not enrich.done():
@@ -294,3 +389,157 @@ class PipelineSchedulerMixin:
 
         if node_name == "asr":
             self._spawn_asr_enrich(job_id)
+
+    def _pipeline_task_meta(self, task_id: str | None) -> Any | None:
+        if not task_id:
+            return None
+        task_runner = getattr(self, "_task_runner", None)
+        if task_runner is None:
+            return None
+        try:
+            return task_runner.store.get_meta(task_id)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _find_pipeline_task(
+        self,
+        job_id: str,
+        node_name: str,
+        *,
+        statuses: set[str] | None = None,
+    ) -> Any | None:
+        task_runner = getattr(self, "_task_runner", None)
+        if task_runner is None:
+            return None
+        try:
+            for meta in task_runner.store.list_tasks():
+                if meta.cmd != self._PIPELINE_TASK_CMD:
+                    continue
+                if statuses is not None and meta.status not in statuses:
+                    continue
+                params = meta.params or {}
+                if params.get("job_id") == job_id and params.get("node_name") == node_name:
+                    return meta
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def _stamp_pipeline_task(self, job_id: str, node_name: str, task_id: str) -> None:
+        try:
+            state = self._load(job_id)
+            node = state.nodes.get(node_name)
+            if node is None:
+                return
+            if node.task_id != task_id:
+                node.task_id = task_id
+                self._save(state)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[pipeline] stamp task id failed: %s", exc)
+
+    def _has_live_pipeline_executor(self, job_id: str, node_name: str, node: NodeState) -> bool:
+        key = (job_id, node_name)
+        task = self._running_nodes.get(key)
+        if task is not None and not task.done():
+            return True
+        meta = self._pipeline_task_meta(node.task_id)
+        if meta and meta.cmd == self._PIPELINE_TASK_CMD and meta.status in ("pending", "running"):
+            return True
+        return self._find_pipeline_task(job_id, node_name, statuses={"pending", "running"}) is not None
+
+    def _node_age_sec(self, state: Any, node: NodeState) -> float:
+        anchor = node.started_at or state.updated_at or state.created_at
+        try:
+            return max(0.0, time.time() - float(anchor))
+        except (TypeError, ValueError):
+            return self._ORPHAN_GRACE_SEC + 1.0
+
+    def reconcile_runtime_state(self, state: Any, *, emit: bool = False) -> Any:
+        """Converge facade node status with the real scheduler/engine state.
+
+        This keeps stale `/jobs` running states from surviving a server restart.
+        Correct live work is identified by either an in-process task (legacy
+        tests/dev path) or a TaskRunner `pipeline_node` task (nof-worker path).
+        """
+        changed = False
+        for node_name, node in state.nodes.items():
+            active = self._find_pipeline_task(state.job_id, node_name, statuses={"pending", "running"})
+            if active is not None:
+                desired_status = "queued" if active.status == "pending" else "running"
+                if (
+                    node.status != desired_status
+                    or node.task_id != active.task_id
+                    or node.error is not None
+                    or node.finished_at is not None
+                ):
+                    node.status = desired_status
+                    node.task_id = active.task_id
+                    node.error = None
+                    node.finished_at = None
+                    if not node.started_at and active.started_at:
+                        node.started_at = time.time()
+                    changed = True
+                continue
+
+            if node.status not in ("queued", "running"):
+                continue
+            if self._has_live_pipeline_executor(state.job_id, node_name, node):
+                continue
+
+            meta = self._pipeline_task_meta(node.task_id)
+            if meta is not None and meta.cmd == self._PIPELINE_TASK_CMD:
+                if meta.status == "completed":
+                    result = getattr(self._task_runner.store, "get_result")(meta.task_id) or {}
+                    outputs = result.get("outputs") if isinstance(result, dict) else None
+                    node.outputs = outputs if isinstance(outputs, dict) else node.outputs
+                    node.status = "done"
+                    node.progress = "完成"
+                    node.error = None
+                    node.finished_at = time.time()
+                    changed = True
+                    continue
+                if meta.status == "cancelled":
+                    self._reset_node(node)
+                    node.error = "cancelled"
+                    node.finished_at = time.time()
+                    changed = True
+                    continue
+                if meta.status == "failed":
+                    node.status = "failed"
+                    node.error = meta.error or "后台任务失败，请重试"
+                    node.finished_at = time.time()
+                    changed = True
+                    continue
+
+            if self._engine is not None and state.engine_iid and self._engine.store.exists(state.engine_iid):
+                step = self._engine.store.get_step_state(state.engine_iid, node_name)
+                if step is not None and step.status == "done":
+                    node.status = "done"
+                    node.outputs = dict(step.outputs)
+                    node.progress = "完成"
+                    node.error = None
+                    node.finished_at = time.time()
+                    changed = True
+                    continue
+                if step is not None and step.status == "failed":
+                    node.status = "failed"
+                    node.error = step.error or "引擎步骤失败，请重试"
+                    node.finished_at = time.time()
+                    changed = True
+                    continue
+
+            if self._node_age_sec(state, node) < self._ORPHAN_GRACE_SEC:
+                continue
+            node.status = "failed"
+            node.error = "后台执行已中断，请重新执行该节点"
+            node.finished_at = time.time()
+            changed = True
+
+        if changed:
+            self._save(state)
+            if emit:
+                for node_name, node in state.nodes.items():
+                    self._emit(
+                        state.job_id,
+                        {"type": "node_status", "job_id": state.job_id, "node": node_name, "state": asdict(node)},
+                    )
+        return state

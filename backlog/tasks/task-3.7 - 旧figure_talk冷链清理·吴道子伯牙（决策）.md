@@ -48,7 +48,7 @@ owner 原话："吴道子/伯牙/渲染都还没实现或是旧实现，不必�
 ## 完成记录
 
 - 2026-06-22：按默认策略执行“标记冷链、重写时替换”，不物理删除任何 reachable 入口；`wudaozi`/`boya` 仍保留 CLI、`/tasks`、`/commands` 与 app catalog 可触达能力。
-- 2026-06-22：在 `commands/wudaozi.py` 与 `commands/boya.py` 顶部标注旧 figure_talk 冷链边界：当前 web/engine 主链是 `paper_card_talk_015` 的 `storyboard -> tts -> image -> render_015`，后续重写吴道子/伯牙/render 下游时直接替换，不为旧实现加兼容层。
+- 2026-06-22：在 `commands/wudaozi.py` 与 `commands/boya.py` 顶部标注旧 figure_talk 冷链边界；2026-06-23 同步当前 web/engine 主链为 `paper_card_talk_015` 的 `storyboard -> image -> tts -> render_015`，后续重写吴道子/伯牙/render 下游时直接替换，不为旧实现加兼容层。
 - 2026-06-22：在 app agent catalog 与 server command schema 注释中标明 wudaozi/boya 是旧冷链入口，避免后续误当当前主生产链维护。
 - 验证：`py_compile` 相关文件通过；`pytest src/ncds_opus_factory/commands/wudaozi_test.py src/ncds_opus_factory/commands/boya_test.py -q` 28 passed；全量 `.venv/bin/python3 -m pytest -q` 597 passed, 173 warnings。
 - 未执行 AC#2 删除路径；该路径仍需另行决策，并会触及 app catalog/models/panel、模板、assets 和 app 编译验证。

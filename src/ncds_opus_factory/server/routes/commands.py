@@ -20,6 +20,8 @@ from ncds_opus_factory.server.state import RUNNER
 
 router = APIRouter()
 
+INTERNAL_COMMANDS = {"pipeline_node"}
+
 
 @router.get("/commands")
 async def list_commands() -> dict[str, list[dict[str, Any]]]:
@@ -29,6 +31,8 @@ async def list_commands() -> dict[str, list[dict[str, Any]]]:
     """
     items: list[dict[str, Any]] = []
     for name in RUNNER.list_commands():
+        if name in INTERNAL_COMMANDS:
+            continue
         schema = get_schema(name)
         if schema is None:
             items.append({"name": name, "label": name, "group": "primitive", "summary": ""})
@@ -45,7 +49,7 @@ async def list_commands() -> dict[str, list[dict[str, Any]]]:
 @router.get("/commands/{cmd}/schema")
 async def get_command_schema(cmd: str) -> dict[str, Any]:
     """返回某命令的参数 schema（给移动端渲染输入表单）。"""
-    if cmd not in RUNNER.registry:
+    if cmd in INTERNAL_COMMANDS or cmd not in RUNNER.registry:
         raise HTTPException(
             status_code=404,
             detail=f"unknown command: {cmd}. available: {RUNNER.list_commands()}",

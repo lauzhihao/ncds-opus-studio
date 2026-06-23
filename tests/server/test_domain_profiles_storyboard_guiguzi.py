@@ -130,6 +130,20 @@ class TestRunStoryboardStepDomainInjection:
             return director_json
         return _opus
 
+    def _fake_storyboard_fallback(self, captured_prompts: list[str]):
+        director_json = json.dumps({
+            "scenes": {
+                "s1": {"prompt": "x", "group": "g1", "imageFit": "contain",
+                       "motion": {"enter": "fade"}, "overlays": [], "sketches": []},
+            },
+            "sceneMap": {"1": "s1", "2": "s1"},
+        }, ensure_ascii=False)
+
+        def _fallback(user_prompt: str, system_prompt: str, on_progress, *, parse, **_: Any) -> Any:
+            captured_prompts.append(user_prompt)
+            return parse(director_json)
+        return _fallback
+
     def test_domain_finance_injects_image_style(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -141,13 +155,13 @@ class TestRunStoryboardStepDomainInjection:
         monkeypatch.setattr(perf, "_get_domain_profile", _stub_get_profile)
 
         captured: list[str] = []
-        monkeypatch.setattr(perf, "_opus_structure", self._fake_opus_director(captured))
+        monkeypatch.setattr(perf, "structure_json_with_model_fallback", self._fake_storyboard_fallback(captured))
 
         jd = tmp_path / "job"
         self._write_episode(jd)
         perf.run_storyboard_step(_noop, job_dir=str(jd), domain="finance")
 
-        assert captured, "opus 应被调用一次"
+        assert captured, "storyboard fallback 应被调用一次"
         assert "[FINANCE_IMAGE_STUB]" in captured[0]
         assert "领域视觉调性" in captured[0]
 
@@ -162,7 +176,7 @@ class TestRunStoryboardStepDomainInjection:
         monkeypatch.setattr(perf, "_get_domain_profile", _stub_get_profile)
 
         captured: list[str] = []
-        monkeypatch.setattr(perf, "_opus_structure", self._fake_opus_director(captured))
+        monkeypatch.setattr(perf, "structure_json_with_model_fallback", self._fake_storyboard_fallback(captured))
 
         jd = tmp_path / "job"
         self._write_episode(jd)
@@ -180,7 +194,7 @@ class TestRunStoryboardStepDomainInjection:
         monkeypatch.setattr(perf, "_get_domain_profile", _stub_get_profile)
 
         captured: list[str] = []
-        monkeypatch.setattr(perf, "_opus_structure", self._fake_opus_director(captured))
+        monkeypatch.setattr(perf, "structure_json_with_model_fallback", self._fake_storyboard_fallback(captured))
 
         jd = tmp_path / "job"
         self._write_episode(jd)

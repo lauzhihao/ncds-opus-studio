@@ -1,5 +1,5 @@
 // 伯牙「声音结果」面板：包装当前 tts 节点，按 beats 顺序逐行渲染
-// [NN] [zh 单行输入] [▶ 试听] [下载] [↻ 重生]，底部启动 image 回补吴道子画面资产。
+// [NN] [zh 单行输入] [▶ 试听] [下载] [↻ 重生]，底部进入成片检查。
 //
 // 数据来源
 //   - episode.json beats 数组 → zh 的 source of truth（可编辑回写）
@@ -23,7 +23,7 @@ interface Props {
   onAdvanced?: () => void;
 }
 
-const NEXT_NODE = 'image';
+const NEXT_NODE = 'preview';
 
 export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
   const { showToast } = useToast();
@@ -173,8 +173,8 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      showToast('启动画面资产生成失败，请稍后再试');
-      console.error('[TtsResultPanel] advance to image failed', e);
+      showToast('进入成片检查失败，请稍后再试');
+      console.error('[TtsResultPanel] advance to preview failed', e);
     } finally {
       setAdvanceBusy(false);
     }
@@ -331,11 +331,11 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
             <button
               type="button"
               className="btn primary sm"
-              title="声音完成 · 回补吴道子画面资产"
+              title="声音完成 · 进入成片检查"
               disabled={advanceBusy || actionBusy || status !== 'done'}
               onClick={doAdvance}
             >
-              <Play size={12} strokeWidth={2} fill="currentColor" /> 生成画面资产
+              <Play size={12} strokeWidth={2} fill="currentColor" /> 进入成片检查
             </button>
           </div>
         </>
@@ -344,7 +344,7 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
       <ConfirmDialog
         open={pendingRerun}
         title="重新执行声音合成？"
-        message={<>会清空所有音频产物以及下游画面资产/成片状态，然后整体重新配音。</>}
+        message={<>会清空所有音频产物以及下游成片状态，然后整体重新配音。</>}
         confirmLabel="重新执行"
         danger
         onConfirm={async () => {

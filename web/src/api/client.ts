@@ -130,6 +130,11 @@ export const api = {
     post<{ ok: boolean; job_id: string; scene_id: string }>(
       `/jobs/${jobId}/nodes/image/regen/${encodeURIComponent(sceneId)}`,
     ),
+  selectImageVariant: (jobId: string, sceneId: string, imageRelpath: string) =>
+    put<{ ok: boolean; job_id: string; scene_id: string; image_relpath: string }>(
+      `/jobs/${jobId}/nodes/image/select`,
+      { scene_id: sceneId, image_relpath: imageRelpath },
+    ),
   regenImageSketch: (jobId: string, sceneId: string, n: number) =>
     post<{ ok: boolean; job_id: string; scene_id: string; n: number; image_relpath: string }>(
       `/jobs/${jobId}/nodes/image/regen-sketch/${encodeURIComponent(sceneId)}/${n}`,

@@ -1,6 +1,6 @@
 // 画布页（agent 视角重构）：6 个有序 agent 节点 + 卧龙总览条 + agent 抽屉 + SSE 实时状态。
 //
-// 底层仍是一条 015 recipe 的 job（input→asr→rw→lines→storyboard→tts→image→preview→
+// 底层仍是一条 015 recipe 的 job（input→asr→rw→lines→storyboard→image→tts→preview→
 // render→download）；这里把这些 engine 节点按 agent 分组重新呈现为 6 个有序 agent。
 // agent 节点是纯前端分组，操作仍打到底层 engine 节点（见 components/AgentDrawer）。
 

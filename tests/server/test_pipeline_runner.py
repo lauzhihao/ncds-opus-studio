@@ -9,15 +9,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
+from ncds_opus_core.pipelines import get_pipeline
 
 from ncds_opus_factory.server import pipeline_asr_helpers as asr_helpers
+from ncds_opus_factory.server import pipeline_lines_tasks as lines_tasks
 from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 from ncds_opus_factory.server import pipeline_runner as pr
 from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
+from ncds_opus_factory.server import pipeline_storyboard_tasks as storyboard_tasks
+from ncds_opus_factory.server.engine.recipes import PAPER_CARD_TALK_015
+from ncds_opus_factory.server.schemas import TaskMeta
 
 
 class _FakeProc:
@@ -28,6 +34,186 @@ class _FakeProc:
         self.stdout = json.dumps(
             {"type": "result", "is_error": False, "result": result_text}
         ) + "\n"
+
+
+def test_core_pipeline_order_matches_engine_recipe():
+    """`/jobs` facade 和 engine recipe 必须共享同一条 015 顺序。"""
+    pipeline = get_pipeline("paper_card_talk_015")
+    assert pipeline.topological_order() == PAPER_CARD_TALK_015.topological_order()
+    assert pipeline.node("image").deps == ("storyboard",)
+    assert pipeline.node("tts").deps == ("image",)
+    assert pipeline.node("preview").deps == ("tts",)
+
+
+def test_run_image_allowed_after_storyboard_before_tts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """画面资产应由吴道子在 storyboard 后直接启动，不再等待伯牙 tts。"""
+    runner = pr.PipelineRunner(tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    state = runner.get_job(job.job_id)
+    for node in ("asr", "rw", "lines", "storyboard"):
+        state.nodes[node].status = "done"
+    state.nodes["image"].status = "idle"
+    state.nodes["tts"].status = "idle"
+    runner._save(state)
+
+    async def fake_execute(job_id: str, node_name: str) -> None:
+        return None
+
+    monkeypatch.setattr(runner, "_execute", fake_execute)
+    asyncio.run(runner.run_node(job.job_id, "image"))
+
+    updated = runner.get_job(job.job_id)
+    assert updated.nodes["image"].status == "queued"
+
+
+def test_run_node_active_is_idempotent_and_does_not_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """运行中的节点再次收到 run 请求时，不重置、不二次启动。"""
+    runner = pr.PipelineRunner(tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    state = runner.get_job(job.job_id)
+    for node in ("asr", "rw", "lines", "storyboard"):
+        state.nodes[node].status = "done"
+    state.nodes["image"].status = "running"
+    state.nodes["image"].progress = "[19/33] running"
+    state.nodes["tts"].status = "done"
+    state.nodes["tts"].outputs = {"keep": True}
+    runner._save(state)
+
+    async def fail_execute(_job_id: str, _node_name: str) -> None:
+        raise AssertionError("active node must not be restarted")
+
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(runner, "_execute", fail_execute)
+    monkeypatch.setattr(runner, "_emit", lambda _job_id, event: emitted.append(event))
+
+    asyncio.run(runner.run_node(job.job_id, "image"))
+
+    updated = runner.get_job(job.job_id)
+    assert updated.nodes["image"].status == "running"
+    assert updated.nodes["image"].progress == "[19/33] running"
+    assert updated.nodes["tts"].status == "done"
+    assert updated.nodes["tts"].outputs == {"keep": True}
+    assert not runner._running_nodes
+    assert emitted[-1]["node"] == "image"
+
+
+def test_run_node_with_task_runner_enqueues_pipeline_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """正式 server 注入 TaskRunner 后，画布节点应入队给 worker，不在 8810 内执行。"""
+
+    class FakeMeta:
+        task_id = "pipeline_node_1780000000000abcdef12"
+        cmd = "pipeline_node"
+        status = "pending"
+        error = None
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.meta = FakeMeta()
+
+        def get_meta(self, task_id: str) -> FakeMeta | None:
+            return self.meta if task_id == self.meta.task_id else None
+
+    class FakeTaskRunner:
+        def __init__(self) -> None:
+            self.store = FakeStore()
+            self.submits: list[tuple[str, dict[str, Any], str | None]] = []
+
+        async def submit(self, cmd: str, params: dict[str, Any], source: str | None = None) -> str:
+            self.submits.append((cmd, params, source))
+            return self.store.meta.task_id
+
+    runner = pr.PipelineRunner(tmp_path)
+    runner.attach_task_runner(FakeTaskRunner())
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    state = runner.get_job(job.job_id)
+    for node in ("asr", "rw", "lines", "storyboard"):
+        state.nodes[node].status = "done"
+    runner._save(state)
+
+    async def fail_execute(_job_id: str, _node_name: str) -> None:
+        raise AssertionError("server must enqueue instead of executing locally")
+
+    monkeypatch.setattr(runner, "_execute", fail_execute)
+    asyncio.run(runner.run_node(job.job_id, "image"))
+
+    task_runner = runner._task_runner
+    updated = runner.get_job(job.job_id)
+    assert task_runner.submits == [
+        ("pipeline_node", {"job_id": job.job_id, "node_name": "image"}, "pipeline"),
+    ]
+    assert updated.nodes["image"].status == "queued"
+    assert updated.nodes["image"].task_id == "pipeline_node_1780000000000abcdef12"
+    assert not runner._running_nodes
+
+
+def test_get_job_reconciles_orphan_running_node(tmp_path: Path):
+    runner = pr.PipelineRunner(tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    state = runner._load(job.job_id)
+    state.nodes["image"].status = "running"
+    state.nodes["image"].started_at = time.time() - 60
+    state.nodes["image"].progress = "[29/33] S1-13b 容器图生成中…"
+    state.nodes["image"].task_id = "i_orphan_engine"
+    runner._save(state)
+
+    updated = runner.get_job(job.job_id)
+
+    assert updated.nodes["image"].status == "failed"
+    assert "后台执行已中断" in (updated.nodes["image"].error or "")
+
+
+def test_get_job_reconciles_active_pipeline_task_over_failed_facade(tmp_path: Path):
+    """server 读状态时应以 worker 的 pipeline_node 在途任务为准。"""
+
+    class FakeStore:
+        def __init__(self, meta: TaskMeta) -> None:
+            self.meta = meta
+
+        def list_tasks(self) -> list[TaskMeta]:
+            return [self.meta]
+
+        def get_meta(self, task_id: str) -> TaskMeta | None:
+            return self.meta if task_id == self.meta.task_id else None
+
+    class FakeTaskRunner:
+        def __init__(self, meta: TaskMeta) -> None:
+            self.store = FakeStore(meta)
+
+    runner = pr.PipelineRunner(tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    meta = TaskMeta(
+        task_id="pipeline_node_1780000000000abcdef12",
+        cmd="pipeline_node",
+        params={"job_id": job.job_id, "node_name": "image"},
+        status="running",
+        created_at="2026-06-23T15:00:00",
+        started_at="2026-06-23T15:00:01",
+        source="pipeline",
+    )
+    runner.attach_task_runner(FakeTaskRunner(meta))
+
+    state = runner._load(job.job_id)
+    state.nodes["image"].status = "failed"
+    state.nodes["image"].task_id = "i_old_engine"
+    state.nodes["image"].error = "后台执行已中断，请重新执行该节点"
+    state.nodes["image"].finished_at = time.time()
+    runner._save(state)
+
+    updated = runner.get_job(job.job_id)
+
+    assert updated.nodes["image"].status == "running"
+    assert updated.nodes["image"].task_id == "pipeline_node_1780000000000abcdef12"
+    assert updated.nodes["image"].error is None
+    assert updated.nodes["image"].finished_at is None
 
 
 def test_polish_transcript_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -168,13 +354,13 @@ def test_execute_lines_writes_episode_with_template_config(
         ],
     }, ensure_ascii=False)
 
-    def fake_call_opus(user_prompt: str, system_prompt: str, model_id: str) -> str:
+    def fake_lines_fallback(user_prompt: str, system_prompt: str, on_progress, **_kwargs: Any) -> Any:
         assert "第一段" in user_prompt
         assert "脚本结构化助手" in system_prompt
-        assert model_id == pr.DEFAULT_OPUS_MODEL_ID
-        return raw
+        on_progress("stub lines")
+        return json.loads(raw)
 
-    monkeypatch.setattr(rw_helpers, "_call_opus_for_rw", fake_call_opus)
+    monkeypatch.setattr(lines_tasks, "structure_lines_json_with_fallback", fake_lines_fallback)
 
     out = asyncio.run(runner._execute_lines(job.job_id))
 
@@ -288,6 +474,7 @@ def test_regen_scene_image_from_preview_updates_image_outputs(
     def fake_generate(**kwargs):
         captured.update(kwargs)
         Path(kwargs["target"]).write_bytes(b"webp")
+        return [Path(kwargs["target"])]
 
     monkeypatch.setattr(media_helpers, "_generate_scene_image", fake_generate)
 
@@ -298,8 +485,135 @@ def test_regen_scene_image_from_preview_updates_image_outputs(
     assert captured["prompt"] == "paper card scene no text"
     assert captured["size"] == "1024x1024"
     assert captured["quality"] == "high"
+    assert captured["n"] == 4
     updated = runner.get_job(job.job_id).nodes["image"].outputs["items"][0]
     assert updated["image_relpath"] == "03_image/s1.webp"
+
+
+def test_select_image_variant_copies_candidate_to_main(tmp_path: Path):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    img_dir = tmp_path / job.job_id / "03_image"
+    img_dir.mkdir(parents=True)
+    (img_dir / "s1.webp").write_bytes(b"old-main")
+    (img_dir / "s1-v1.webp").write_bytes(b"candidate-1")
+    (img_dir / "s1-v2.webp").write_bytes(b"candidate-2")
+    state = runner.get_job(job.job_id)
+    state.nodes["image"].status = "done"
+    state.nodes["image"].outputs = {
+        "items": [{
+            "scene_id": "s1",
+            "image_relpath": "03_image/s1.webp",
+            "variants": [
+                {"index": 1, "image_relpath": "03_image/s1-v1.webp"},
+                {"index": 2, "image_relpath": "03_image/s1-v2.webp"},
+            ],
+        }],
+    }
+    runner._save(state)
+
+    rel = runner.select_image_variant(job.job_id, "s1", "03_image/s1-v2.webp")
+
+    assert rel == "03_image/s1.webp"
+    assert (img_dir / "s1.webp").read_bytes() == b"candidate-2"
+    item = runner.get_job(job.job_id).nodes["image"].outputs["items"][0]
+    assert item["selected_variant_relpath"] == "03_image/s1-v2.webp"
+    assert item["variants"][1]["selected"] is True
+
+
+def test_generate_scene_image_omits_quality_for_generation_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {}
+
+    class Proc:
+        returncode = 0
+        pid = 99999
+
+        def __init__(self, cmd: list[str], **kwargs: Any):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            out_dir = Path(cmd[cmd.index("--out-dir") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            from PIL import Image
+
+            count = int(cmd[cmd.index("--n") + 1])
+            for i in range(1, count + 1):
+                Image.new("RGB", (1, 1), color="white").save(out_dir / f"image_{i:02d}.png")
+
+        def poll(self) -> int:
+            return 0
+
+        def communicate(self) -> tuple[str, str]:
+            return "", ""
+
+    def fake_popen(cmd: list[str], **kwargs: Any):
+        return Proc(cmd, **kwargs)
+
+    monkeypatch.setattr(media_helpers, "GPT_IMAGE_OUTPUT_ROOT", tmp_path / "gpt-image")
+    monkeypatch.setattr(media_helpers.subprocess, "Popen", fake_popen)
+
+    target = tmp_path / "scene.webp"
+    media_helpers._generate_scene_image(
+        scene_id="s1",
+        prompt="paper card",
+        size="1024x1024",
+        quality="auto",
+        target=target,
+        job_id="job1",
+        n=4,
+    )
+
+    assert target.is_file()
+    for i in range(1, 5):
+        assert (tmp_path / f"scene-v{i}.webp").is_file()
+    assert "--quality" not in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--n") + 1] == "4"
+    assert captured["kwargs"]["start_new_session"] is True
+    out_dir = Path(captured["cmd"][captured["cmd"].index("--out-dir") + 1])
+    assert out_dir.name.startswith("job-job1-s1-")
+
+
+def test_generate_scene_image_cancel_kills_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class Proc:
+        returncode = None
+        pid = 99999
+
+        def poll(self) -> None:
+            return None
+
+        def communicate(self) -> tuple[str, str]:
+            return "", ""
+
+    proc = Proc()
+    killed = {"n": 0}
+
+    monkeypatch.setattr(media_helpers, "GPT_IMAGE_OUTPUT_ROOT", tmp_path / "gpt-image")
+    monkeypatch.setattr(media_helpers.subprocess, "Popen", lambda *_a, **_k: proc)
+    monkeypatch.setattr(media_helpers.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(media_helpers, "_terminate_proc_group", lambda _p: killed.__setitem__("n", killed["n"] + 1))
+
+    from ncds_opus_core.common import cancel as _cancel
+
+    _cancel.install(lambda: True)
+    try:
+        with pytest.raises(_cancel.TaskCancelled):
+            media_helpers._generate_scene_image(
+                scene_id="s1",
+                prompt="paper card",
+                size="1024x1024",
+                quality="auto",
+                target=tmp_path / "scene.webp",
+                job_id="job1",
+            )
+    finally:
+        _cancel.uninstall()
+
+    assert killed["n"] == 1
 
 
 def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -316,10 +630,11 @@ def test_execute_image_orchestrates_scenes(tmp_path: Path, monkeypatch: pytest.M
     })
     calls: list[str] = []
 
-    def fake_generate(*, scene_id, prompt, size, quality, target, job_id):
+    def fake_generate(*, scene_id, prompt, size, quality, target, job_id, n=1):
         calls.append(scene_id)
         Path(target).parent.mkdir(parents=True, exist_ok=True)
         Path(target).write_bytes(b"webp")
+        return [Path(target)]
 
     monkeypatch.setattr(media_helpers, "_generate_scene_image", fake_generate)
     out = asyncio.run(runner._execute_image(job.job_id))
@@ -341,7 +656,7 @@ def test_execute_image_idempotent_skip(tmp_path: Path, monkeypatch: pytest.Monke
     runner.write_episode(job.job_id, {
         "beats": [{"scene": "s1"}],
         "scenes": {"s1": {"prompt": "场景一"}},
-        "image": {},
+        "image": {"n": 1},
     })
     monkeypatch.setattr(
         media_helpers, "_generate_scene_image",
@@ -352,21 +667,117 @@ def test_execute_image_idempotent_skip(tmp_path: Path, monkeypatch: pytest.Monke
     assert (out["ok"], out["skipped"], out["failed"]) == (0, 1, 0)
 
 
+def test_execute_image_skip_preserves_selected_variant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    img_dir = tmp_path / job.job_id / "03_image"
+    img_dir.mkdir(parents=True)
+    (img_dir / "s1-v1.webp").write_bytes(b"variant-one")
+    (img_dir / "s1-v2.webp").write_bytes(b"variant-two")
+    (img_dir / "s1.webp").write_bytes(b"variant-two")
+    runner.write_episode(job.job_id, {
+        "beats": [{"scene": "s1"}],
+        "scenes": {"s1": {"prompt": "场景一"}},
+        "image": {"n": 2},
+    })
+    monkeypatch.setattr(
+        media_helpers, "_generate_scene_image",
+        lambda **_kwargs: pytest.fail("候选已存在时不应重生"),
+    )
+
+    out = asyncio.run(runner._execute_image(job.job_id))
+
+    item = out["items"][0]
+    assert (out["ok"], out["skipped"], out["failed"]) == (0, 1, 0)
+    assert item["image_relpath"] == "03_image/s1.webp"
+    assert item["selected_variant_relpath"] == "03_image/s1-v2.webp"
+    assert [v["selected"] for v in item["variants"]] == [False, True]
+
+
 def test_execute_image_all_failed_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
     job = runner.create_job("paper_card_talk_015", "t", {})
     runner.write_episode(job.job_id, {
         "beats": [{"scene": "s1"}],
         "scenes": {"s1": {"prompt": "唯一场景"}},
-        "image": {},
+        "image": {"retries": 0},
     })
     monkeypatch.setattr(
         media_helpers, "_generate_scene_image",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
-    with pytest.raises(RuntimeError, match="all .* scene image generations failed"):
+    with pytest.raises(RuntimeError, match="所有画面资产都生成失败"):
         asyncio.run(runner._execute_image(job.job_id))
+
+
+def test_execute_image_retries_transient_timeout_without_leaking_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    runner.write_episode(job.job_id, {
+        "beats": [{"scene": "s1"}],
+        "scenes": {"s1": {"prompt": "唯一场景"}},
+        "image": {"retries": 1, "retryBackoffSeconds": 0, "n": 1},
+    })
+    calls = {"n": 0}
+    progress: list[str] = []
+
+    def fake_generate(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError(
+                'gpt-image gen failed: File "/tmp/ssl.py", line 1\n'
+                "TimeoutError: The read operation timed out"
+            )
+        Path(kwargs["target"]).write_bytes(b"webp")
+        return [Path(kwargs["target"])]
+
+    monkeypatch.setattr(media_helpers, "_generate_scene_image", fake_generate)
+    monkeypatch.setattr(runner, "_push_progress", lambda _job_id, _node, text: progress.append(text))
+
+    out = asyncio.run(runner._execute_image(job.job_id))
+
+    assert calls["n"] == 2
+    assert out["ok"] == 1
+    joined = "\n".join(progress)
+    assert "重试 1/1" in joined
+    assert "图片服务响应超时" in joined
+    assert "File " not in joined
+    assert "TimeoutError" not in joined
+
+
+def test_execute_image_failure_progress_is_friendly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("paper_card_talk_015", "t", {})
+    runner.write_episode(job.job_id, {
+        "beats": [{"scene": "s1"}],
+        "scenes": {"s1": {"prompt": "唯一场景"}},
+        "image": {"retries": 0},
+    })
+    progress: list[str] = []
+
+    def fake_generate(**_kwargs):
+        raise RuntimeError(
+            'gpt-image gen failed: File "/tmp/ssl.py", line 1\n'
+            "TimeoutError: The read operation timed out"
+        )
+
+    monkeypatch.setattr(media_helpers, "_generate_scene_image", fake_generate)
+    monkeypatch.setattr(runner, "_push_progress", lambda _job_id, _node, text: progress.append(text))
+
+    with pytest.raises(RuntimeError, match="所有画面资产都生成失败"):
+        asyncio.run(runner._execute_image(job.job_id))
+
+    joined = "\n".join(progress)
+    assert "容器图失败：图片服务响应超时，请稍后重试。" in joined
+    assert "File " not in joined
+    assert "TimeoutError" not in joined
 
 
 def test_execute_tts_uses_extracted_run_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -465,7 +876,10 @@ def test_execute_storyboard_fills_scenes(tmp_path: Path, monkeypatch: pytest.Mon
         "sceneMap": {"1": "s1", "2": "s1", "3": "s2"},
     }, ensure_ascii=False)
 
-    monkeypatch.setattr(rw_helpers, "_call_opus_for_rw", lambda *_args, **_kwargs: director_json)
+    def fake_fallback(_user_prompt: str, _system_prompt: str, _on_progress, *, parse, **_kwargs: Any) -> Any:
+        return parse(director_json)
+
+    monkeypatch.setattr(storyboard_tasks, "structure_json_with_model_fallback", fake_fallback)
     out = asyncio.run(runner._execute_storyboard(job.job_id))
 
     assert out["scenes_count"] == 2

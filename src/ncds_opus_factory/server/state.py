@@ -55,3 +55,7 @@ INSTANCE_RUNNER: InstanceRunner = InstanceRunner(
 # 绞杀者（E1-b2 #3）：把引擎注入 PipelineRunner，NOF_ENGINE_NODES 命中的节点执行改走引擎。
 # 在两个 runner 都建好后注入，避免 pipeline_runner ↔ state 的 import 环。
 PIPELINE_RUNNER.attach_engine(INSTANCE_RUNNER)
+# 内部命令：web `/jobs` 节点只在 server 入队，真正执行交给 nof-worker。
+# 该命令不展示在 /commands catalog；见 routes/commands.py 的 INTERNAL_COMMANDS。
+RUNNER.registry["pipeline_node"] = PIPELINE_RUNNER.run_pipeline_node_task
+PIPELINE_RUNNER.attach_task_runner(RUNNER)

@@ -350,7 +350,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 facade 自动定稿；performer 的 on_progress 经 `run_step(on_progress=)` 回桥到 facade SSE（避免
 storyboard/image/render running 态进度冻结）。
 
-**Worker 拆分(S3)已落地**：离线 TaskRunner 任务执行从 8810 拆到独立 `nof-worker` 进程，跨进程队列/配额/inflight 走 Redis，重启 8810 不打断在跑任务（详见 `BACKLOG/docs/S3-redis-worker-design.md`）。画布 run_node / 015 引擎 run_step 执行暂留 8810（scope a，S3.x 迁）。
+**Worker 拆分(S3)已落地**：离线 TaskRunner 任务执行从 8810 拆到独立 `nof-worker` 进程，Redis 承担队列、配额、inflight 与任务执行状态协调；server 只生产，worker 通过 Redis claim 消费并回写 completed/failed/cancelled。重启 8810 不打断在跑任务，Redis 不重启时任务调度状态连续（详见 `backlog/docs/S3-redis-worker-design.md`）。画布 run_node / 015 引擎 run_step 已通过 `pipeline_node` 任务迁到 worker 路径。
 
 **E1-b2 仍待补**（路径 C 高风险段，下一步）：
 - asr 若要改道引擎，需先给引擎补**步内增量 outputs**（asr `item_progress` / collected 渐进推送）并覆盖 done 后后台 enrich，否则会丢实时采集进度与补音轨/抠图行为。

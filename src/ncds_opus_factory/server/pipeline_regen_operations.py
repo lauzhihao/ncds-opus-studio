@@ -8,6 +8,7 @@ import shutil
 import time
 from collections.abc import Callable
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 from ncds_opus_core.templates import template_dir as _template_dir
@@ -42,10 +43,20 @@ class PipelineRegenOperationsMixin:
         self._emit_node_status(job_id, "image", img)
 
     @staticmethod
-    def _put_scene_image(items: list[dict[str, Any]], scene_id: str, rel: str) -> None:
+    def _put_scene_image(
+        items: list[dict[str, Any]],
+        scene_id: str,
+        rel: str,
+        variants: list[dict[str, Any]] | None = None,
+        selected_variant_relpath: str | None = None,
+    ) -> None:
         for it in items:
             if it.get("scene_id") == scene_id:
                 it["image_relpath"] = rel
+                if variants is not None:
+                    it["variants"] = variants
+                if selected_variant_relpath is not None:
+                    it["selected_variant_relpath"] = selected_variant_relpath
                 break
 
     @staticmethod
@@ -93,15 +104,15 @@ class PipelineRegenOperationsMixin:
         image_cfg = ep.get("image") or {}
         size = image_cfg.get("size") or "1536x1024"
         quality = image_cfg.get("quality") or "auto"
+        count = self._bounded_image_count(image_cfg.get("n", image_cfg.get("containerN", image_cfg.get("candidates"))))
         no_text_hint = image_cfg.get("noTextHint") or ""
         full_prompt = f"{prompt} {no_text_hint}".strip() if no_text_hint else prompt
 
         rel = f"03_image/{scene_id}.webp"
         target = self.video_jobs_dir / job_id / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_file():
-            target.unlink()
-        await asyncio.to_thread(
+        self._unlink_scene_candidates(target, count)
+        paths = await asyncio.to_thread(
             media_helpers._generate_scene_image,
             scene_id=scene_id,
             prompt=full_prompt,
@@ -109,10 +120,86 @@ class PipelineRegenOperationsMixin:
             quality=quality,
             target=target,
             job_id=job_id,
+            n=count,
         )
+        variants = [
+            {"index": index, "image_relpath": self._rel_to_job(job_id, path), "selected": index == 1}
+            for index, path in enumerate(paths, start=1)
+        ]
 
-        self._update_image_items(job_id, lambda items: self._put_scene_image(items, scene_id, rel))
+        self._update_image_items(
+            job_id,
+            lambda items: self._put_scene_image(
+                items,
+                scene_id,
+                rel,
+                variants,
+                variants[0]["image_relpath"] if variants else rel,
+            ),
+        )
         return rel
+
+    @staticmethod
+    def _bounded_image_count(value: Any) -> int:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            n = 4
+        return max(1, min(4, n))
+
+    def _rel_to_job(self, job_id: str, path: Path) -> str:
+        return path.relative_to(self.video_jobs_dir / job_id).as_posix()
+
+    @staticmethod
+    def _unlink_scene_candidates(target: Path, count: int) -> None:
+        paths = [target]
+        if count > 1:
+            paths.extend(target.with_name(f"{target.stem}-v{i}{target.suffix}") for i in range(1, count + 1))
+        for path in paths:
+            if path.is_file():
+                path.unlink()
+
+    def select_image_variant(self, job_id: str, scene_id: str, image_relpath: str) -> str:
+        """把候选图复制为标准主图，保持下游按 03_image/{scene}.webp 取图。"""
+        state = self._load(job_id)
+        img = state.nodes.get("image")
+        if img is None or not img.outputs:
+            raise ValueError("image node has no outputs")
+        items = list(img.outputs.get("items") or [])
+        item = next((it for it in items if it.get("scene_id") == scene_id), None)
+        if item is None:
+            raise ValueError(f"unknown scene: {scene_id}")
+
+        rel = image_relpath.strip().lstrip("/")
+        candidates = [str(v.get("image_relpath") or "") for v in item.get("variants") or []]
+        if rel not in candidates and rel != item.get("image_relpath"):
+            raise ValueError(f"image is not a candidate for scene {scene_id}: {rel}")
+
+        job_dir = self.video_jobs_dir / job_id
+        src = (job_dir / rel).resolve()
+        root = job_dir.resolve()
+        if root not in src.parents or not src.is_file():
+            raise ValueError(f"candidate image not found: {rel}")
+
+        main_rel = f"03_image/{scene_id}.webp"
+        main = job_dir / main_rel
+        main.parent.mkdir(parents=True, exist_ok=True)
+        if src != main.resolve():
+            shutil.copyfile(src, main)
+
+        item["image_relpath"] = main_rel
+        item["selected_variant_relpath"] = rel
+        variants = list(item.get("variants") or [])
+        for v in variants:
+            v["selected"] = v.get("image_relpath") == rel
+        item["variants"] = variants
+
+        img.outputs["items"] = items
+        img.finished_at = time.time()
+        state.updated_at = time.time()
+        self._save(state)
+        self._emit_node_status(job_id, "image", img)
+        return main_rel
 
     async def regen_image_scene(self, job_id: str, scene_id: str) -> None:
         """重生 image 节点里指定 scene 的图片。不动其他场景，不动下游节点状态。"""

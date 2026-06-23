@@ -227,32 +227,6 @@ textarea.code-pane.editable {
   color: var(--status-failed, #d1242f);
 }
 
-/* 节点 5 分钟强制超时告警：钉在抽屉(.drawer)右下角的直角标签（取代旧的全局 toast 页面右下角）。
-   .body 为 static、.drawer 为 fixed —— absolute 包含块落在 .drawer，故不被 body 滚动裁剪。 */
-.nsb-timeout-tag {
-  position: absolute;
-  right: var(--s-4);
-  bottom: var(--s-4);
-  z-index: 5;
-  max-width: calc(100% - var(--s-5) * 2);
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-3) var(--s-4);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 0; /* 直角标签 */
-  box-shadow:
-    inset 3px 0 0 var(--status-failed),
-    var(--shadow-4);
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  line-height: 1.45;
-  color: var(--ink-1);
-  animation: toast-in var(--dur-base) var(--ease-out);
-}
-.nsb-timeout-tag svg { flex: none; color: var(--status-failed); }
-
 /* 抽屉顶部统一节点状态条：沿用 panel-hint 的直角 + 左色条风格（border-radius:0）。
    左色条 = 状态指示灯：running/queued 呼吸、done/failed 静止。 */
 .node-status-bar {
@@ -899,6 +873,52 @@ textarea.code-pane.editable:focus {
   font-size: var(--text-xs);
   letter-spacing: 0.08em;
 }
+.image-variants {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.image-variant {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  cursor: pointer;
+}
+.image-variant:hover:not(:disabled) { border-color: var(--border-strong); }
+.image-variant.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.image-variant:disabled {
+  cursor: default;
+  opacity: 0.78;
+}
+.image-variant img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.image-variant-index {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  min-width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
 .image-card-prompt {
   resize: vertical;
   min-height: 60px;
@@ -951,4 +971,3 @@ textarea.code-pane.editable:focus {
   flex: 1 1 0;
   min-width: 0;
 }
-

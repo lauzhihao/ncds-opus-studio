@@ -115,7 +115,14 @@ export interface ImageSketchItem {
   index: number;
   prompt: string;
   image_relpath: string | null;
+  variants?: ImageVariantItem[];
   error?: string | null;
+}
+
+export interface ImageVariantItem {
+  index: number;
+  image_relpath: string;
+  selected?: boolean;
 }
 
 // IMAGE 节点 outputs.items 中的一条；与 pipeline_runner._execute_image 对齐。
@@ -125,6 +132,8 @@ export interface ImageItem {
   scene_id: string;
   prompt: string;
   image_relpath: string | null;
+  variants?: ImageVariantItem[];
+  selected_variant_relpath?: string | null;
   sketches?: ImageSketchItem[];
 }
 

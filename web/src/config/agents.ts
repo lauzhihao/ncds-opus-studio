@@ -1,9 +1,9 @@
 // 画布的 agent 表现层配置（止损重构核心）。
 //
-// 画布底层仍是一条 015 recipe 的 job（input→asr→rw→lines→storyboard→tts→image→
+// 画布底层仍是一条 015 recipe 的 job（input→asr→rw→lines→storyboard→image→tts→
 // preview→render→download），这里把这些 engine 节点**按 agent 分组重新呈现**为 6 个有序
 // agent + 卧龙总览。agent 节点是纯前端分组：run/cancel/select 仍打到底层 engine 节点
-// （/jobs/{id}/nodes/{node}/run），即"agent 调现成 performer"，后端零改动。
+// （/jobs/{id}/nodes/{node}/run），真实依赖顺序由后端 recipe 定义。
 //
 // 鬼谷子是唯一没有 engine 步的 agent（virtual member），v1 是薄选题 gate：
 // 沈括(asr) 完成 → 鬼谷子录入/确认选题角度 → 让柳永(rw) 出稿。
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 
 import type { NodeState, NodeStatus } from '../api/types';
+import { friendlyProgressText } from '../utils/progress';
 
 export type AgentId = 'shenkuo' | 'guiguzi' | 'liuyong' | 'wudaozi' | 'boya' | 'render';
 
@@ -119,8 +120,8 @@ export const WOLONG = {
 
 // —— 节点 → agent 反查 / 推进链 ——
 // 画布按用户顺序（沈括→鬼谷子→柳永→吴道子→伯牙→渲染）展示，但**推进由引擎真实
-// 数据依赖驱动**：015 链是 storyboard→tts→image，所以 storyboard 完成→去伯牙(tts)、
-// tts 完成→回吴道子(image)。这是引擎 deps 的忠实反映（image deps=[tts]），不改后端。
+// 数据依赖驱动**：015 链是 storyboard→image→tts，所以吴道子先补齐画面资产，
+// 再交给伯牙配音。
 
 // 底层 job 节点 → 所属 agentId（含 virtual 的 guiguzi）。
 export const AGENT_BY_NODE: Record<string, AgentId> = (() => {
@@ -135,16 +136,16 @@ export const AGENT_BY_NODE: Record<string, AgentId> = (() => {
 })();
 
 // 引擎真实 NEXT 链（鬼谷子 gate 插在 asr 与 rw 之间）。末步 download 无 next。
-// 产品上 lines 是吴道子的隐藏 preflight，image 虽在 tts 后执行但仍归属吴道子的画面资产。
+// 产品上 lines 是吴道子的隐藏 preflight。
 export const NODE_NEXT: Record<string, string | null> = {
   input: 'asr',
   asr: 'guiguzi',
   guiguzi: 'rw',
   rw: 'lines',
   lines: 'storyboard',
-  storyboard: 'tts',
-  tts: 'image',
-  image: 'preview',
+  storyboard: 'image',
+  image: 'tts',
+  tts: 'preview',
   preview: 'render',
   render: 'download',
   download: null,
@@ -228,7 +229,6 @@ function wudaoziStatus(jobNodes: Record<string, NodeState> | undefined): NodeSta
   const linesNode = jobNodes?.lines;
   const lines = linesNode?.status ?? 'idle';
   const storyboard = jobNodes?.storyboard?.status ?? 'idle';
-  const tts = jobNodes?.tts?.status ?? 'idle';
   const image = jobNodes?.image?.status ?? 'idle';
   const rwSelected =
     typeof rwNode?.outputs?.selected_model_id === 'string' &&
@@ -246,10 +246,7 @@ function wudaoziStatus(jobNodes: Record<string, NodeState> | undefined): NodeSta
   if ([lines, storyboard, image].some((s) => s === 'running' || s === 'queued')) return 'running';
   if (image === 'done') return 'done';
 
-  // 第一版 backend DAG 仍是 storyboard -> tts -> image。视觉方案完成后先把当前阶段
-  // 交给伯牙；伯牙完成后再回到吴道子补齐画面资产。
-  if (storyboard === 'done' && tts !== 'done') return 'done';
-  if (storyboard === 'done' && tts === 'done') return 'idle';
+  if (storyboard === 'done') return 'idle';
   if (lines === 'done') return 'idle';
   return 'idle';
 }
@@ -311,10 +308,9 @@ export function agentProgressText(
       typeof jobNodes?.rw?.outputs?.selected_model_id === 'string' &&
       jobNodes.rw.outputs.selected_model_id.trim().length > 0;
     const storyboard = jobNodes?.storyboard?.status ?? 'idle';
-    const tts = jobNodes?.tts?.status ?? 'idle';
     const image = jobNodes?.image?.status ?? 'idle';
     if ((jobNodes?.rw?.status ?? 'idle') === 'done' && !rwSelected) return '待柳永定稿';
-    if (storyboard === 'done' && tts === 'done' && image === 'idle') return '待生成画面资产';
+    if (storyboard === 'done' && image === 'idle') return '待生成画面资产';
   }
 
   for (const m of [...(agent.preflight ?? []), ...agent.members]) {
@@ -323,6 +319,12 @@ export function agentProgressText(
     if (ns && ns.status === 'running') {
       if (agent.id === 'wudaozi' && m.node === 'lines') {
         return wudaoziPreflightProgress(ns.progress);
+      }
+      if (agent.id === 'wudaozi' && m.node === 'storyboard') {
+        return wudaoziStoryboardProgress(ns.progress);
+      }
+      if (agent.id === 'wudaozi' && m.node === 'image') {
+        return friendlyProgressText('image', ns.progress) || '生成画面资产中...';
       }
       return ns.progress || '执行中…';
     }
@@ -337,6 +339,17 @@ function wudaoziPreflightProgress(progress: string | null | undefined): string {
   if (/结构化完成|条 beats|scenes 待分镜|视觉方案准备完成/.test(msg)) return '视觉方案准备完成';
   if (/台词结构|结构化为 beats|beats|Opus|opus|AGY|DeepSeek|SCodex|模型/.test(msg)) {
     return '正在准备视觉方案...';
+  }
+  return msg;
+}
+
+function wudaoziStoryboardProgress(progress: string | null | undefined): string {
+  const msg = (progress ?? '').trim();
+  if (!msg) return '正在生成视觉方案...';
+  if (/切换备用通道/.test(msg)) return '正在切换备用通道...';
+  if (/视觉方案生成完成/.test(msg)) return '视觉方案生成完成';
+  if (/director agent|分镜|beats|Opus|opus|AGY|DeepSeek|SCodex|模型/.test(msg)) {
+    return '正在生成视觉方案...';
   }
   return msg;
 }

@@ -24,7 +24,7 @@ interface Props {
   onAdvanced?: () => void;
 }
 
-const NEXT_NODE = 'storyboard';   // lines 之后是 storyboard（分镜），不是 tts；tts 依赖 storyboard
+const NEXT_NODE = 'storyboard';   // lines 之后是 storyboard（视觉方案），再进入 image 画面资产
 const EPISODE_RELPATH = '02_rw/episode.json';
 
 interface Beat {

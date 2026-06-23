@@ -17,6 +17,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Response
 from sse_starlette.sse import EventSourceResponse
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError
 
 from ncds_opus_factory.server.artifacts import extract_artifacts
 from ncds_opus_factory.server.schemas import (
@@ -199,6 +201,11 @@ async def cancel_task(task_id: str) -> dict:
     meta = STORE.get_meta(task_id)
     if meta.status not in ("pending", "running"):
         raise HTTPException(status_code=409, detail=f"cannot cancel a {meta.status} task")
+    try:
+        await RUNNER.cancel_task(task_id)
+    except (RedisConnectionError, RedisError) as exc:
+        logger.warning("[server] task cancel failed (redis down): task_id=%s error=%s", task_id, exc)
+        raise HTTPException(status_code=503, detail="任务调度服务暂时不可用，请稍后重试") from exc
     STORE.update_status(task_id, "cancelled")
     STORE.append_progress(task_id, "任务已被用户取消")
     # round 内任务被取消 = 机器弃单事件,续跑段决定返工或止损(§4.2)
@@ -231,7 +238,11 @@ async def restore_task(task_id: str) -> dict:
         )
     STORE.reset_for_requeue(task_id)
     STORE.append_progress(task_id, "已恢复,重新入队")
-    await RUNNER.requeue(task_id, meta.cmd)
+    try:
+        await RUNNER.requeue(task_id, meta.cmd)
+    except EnqueueUnavailable as exc:
+        logger.warning("[server] task restore failed (redis down): task_id=%s", exc.task_id)
+        raise HTTPException(status_code=503, detail="任务调度服务暂时不可用，请稍后重试") from exc
     logger.info("[server] task restored: task_id=%s cmd=%s", task_id, meta.cmd)
     return {"ok": True, "status": "pending"}
 

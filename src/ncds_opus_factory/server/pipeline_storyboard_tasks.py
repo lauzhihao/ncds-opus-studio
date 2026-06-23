@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_factory.server import storyboard_director
+from ncds_opus_factory.server.pipeline_llm_fallback import structure_json_with_model_fallback
 
 
 @dataclass
@@ -55,12 +56,21 @@ class PipelineStoryboardRun:
             container_guide=self.container_guide,
             palette=self.palette,
         )
-        self.on_progress(f"调 director agent 分镜（{len(self.beats_in)} beats）…")
-        raw = await asyncio.to_thread(
-            self.call_opus_for_rw, user_prompt, system_prompt, self.model_id
+        scene_by_beat, scenes = await asyncio.to_thread(
+            structure_json_with_model_fallback,
+            user_prompt,
+            system_prompt,
+            self.on_progress,
+            parse=lambda raw: storyboard_director.parse_director_output(raw, self.beats_raw),
+            target_profile="paper_card_talk_storyboard",
+            start_progress="正在生成视觉方案...",
+            success_progress="视觉方案生成完成",
+            failover_progress="当前通道未成功，正在切换备用通道...",
+            final_error="视觉方案生成暂时失败：备用通道都没有成功，请稍后重试。",
+            log_context="storyboard",
+            max_parse_attempts=3,
+            retry_hint="JSON 必须含 scenes{} 与 sceneMap{} 两个键，scenes 的每个值含 prompt 字段。",
         )
-
-        scene_by_beat, scenes = storyboard_director.parse_director_output(raw, self.beats_raw)
         for i, b in enumerate(self.beats_raw, start=1):
             b["scene"] = scene_by_beat.get(i, b.get("scene") or "")
         self.episode["beats"] = self.beats_raw
@@ -70,7 +80,7 @@ class PipelineStoryboardRun:
         sketch_total = sum(len(s.get("sketches") or []) for s in scenes.values())
         groups = sorted({s.get("group") or sid for sid, s in scenes.items()})
         self.on_progress(
-            f"完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 幅简笔画"
+            f"视觉方案生成完成：{len(groups)} 段 · {len(scenes)} 个子场景 · {sketch_total} 幅简笔画"
         )
         return {
             "episode_relpath": "02_rw/episode.json",

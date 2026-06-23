@@ -1,7 +1,7 @@
 # S3 设计：Redis 队列 + worker 拆分（权威实现依据）
 
 > 来源：2026-06-15 设计工作流(3 独立方案 → 对抗压测 7 项 → 综合)。父任务 task-1，子任务 task-1.3。
-> 状态真相源仍是文件(pipeline_state.json + task_store meta)；S1 事件 events.jsonl / S2 取消 flag 不变。
+> **2026-06-23 修订**：旧口径“Redis 只做队列信道、磁盘是真相源、worker 启动先 DEL 队列再 disk-scan”已废弃。最新实现以 Redis 作为任务中间件与执行协调中心：`nof-server` 登记 Redis task hash 并 LPUSH，`nof-worker` 通过 Redis claim 原子领取，成功/失败/取消都回写 Redis；TaskStore/events.jsonl 继续作为 UI/SSE 的持久视图。
 
 ## 范围（用户拍板 2026-06-15）= scope (a)
 **只把 TaskRunner 类任务**(shenkuo/wolong/guiguzi/liuyong 经 POST /tasks)移到 nof-worker。
@@ -14,16 +14,16 @@
 
 | 分叉 | 决策 |
 |---|---|
-| **A. Redis 结构** | per-cmd **List**：key=`nof:q:{cmd}`，value=task_id 裸串。**LPUSH 入 + BRPOP 出 = FIFO**(旧的先跑)。严禁 LPUSH+BLPOP(LIFO)。不上 Streams/消费组(磁盘真相源+disk-scan+出队 CAS 已覆盖其多保住的窄窗口；留作未来多 worker 升级项)。 |
+| **A. Redis 结构** | per-cmd **List**：key=`nof:q:{cmd}`，value=task_id 裸串。**LPUSH 入 + BRPOP 出 = FIFO**(旧的先跑)。另有 task hash：key=`nof:task:{task_id}`，记录 `cmd/status/updated_at` 等协调状态；`nof:tasks` 作为恢复扫描 index。严禁 LPUSH+BLPOP(LIFO)。 |
 | **B. 配额** | 真相源换 **Redis 原子计数**，判定收口到 worker 出队侧单点。submit 删配额闸门段(task_runner.py:182-192)+内存 `_quota_used`/`_quota_take`；`_run` 出队 CAS 后、`update_status('running')` 前：`incr(nof:quota:{date}:{bucket})`+首次 `expire(48h)`，>limit 则 `decr` 回退+failed+auto_archive。`quota_remaining` 改读 Redis(降级为软预查)。删 recover 的配额重建段(237-241)。 |
-| **C. recover** | 整体留 worker(8810 不调)。worker 启动：**第一步 DEL 所有 `nof:q:{cmd}`** → disk-scan 把 status∈(pending,running) 真任务(running 先 reset_for_requeue)按 `reversed(backlog)` 全量 LPUSH 重投 → 才起 per-cmd BRPOP consumer。否决「pending 留 List 不重投」(BRPOP 弹出后崩的 pending 已离队却仍 pending→永久卡死)。 |
+| **C. recover** | 整体留 worker(8810 不调)。worker 启动**不 DEL Redis 队列**：先补登记旧磁盘任务到 Redis task hash；再扫描 Redis task index，把 `pending/running` 未终态任务补投队列，其中 `running` 视为上个 worker 孤儿，复位为 `pending`。List 里残留/重复 task_id 允许存在，由 Redis claim 保证只执行一次。 |
 | **D. 降级** | 8810 入队失败 → meta 置 failed + **POST 返 503+task_id**(不返 201 撒谎、不留幽灵 pending)。worker 侧 loop(subscription/planner/retro/gate)的 submit **先 `redis.ping()` 探活，失败则本 tick 直接 return**(对齐 planner「静默空转」，不 create meta、不刷垃圾 failed)。worker BRPOP 带 timeout + ConnectionError 指数退避(0.5→5s)不退出 + CancelledError 时 aclose 归还连接。 |
-| **E. 幂等** | 4 层叠加(全复用现有)：①submit 头 (round_id,intent_key) 去重扫 store；②wolong `round_<task_id>` 确定化；③出队 CAS(get_meta!=pending 即丢弃)；④recover DEL+全量重投。**死约束**：submit 体内当前**无 await**，是 wolong 不双投命根——改 `_enqueue` 为 async lpush 后，顺序必须 `dedup 扫 store(同步)→ store.create(同步)→ 最后才 await lpush`，严禁把 await 插到 create 之前；更新 planner.py:19 / rounds_gate.py:124 注释。 |
+| **E. 幂等** | 4 层叠加：①submit 头 (round_id,intent_key) 去重扫 store；②wolong `round_<task_id>` 确定化；③Redis `claim_task` 做 `pending→running` 原子领取；④recover 只补投不清队列，重复条目由 claim 跳过。顺序约束：`dedup 扫 store(同步)→ store.create(同步)→ Redis register_task → lpush`，严禁把 await 插到 create 之前。 |
 | **F. cancel(AC#5)** | 见下「必修 blockers」。统一开关 `cancel.install(读 is_flagged)`，覆盖 engine+legacy+enrich + killpg 进程组 + TaskCancelled 异常分类修复 + cancel_node 连带 enrich。本期接线在 8810(执行所在进程)。 |
 | **G. 进程** | 8810=纯 producer+serve(删 recover_and_start + 5 个 loop create_task + on_terminal 赋值；保留路由/SSE 文件 tail/POST submit+503)。新建 `server/worker.py`(`nof-worker`)=唯一 consumer + 全部 loop + on_terminal。两进程各 import state.py 各建一套指同一磁盘+各连 Redis。 |
 
 ## 必修 blockers（对抗压测判定，落地必须处理）
-1. **多 worker 是禁区**：出队 CAS(task_runner.py:312-316) 与 wolong concurrency=1 都是**协程级单进程原子、跨进程不成立**。S3 硬钳「同 cmd 单 worker 进程」(启动脚本 pid 锁)。否决「起 N 个 nof-worker 零改动水平扩展」。多 worker 需把 CAS 换 Redis Lua/分布式锁 + wolong `SET nof:lock:round:{id} NX`——本期不做、写进文档禁区。
+1. **多 worker 仍是业务禁区**：任务领取 CAS 已换 Redis claim，单 task 不会双跑；但 wolong/round 文件串行写、命令级并发预算和外部账号池仍按单 `nof-worker` 运行假设设计。S3 硬钳「同 cmd 单 worker 进程」(启动脚本 pid 锁)，水平扩展需另做 round 分布式锁与命令级资源隔离。
 2. **submit create-before-lpush 顺序**(E 的死约束)：插错 await 顺序 → wolong 续跑双投。8810(review/cancel→handle_decision→maybe_resume→submit) 与 worker(on_terminal→maybe_resume) **两侧都是续跑生产者**，顺序约束两侧都要成立。
 3. **TaskCancelled 异常分类**(最隐蔽)：`TaskCancelled` 继承 `RuntimeError`，被 `pipeline_runner._execute` 的 `except Exception` 误判 failed 且不 clear_flag → 残留 flag 让节点重跑被 watcher 秒取消 → **永久 DOA**。必修：`except Exception` 之前先 `except TaskCancelled` → 按 cancelled(reset+clear_flag)。engine `_run_step` 同理。
 4. **子进程进程组 SIGTERM**：`_run_tts_gen`(2172)/`_run_video_pipeline`(2221) 的 Popen 加 `start_new_session=True`，readline 循环轮询 `cancel.current()` 命中则 `os.killpg(os.getpgid(proc.pid), SIGTERM)`→wait(5)→killpg(SIGKILL)。video_pipeline 内部 spawn yt-dlp/ffmpeg/whisper/Demucs 孙进程，`proc.terminate()` 只杀直接子进程会留孤儿烧 1h。
@@ -43,6 +43,7 @@
   - ⚠️ **步8 发现真 bug(归步9 修)**：`queue.py brpop` 的 `except (RedisConnectionError, RedisError)` 把**正常 brpop 超时(socket Timeout 空轮询)**也当连接故障→idle 每 ~5s 刷 WARNING + 累加退避(钉到 5s),致 idle 后新任务最多多等 ~5s 取件。不影响正确性。修法:`except RedisTimeoutError` 单独分支当正常空轮询(重置退避/不告警),只有真 ConnectionError 才退避+告警。与步9 降级(真断线退避)同源,一起修+测。
 - ✅ **步9** 降级(委派 sonnet + 主线程验收)：① **POST 503**——`submit`/`requeue` 的 `await _enqueue(lpush)` 套 try，连不上→`update_status(failed)`+`raise EnqueueUnavailable(task_id)`；`routes/tasks.py create_task` 捕获→`response.status_code=503`+返 `TaskCreateResponse(task_id, "failed")`(不撒谎 201、不留幽灵 pending)。② **loop ping 探活**——subscription/planner/retro/`_round_reconciler` 4 个 loop while 顶部 `if not await get_default_queue().ping(): sleep+continue`(redis down 静默空转、不刷垃圾 failed、不退出)。③ **修步8 brpop bug**——`except RedisTimeoutError`(正常空轮询:重置退避+return None+不告警)放 broad `except (ConnectionError,RedisError)` 之前(后者才退避+WARNING)。验收:495 passed 两路 + 真 redis 降级 e2e(停 redis→POST **503**+磁盘 meta **failed**；重启→201/pending)。socket_timeout 发现:RedisQueue 未显式设，但 redis-py asyncio 池在某些版本隐式读超时致 brpop 抛 RedisTimeoutError(步8 现象根因)，已被新分支精确截获。
 - ✅ **步10** 全量回归 **495 passed**(两路)+ web `/jobs` SSE 契约确认不变(路由 pipelines.py:393 从 events.jsonl tail + `since_seq` 重放；types.ts:263-265 wire `{type,job_id,node,state}`，S1 已按此保留，S2-S9 未碰 SSE 格式 → 前端不改，task-1 AC#3 满足)+ AC#4 确认(TaskStore meta `tmp+os.replace` 原子写、worker 单写 status/8810 只 create，无竞态)+ S4 交接固化(见 task-1.4「S3→S4 交接」段)。**S3(步0-10)完成,task-1.3 标 Done。** 注：line 389 一处陈旧注释("q.get()")待随手改 brpop(非阻塞，留 S4 顺手)。
+- ✅ **S3.1 运行时安全修订（2026-06-23）**：Redis 从“队列信道”升级为“队列 + task hash + claim + terminal 状态”协调中心；`recover_and_start` 不再 DEL Redis List，也不再 `clear_inflight` 全局清场；server `submit/requeue/cancel`、pipeline cancel mirror、round cleanup cancel 均写 Redis 状态；worker `_run` 通过 Redis claim 领取任务并在 completed/failed/cancelled 回写 Redis。focused 验收：`queue_test.py`、`task_runner_quota_test.py`、`tests/server/test_scheduler.py`、`degradation_test.py` 共 48 passed。
 
 ---
 **S3 完结小结**：8810 退成纯 producer+serve(入队+SSE)，`nof-worker` 独立进程唯一消费+执行+单写状态，跨进程 Redis 队列/配额/inflight，协作式取消(killpg 进程组)，降级(503/ping 空转/退避不退出)。重启 8810 不再打断在跑任务(执行已在 worker，磁盘时间戳实证 kill 8810 后 2.4s 任务才完成)。**剩 S4(task-1.4)=launchd 常驻托管，涉及注册持久服务，须先问用户。**
