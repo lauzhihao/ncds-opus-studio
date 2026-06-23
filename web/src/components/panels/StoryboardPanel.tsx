@@ -42,6 +42,18 @@ function isMissingDraftError(error: string | null | undefined): boolean {
   return /draft\.md missing|选定稿模型|选模型/.test(error ?? '');
 }
 
+function friendlyPreflightError(error: string | null | undefined): string {
+  const msg = (error ?? '').trim();
+  if (!msg) return '未知错误';
+  const friendly = '台词结构化暂时失败';
+  const idx = msg.indexOf(friendly);
+  if (idx >= 0) return msg.slice(idx);
+  if (/launcher exited|Traceback|RuntimeError: engine step lines/.test(msg)) {
+    return '台词结构化暂时失败：备用模型都没有成功，请稍后重试或检查模型配置；详细错误已写入服务日志。';
+  }
+  return msg.replace(/^(?:RuntimeError|ValueError|Exception):\s*/g, '');
+}
+
 function hasLineOutputs(node: NodeState): boolean {
   if (node.status !== 'done') return false;
   const beats = node.outputs?.beats_count;
@@ -290,7 +302,7 @@ export function StoryboardPanel({
 
   if (!preflightReady) {
     const lineStatus = lineState.status;
-    const preflightError = lineState.error || preflightRunErr;
+    const preflightError = friendlyPreflightError(lineState.error || preflightRunErr);
     const waitingForRw = !rwReady;
     const waitingForDraftSelection = !waitingForRw && missingSelectedDraft;
     const rowStatus: ProcStatus =
@@ -302,8 +314,8 @@ export function StoryboardPanel({
     const readyText =
       waitingForRw ? '先完成柳永成稿，吴道子会自动准备视觉结构。'
         : waitingForDraftSelection ? '柳永已经产出候选稿；请先选择一版定稿，再交给吴道子准备视觉结构。'
-          : preflightRunErr ? `视觉前置准备启动失败：${preflightRunErr}`
-            : lineStatus === 'failed' ? `视觉前置准备失败：${lineState.error || '未知错误'}`
+          : preflightRunErr ? `视觉前置准备启动失败：${preflightError}`
+            : lineStatus === 'failed' ? `视觉前置准备失败：${preflightError}`
               : linesStale ? '柳永成稿已更新，正在重新准备视觉前置结构。'
                 : '正在准备台词结构，完成后进入视觉方案工作台。';
     const canRetry = canPreparePreflight && !preflightActive && !preflightBusy;

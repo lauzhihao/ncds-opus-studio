@@ -5,8 +5,9 @@
 编排+状态+事件，performer 只做该步实际工作，并通过共享的 ``02_rw/episode.json`` 与上下游耦合。
 
 slice-1 范围（最小后端验证）：
-- ``lines`` / ``storyboard``：真实复用 ``_execute_lines`` / ``_execute_storyboard`` 的 opus
-  结构化算法（经 :func:`_opus_structure` 间接层，便于测试注入桩；不重写算法）。
+- ``lines``：复用 shared lines 结构化算法与模型 fallback。
+- ``storyboard``：真实复用 ``_execute_storyboard`` 的 opus 结构化算法
+  （经 :func:`_opus_structure` 间接层，便于测试注入桩；不重写算法）。
 - ``asr/rw/tts/image/render`` 的真实包装（asr=shenkuo.collect_one 快采；rw=多模型；
   tts/image/render=真实 helper/子进程），外部副作用经 seam 便于测试注入。
 
@@ -33,6 +34,7 @@ from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
 from ncds_opus_factory.server.pipeline_lines_tasks import (
     _build_lines_prompt,
     _episode_from_lines_response,
+    structure_lines_json_with_fallback,
 )
 from ncds_opus_factory.server.pipeline_media_helpers import (
     _generate_scene_image,
@@ -329,7 +331,7 @@ def run_lines_step(
     pipeline_id: str = "paper_card_talk_015",
     **_: Any,
 ) -> dict[str, Any]:
-    """LINES：读 ``02_rw/draft.md`` → opus 结构化成 beats[] → 合模板骨架写 ``02_rw/episode.json``。
+    """LINES：读 ``02_rw/draft.md`` → LLM fallback 结构化成 beats[] → 合模板骨架写 ``02_rw/episode.json``。
 
     复用 ``_build_lines_prompt`` + ``_episode_from_lines_response`` 的结构化算法，
     去掉 PipelineRunner 的状态管理（引擎接管）。
@@ -344,8 +346,7 @@ def run_lines_step(
         raise ValueError("02_rw/draft.md 为空")
 
     system_prompt, user_prompt = _build_lines_prompt(draft)
-    on_progress("调 opus 结构化为 beats…")
-    parsed = _opus_json_with_retry(user_prompt, system_prompt, on_progress)
+    parsed = structure_lines_json_with_fallback(user_prompt, system_prompt, on_progress)
     episode, beats_count = _episode_from_lines_response(parsed, pipeline_id)
 
     ep_path = _episode_path(jd)
