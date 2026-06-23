@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowUp, Copy, Download, Pencil, Plus, RotateCcw, Square, Trash2, X } from 'lucide-react';
 import { api } from '../api/client';
+import type { TaskDetailResponse } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useToast } from '../components/Toast';
@@ -81,6 +82,12 @@ interface ChatMessage {
   imgs?: string[];
   prompt?: string;
   ratio?: string;
+}
+
+interface TaskEventPayload {
+  type: 'progress' | 'done' | 'error';
+  text?: string;
+  error?: string;
 }
 
 function ratioToSize(ratio: string, width = DEFAULT_SIZE): CardSize {
@@ -370,6 +377,7 @@ export function CanvasPage() {
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const dragCountRef = useRef(0);
   const cancelledRef = useRef(new Set<string>());
+  const taskStreamsRef = useRef(new Map<string, EventSource>());
 
   const scrollChatToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = chatBodyRef.current;
@@ -397,6 +405,11 @@ export function CanvasPage() {
       return () => clearTimeout(t);
     }
   }, [drawerOpen]);
+
+  useEffect(() => () => {
+    taskStreamsRef.current.forEach((stream) => stream.close());
+    taskStreamsRef.current.clear();
+  }, []);
 
   function findItem(id: string): CanvasImageItem | undefined {
     return images.find((i) => i.id === id);
@@ -482,42 +495,113 @@ export function CanvasPage() {
     setImages((prev) => prev.filter((item) => item.id !== id));
   }
 
-  async function pollTask(taskId: string, itemId: string, prompt: string, r: string, existingMessages: ChatMessage[]) {
-    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    for (let i = 0; i < 60; i++) {
-      await wait(5000);
-      if (cancelledRef.current.has(taskId)) return;
-      try {
-        const detail = await api.getTask(taskId);
-        if (cancelledRef.current.has(taskId)) return;
-        if (detail.status === 'cancelled') {
-          removeItem(itemId);
-          return;
-        }
-        if (detail.status === 'completed' && detail.result?.images?.length) {
-          const imgs = detail.result.images;
-          const candidates: ImageCandidate[] = imgs.map((p: string, i: number) => ({
-            path: p,
-            src: detail.artifacts?.find((a) => a.path === p)?.url || detail.artifacts?.[i]?.url || p,
-          }));
-          const pick = candidates[0];
-          const allSrcs = candidates.map((c) => c.src);
-          const doneMsg: ChatMessage = { role: 'assistant', text: '生成完成', img: pick.src, imgs: allSrcs, taskId, prompt, ratio: r };
-          const updated = [...existingMessages, doneMsg];
-          updateItem(itemId, { src: pick.src, path: pick.path, loading: false, candidates, selectedIdx: 0, messages: updated });
-          return;
-        }
-        if (detail.status === 'failed') {
-          const errMsg: ChatMessage = { role: 'assistant', text: `生成失败: ${detail.error || ''}` };
-          const updated = [...existingMessages, errMsg];
-          updateItem(itemId, { loading: false, error: detail.error || '生成失败', messages: updated });
-          return;
-        }
-      } catch { /* retry */ }
+  function closeTaskStream(taskId: string) {
+    const stream = taskStreamsRef.current.get(taskId);
+    if (!stream) return;
+    stream.close();
+    taskStreamsRef.current.delete(taskId);
+  }
+
+  function applyTaskDetail(
+    taskId: string,
+    itemId: string,
+    prompt: string,
+    r: string,
+    existingMessages: ChatMessage[],
+    detail: TaskDetailResponse,
+  ): boolean {
+    if (cancelledRef.current.has(taskId)) return true;
+    if (detail.status === 'cancelled') {
+      removeItem(itemId);
+      return true;
     }
-    const timeoutMsg: ChatMessage = { role: 'assistant', text: '查询超时，请稍后查看' };
-    const updated = [...existingMessages, timeoutMsg];
-    updateItem(itemId, { loading: false, error: '查询超时，请稍后查看', messages: updated });
+    if (detail.status === 'completed' && detail.result?.images?.length) {
+      const imgs = detail.result.images;
+      const candidates: ImageCandidate[] = imgs.map((p: string, i: number) => ({
+        path: p,
+        src: detail.artifacts?.find((a) => a.path === p)?.url || detail.artifacts?.[i]?.url || p,
+      }));
+      const pick = candidates[0];
+      const allSrcs = candidates.map((c) => c.src);
+      const doneMsg: ChatMessage = { role: 'assistant', text: '生成完成', img: pick.src, imgs: allSrcs, taskId, prompt, ratio: r };
+      const updated = [...existingMessages, doneMsg];
+      updateItem(itemId, { src: pick.src, path: pick.path, loading: false, candidates, selectedIdx: 0, messages: updated });
+      return true;
+    }
+    if (detail.status === 'completed') {
+      const errMsg: ChatMessage = { role: 'assistant', text: '生成完成但没有返回图片' };
+      updateItem(itemId, { loading: false, error: '生成完成但没有返回图片', messages: [...existingMessages, errMsg] });
+      return true;
+    }
+    if (detail.status === 'failed') {
+      const errMsg: ChatMessage = { role: 'assistant', text: `生成失败: ${detail.error || ''}` };
+      const updated = [...existingMessages, errMsg];
+      updateItem(itemId, { loading: false, error: detail.error || '生成失败', messages: updated });
+      return true;
+    }
+    return false;
+  }
+
+  async function fetchAndApplyTaskDetail(
+    taskId: string,
+    itemId: string,
+    prompt: string,
+    r: string,
+    existingMessages: ChatMessage[],
+  ): Promise<boolean> {
+    const detail = await api.getTask(taskId);
+    return applyTaskDetail(taskId, itemId, prompt, r, existingMessages, detail);
+  }
+
+  function streamTask(taskId: string, itemId: string, prompt: string, r: string, existingMessages: ChatMessage[]) {
+    closeTaskStream(taskId);
+    const stream = new EventSource(`/tasks/${encodeURIComponent(taskId)}/events`);
+    taskStreamsRef.current.set(taskId, stream);
+    let finished = false;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      closeTaskStream(taskId);
+    };
+
+    stream.onmessage = async (event) => {
+      if (finished) return;
+      if (cancelledRef.current.has(taskId)) {
+        finish();
+        return;
+      }
+      if (event.data === '[DONE]') {
+        try {
+          if (await fetchAndApplyTaskDetail(taskId, itemId, prompt, r, existingMessages)) finish();
+        } catch {
+          // EventSource 会继续保持终态前的连接；[DONE] 后失败则保持卡片 loading，
+          // 用户可稍后打开或重试，不再制造“查询超时”的假失败。
+        }
+        return;
+      }
+
+      let payload: TaskEventPayload | null = null;
+      try {
+        payload = JSON.parse(event.data) as TaskEventPayload;
+      } catch {
+        return;
+      }
+      if (payload.type !== 'done' && payload.type !== 'error') return;
+      try {
+        if (await fetchAndApplyTaskDetail(taskId, itemId, prompt, r, existingMessages)) finish();
+      } catch {
+        if (payload.type === 'error') {
+          const errMsg: ChatMessage = { role: 'assistant', text: `生成失败: ${payload.error || '任务失败'}` };
+          updateItem(itemId, { loading: false, error: payload.error || '任务失败', messages: [...existingMessages, errMsg] });
+          finish();
+        }
+      }
+    };
+
+    stream.onerror = () => {
+      if (cancelledRef.current.has(taskId)) finish();
+    };
   }
 
   function getReferencePath(id: string): string | undefined {
@@ -538,7 +622,7 @@ export function CanvasPage() {
     const msgs = [...(existingMessages || []), submitMsg];
     updateItem(itemId, { taskId, messages: msgs });
     setMessages((prev) => [...prev, submitMsg]);
-    pollTask(taskId, itemId, prompt, size, msgs);
+    streamTask(taskId, itemId, prompt, size, msgs);
   }
 
   async function resubmit(itemId: string) {
@@ -594,6 +678,7 @@ export function CanvasPage() {
     const item = findItem(itemId);
     if (item?.taskId) {
       cancelledRef.current.add(item.taskId);
+      closeTaskStream(item.taskId);
     }
     updateItem(itemId, { loading: false, interrupted: true });
     if (item?.taskId) {
