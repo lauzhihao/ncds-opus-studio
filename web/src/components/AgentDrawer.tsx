@@ -182,11 +182,24 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
         );
       case 'storyboard':
         return (
-          <StoryboardPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('storyboard')} />
+          <StoryboardPanel
+            jobId={jobId}
+            nodeDef={nodeDef!}
+            nodeState={nodeState}
+            rwNodeState={job.nodes.rw ?? defaultIdleState('rw')}
+            preflightNodeState={job.nodes.lines ?? defaultIdleState('lines')}
+            onAdvanced={() => advance('storyboard')}
+          />
         );
       case 'image':
         return (
-          <ImageResultPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('image')} />
+          <ImageResultPanel
+            jobId={jobId}
+            nodeDef={nodeDef!}
+            nodeState={nodeState}
+            ttsNodeState={job.nodes.tts ?? defaultIdleState('tts')}
+            onAdvanced={() => advance('image')}
+          />
         );
       case 'tts':
         return (

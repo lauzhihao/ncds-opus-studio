@@ -20,37 +20,26 @@ interface Props {
   jobId: string;
   nodeDef: PipelineNodeDef;
   nodeState: NodeState;
+  rwNodeState: NodeState;
+  preflightNodeState: NodeState;
   onAdvanced?: () => void;
 }
 
 const NEXT_NODE = 'tts';
 const PREFLIGHT_NODE = 'lines';
 
-function defaultNodeState(name: string): NodeState {
-  return {
-    name,
-    status: 'idle',
-    started_at: null,
-    finished_at: null,
-    progress: '',
-    outputs: {},
-    error: null,
-    task_id: null,
-  };
-}
-
 function isActive(status: NodeState['status']): boolean {
   return status === 'queued' || status === 'running';
 }
 
-function hasLineOutputs(node: NodeState | null): boolean {
-  if (!node || node.status !== 'done') return false;
+function hasLineOutputs(node: NodeState): boolean {
+  if (node.status !== 'done') return false;
   const beats = node.outputs?.beats_count;
   return (typeof beats === 'number' && beats > 0) || typeof node.outputs?.lines_relpath === 'string';
 }
 
-function isLineStale(lines: NodeState | null, rw: NodeState | null): boolean {
-  if (!lines || !rw || lines.status !== 'done' || rw.status !== 'done') return false;
+function isLineStale(lines: NodeState, rw: NodeState): boolean {
+  if (lines.status !== 'done' || rw.status !== 'done') return false;
   if (!hasLineOutputs(lines)) return true;
   // 当前 job state 没有源版本号；第一版用 finished_at 判断柳永定稿是否晚于台词结构。
   return !!(rw.finished_at && lines.finished_at && lines.finished_at < rw.finished_at);
@@ -73,7 +62,14 @@ function groupScenes(scenes: Record<string, Scene>): SceneGroup[] {
   return out;
 }
 
-export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+export function StoryboardPanel({
+  jobId,
+  nodeDef,
+  nodeState,
+  rwNodeState,
+  preflightNodeState,
+  onAdvanced,
+}: Props) {
   const { showToast } = useToast();
   const status = nodeState.status;
   const scenesCount = (nodeState.outputs?.scenes_count as number | undefined) ?? 0;
@@ -84,41 +80,23 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
   const [actionBusy, setActionBusy] = useState(false);
   const [advanceBusy, setAdvanceBusy] = useState(false);
   const [pendingRerun, setPendingRerun] = useState(false);
-  const [rwState, setRwState] = useState<NodeState | null>(null);
-  const [lineState, setLineState] = useState<NodeState | null>(null);
-  const [preflightLoadErr, setPreflightLoadErr] = useState<string | null>(null);
   const [preflightRunErr, setPreflightRunErr] = useState<string | null>(null);
   const [preflightBusy, setPreflightBusy] = useState(false);
   const autoPreflightKeys = useRef<Set<string>>(new Set());
 
-  const refreshPreflight = useCallback(async () => {
-    try {
-      const job = await api.getJob(jobId);
-      setRwState(job.nodes.rw ?? defaultNodeState('rw'));
-      setLineState(job.nodes[PREFLIGHT_NODE] ?? defaultNodeState(PREFLIGHT_NODE));
-      setPreflightLoadErr(null);
-    } catch (e) {
-      setPreflightLoadErr((e as Error).message);
-    }
-  }, [jobId]);
-
-  useEffect(() => {
-    void refreshPreflight();
-  }, [refreshPreflight, nodeState.started_at, nodeState.finished_at, status]);
-
+  const rwState = rwNodeState;
+  const lineState = preflightNodeState;
   const linesStale = isLineStale(lineState, rwState);
-  const preflightReady = !!lineState && lineState.status === 'done' && !linesStale && hasLineOutputs(lineState);
-  const preflightActive = !!lineState && isActive(lineState.status);
-  const rwReady = rwState?.status === 'done';
+  const preflightReady = lineState.status === 'done' && !linesStale && hasLineOutputs(lineState);
+  const preflightActive = isActive(lineState.status);
+  const rwReady = rwState.status === 'done';
 
   const runPreflight = useCallback(async () => {
     if (!rwReady) return;
     setPreflightBusy(true);
     setPreflightRunErr(null);
     try {
-      const job = await api.runNode(jobId, PREFLIGHT_NODE);
-      setRwState(job.nodes.rw ?? defaultNodeState('rw'));
-      setLineState(job.nodes[PREFLIGHT_NODE] ?? defaultNodeState(PREFLIGHT_NODE));
+      await api.runNode(jobId, PREFLIGHT_NODE);
     } catch (e) {
       const msg = (e as Error).message;
       setPreflightRunErr(msg);
@@ -130,14 +108,14 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
   }, [jobId, rwReady, showToast]);
 
   useEffect(() => {
-    if (!rwReady || !lineState) return;
+    if (!rwReady || preflightBusy) return;
     const missingOrIdle = lineState.status === 'idle';
     const staleDone = lineState.status === 'done' && linesStale;
     if (!missingOrIdle && !staleDone) return;
 
     const key = [
       jobId,
-      rwState?.finished_at ?? 'rw',
+      rwState.finished_at ?? 'rw',
       lineState.status,
       lineState.finished_at ?? 'none',
       staleDone ? 'stale' : 'fresh',
@@ -145,15 +123,7 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
     if (autoPreflightKeys.current.has(key)) return;
     autoPreflightKeys.current.add(key);
     void runPreflight();
-  }, [jobId, lineState, linesStale, runPreflight, rwReady, rwState?.finished_at]);
-
-  useEffect(() => {
-    if (!preflightActive && !preflightBusy) return undefined;
-    const t = window.setInterval(() => {
-      void refreshPreflight();
-    }, 1600);
-    return () => window.clearInterval(t);
-  }, [preflightActive, preflightBusy, refreshPreflight]);
+  }, [jobId, lineState, linesStale, preflightBusy, runPreflight, rwReady, rwState.finished_at]);
 
   // 只在 done 时拉 episode（running/idle 时 scenes 还没产出）
   useEffect(() => {
@@ -292,30 +262,25 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
   }
 
   if (!preflightReady) {
-    const lineStatus = lineState?.status ?? 'idle';
-    const preflightError = lineState?.error || preflightRunErr || preflightLoadErr;
-    const loadingPreflight = rwState == null || lineState == null;
-    const waitingForRw = rwState != null && !rwReady;
+    const lineStatus = lineState.status;
+    const preflightError = lineState.error || preflightRunErr;
+    const waitingForRw = !rwReady;
     const rowStatus: ProcStatus =
-      preflightLoadErr ? 'unavailable'
-        : preflightRunErr ? 'failed'
-          : loadingPreflight ? 'pending'
-            : lineStatus === 'failed' ? 'failed'
-              : preflightActive || preflightBusy ? 'running'
-                : 'pending';
+      preflightRunErr ? 'failed'
+        : lineStatus === 'failed' ? 'failed'
+          : preflightActive || preflightBusy ? 'running'
+            : 'pending';
     const readyText =
-      preflightLoadErr ? `读取准备状态失败：${preflightLoadErr}`
-        : preflightRunErr ? `视觉前置准备启动失败：${preflightRunErr}`
-          : loadingPreflight ? '正在读取吴道子工作台状态。'
-            : waitingForRw ? '先完成柳永成稿，吴道子会自动准备视觉结构。'
-              : lineStatus === 'failed' ? `视觉前置准备失败：${lineState?.error || '未知错误'}`
-                : linesStale ? '柳永成稿已更新，正在重新准备视觉前置结构。'
-                  : '正在准备台词结构，完成后进入视觉方案工作台。';
-    const canRetry = rwReady && !preflightActive && !preflightBusy && !preflightLoadErr;
+      preflightRunErr ? `视觉前置准备启动失败：${preflightRunErr}`
+        : waitingForRw ? '先完成柳永成稿，吴道子会自动准备视觉结构。'
+          : lineStatus === 'failed' ? `视觉前置准备失败：${lineState.error || '未知错误'}`
+            : linesStale ? '柳永成稿已更新，正在重新准备视觉前置结构。'
+              : '正在准备台词结构，完成后进入视觉方案工作台。';
+    const canRetry = rwReady && !preflightActive && !preflightBusy;
 
     return (
       <div className="rw-panel-root">
-        <div className={`panel-hint ${lineStatus === 'failed' || preflightLoadErr || preflightRunErr ? 'panel-hint-error' : 'panel-hint-info'}`}>
+        <div className={`panel-hint ${lineStatus === 'failed' || preflightRunErr ? 'panel-hint-error' : 'panel-hint-info'}`}>
           {readyText}
         </div>
 
@@ -325,13 +290,13 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
               id: 'wudaozi-preflight',
               label: '视觉前置准备（台词结构）',
               status: rowStatus,
-              detail: preflightError || lineState?.progress || undefined,
+              detail: preflightError || lineState.progress || undefined,
             }}
             runningText="准备中"
           />
         </div>
 
-        {(preflightActive || preflightBusy) && lineState?.progress && (
+        {(preflightActive || preflightBusy) && lineState.progress && (
           <div className="dim-mono">{lineState.progress}</div>
         )}
 
@@ -342,11 +307,7 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
           >
             视觉工作台准备
           </div>
-          {preflightLoadErr ? (
-            <button className="btn primary sm" disabled={preflightBusy} onClick={() => { void refreshPreflight(); }}>
-              <RefreshCw size={12} strokeWidth={1.9} /> 重新读取
-            </button>
-          ) : canRetry ? (
+          {canRetry ? (
             <button className="btn primary sm" disabled={preflightBusy} onClick={() => { void runPreflight(); }}>
               {lineStatus === 'failed' ? (
                 <RefreshCw size={12} strokeWidth={1.9} />
@@ -369,7 +330,7 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
         <ProcStatusRow
           row={{
             id: 'wudaozi-preflight',
-            label: `台词结构已准备 · ${(lineState?.outputs?.beats_count as number | undefined) ?? 0} 句`,
+            label: `台词结构已准备 · ${(lineState.outputs?.beats_count as number | undefined) ?? 0} 句`,
             status: 'done',
           }}
         />

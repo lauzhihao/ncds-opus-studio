@@ -21,12 +21,13 @@ interface Props {
   jobId: string;
   nodeDef: PipelineNodeDef;
   nodeState: NodeState;
+  ttsNodeState: NodeState;
   onAdvanced?: () => void;
 }
 
 const NEXT_NODE = 'preview';
 
-export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
+export function ImageResultPanel({ jobId, nodeDef, nodeState, ttsNodeState, onAdvanced }: Props) {
   const { showToast } = useToast();
   const items = useMemo<ImageItem[]>(
     () => (nodeState.outputs?.items as ImageItem[] | undefined) ?? [],
@@ -41,8 +42,6 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
   const [regenBusy, setRegenBusy] = useState<Record<string, boolean>>({});
   const [pendingRerun, setPendingRerun] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
-  const [ttsState, setTtsState] = useState<NodeState | null>(null);
-  const [ttsLoadErr, setTtsLoadErr] = useState<string | null>(null);
 
   // 加载 episode（拿 scenes 的 prompt 作为可编辑文本的 source of truth）；
   // 节点 finished_at 变化时重拉（重跑 image 后 prompt 可能没改但 episode mtime 变了）
@@ -51,28 +50,6 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
       .then((ep) => { setEpisode(ep); setEpErr(null); })
       .catch((e: Error) => setEpErr(e.message));
   }, [jobId, nodeState.finished_at]);
-
-  const refreshTtsState = useCallback(async () => {
-    try {
-      const job = await api.getJob(jobId);
-      setTtsState(job.nodes.tts ?? null);
-      setTtsLoadErr(null);
-    } catch (e) {
-      setTtsLoadErr((e as Error).message);
-    }
-  }, [jobId]);
-
-  useEffect(() => {
-    void refreshTtsState();
-  }, [refreshTtsState, status, nodeState.started_at, nodeState.finished_at]);
-
-  useEffect(() => {
-    if (ttsState?.status !== 'queued' && ttsState?.status !== 'running') return undefined;
-    const t = window.setInterval(() => {
-      void refreshTtsState();
-    }, 1600);
-    return () => window.clearInterval(t);
-  }, [refreshTtsState, ttsState?.status]);
 
   // 防抖落盘整份 episode（沿用 EpisodeEditorPanel 模式）
   const debounceTimer = useRef<number | null>(null);
@@ -156,7 +133,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
     }
   }
 
-  const waitingForBoya = status === 'idle' && !!ttsState && ttsState.status !== 'done';
+  const ttsState = ttsNodeState;
+  const waitingForBoya = status === 'idle' && ttsState.status !== 'done';
 
   async function doAdvance() {
     setAdvanceBusy(true);
@@ -176,7 +154,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
     if (waitingForBoya) {
       return (
         <button className="btn primary sm" disabled title="等待伯牙声音完成后继续">
-          <Play size={12} strokeWidth={2} /> {ttsState?.status === 'failed' ? '先修声音' : '等待伯牙'}
+          <Play size={12} strokeWidth={2} /> {ttsState.status === 'failed' ? '先修声音' : '等待伯牙'}
         </button>
       );
     }
@@ -220,9 +198,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
   if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
-  } else if (ttsLoadErr && status === 'idle') {
-    hint = { tone: 'error', text: `伯牙声音状态读取失败：${ttsLoadErr}` };
-  } else if (waitingForBoya && ttsState?.status === 'failed') {
+  } else if (waitingForBoya && ttsState.status === 'failed') {
     hint = { tone: 'error', text: '伯牙声音生成失败；请先回到伯牙重试，再继续画面资产。' };
   } else if (waitingForBoya) {
     hint = { tone: 'info', text: '等待伯牙声音完成后继续生成画面资产。' };
@@ -236,7 +212,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
     <div className="rw-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
 
-      {waitingForBoya && ttsState && (
+      {waitingForBoya && (
         <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
           <ProcStatusRow
             row={{
