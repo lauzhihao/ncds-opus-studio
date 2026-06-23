@@ -327,7 +327,7 @@ export function CanvasPage() {
   const [dragOver, setDragOver] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const dragCountRef = useRef(0);
   const cancelledRef = useRef(new Set<string>());
@@ -684,13 +684,18 @@ export function CanvasPage() {
             <div className="chat-input-row">
               <div className="chat-input-wrap">
                 {cmdPrefix && <span className="chat-input-prefix">{cmdPrefix}</span>}
-                <input
+                <textarea
                   ref={inputRef}
                   className="chat-input"
-                  type="text"
+                  rows={1}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
                   placeholder={concurrentCount >= MAX_CONCURRENT ? `已达并发上限(${MAX_CONCURRENT})，请等待…` : '输入指令…'}
                   spellCheck={false}
                 />
