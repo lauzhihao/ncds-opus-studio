@@ -536,14 +536,11 @@
   background: var(--accent-tint);
 }
 .chat-input-row {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--s-2);
   padding: var(--s-3) var(--s-5);
   flex-shrink: 0;
 }
 .chat-input-wrap {
-  flex: 1;
+  position: relative;
   display: flex;
   align-items: flex-start;
   --chat-input-line: 20px;
@@ -576,7 +573,7 @@
   flex: 1;
   height: 100%;
   min-width: 0;
-  padding: 6px var(--s-2);
+  padding: 6px 42px 6px var(--s-2);
   border: none;
   background: transparent;
   color: var(--ink-1);
@@ -591,6 +588,44 @@
 }
 .chat-input-wrap:focus-within .chat-input {
   overflow-y: auto;
+}
+.chat-input-send {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
+}
+.chat-input-wrap:focus-within .chat-input-send {
+  top: auto;
+  bottom: 6px;
+  transform: none;
+}
+.chat-input-send:hover:not(:disabled) {
+  background: var(--ink-1);
+}
+.chat-input-send:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.chat-input-send:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 .chat-thumb {
   display: block;

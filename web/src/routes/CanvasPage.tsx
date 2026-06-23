@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Copy, Download, Loader2, Pencil, Plus, RotateCcw, SendHorizonal, Square, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ArrowUp, Copy, Download, Pencil, Plus, RotateCcw, Square, Trash2, X } from 'lucide-react';
 import { api } from '../api/client';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
@@ -699,10 +699,16 @@ export function CanvasPage() {
                   placeholder={concurrentCount >= MAX_CONCURRENT ? `已达并发上限(${MAX_CONCURRENT})，请等待…` : '输入指令…'}
                   spellCheck={false}
                 />
+                <button
+                  type="button"
+                  className="chat-input-send"
+                  onClick={send}
+                  disabled={concurrentCount >= MAX_CONCURRENT || !input.trim()}
+                  aria-label="发送"
+                >
+                  <ArrowUp size={15} strokeWidth={2.4} />
+                </button>
               </div>
-              <button className="btn sm primary icon-only" onClick={send} disabled={concurrentCount >= MAX_CONCURRENT || !input.trim()} aria-label="发送">
-                {concurrentCount > 0 ? <Loader2 size={14} strokeWidth={2} className="spin" /> : <SendHorizonal size={14} strokeWidth={1.6} />}
-              </button>
             </div>
           </aside>
         </>
