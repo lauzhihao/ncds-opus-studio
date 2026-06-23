@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { appendFile, mkdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appendJobTrace, getJobTracePath } from './job_trace.mjs';
 
 const defaultWorkspaceDir = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const supportedMediaDomains = [
@@ -227,17 +227,8 @@ export function hydrateWorkerPayload(payload = {}, deps = {}) {
   return hydrated;
 }
 
-function getJobTracePath(workspaceDir, jobId) {
-  return path.join(workspaceDir, 'video-jobs', jobId, 'trace.log');
-}
-
 async function appendTraceLog(workspaceDir, jobId, stage, detail) {
-  if (!workspaceDir || !jobId) return;
-  const logPath = getJobTracePath(workspaceDir, jobId);
-  await mkdir(path.dirname(logPath), { recursive: true });
-  const timestamp = new Date().toISOString();
-  const body = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
-  await appendFile(logPath, `[${timestamp}] [runner] ${stage}\n${body}\n\n`, 'utf8');
+  await appendJobTrace({ workspaceDir, jobId, source: 'runner', stage, detail });
 }
 
 function pipeChildOutput(child) {

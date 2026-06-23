@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { appendJobTrace } from './job_trace.mjs';
 import {
   addMemberPermission,
   createDoc,
@@ -50,7 +51,6 @@ const jobDir = jobLayout.jobDir;
 const jobPath = jobLayout.jobPath;
 const rawDir = jobLayout.rawDir;
 const deliverablesDir = jobLayout.deliverablesDir;
-const traceLogPath = path.join(jobDir, 'trace.log');
 const VIDEO_PIPELINE_SCRIPT = path.join(workspaceDir, 'skills', 'video-pipeline', 'scripts', 'video_pipeline.py');
 const PYTHON_BIN = resolvePythonBin(process.env);
 // DRIVE_SIMPLE_UPLOAD_MAX_BYTES 已不再使用：分片/简单上传由 lark-cli +upload 内部自动决定。
@@ -132,9 +132,7 @@ async function writeErrorLog(targetJobDir, jobId, stage, errorText) {
 
 async function appendTraceLog(stage, detail) {
   await ensureDirs();
-  const timestamp = new Date().toISOString();
-  const body = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
-  await fs.appendFile(traceLogPath, `[${timestamp}] [worker] ${stage}\n${body}\n\n`, 'utf8');
+  await appendJobTrace({ workspaceDir, jobId: payload.jobId, source: 'worker', stage, detail });
 }
 
 async function safeReadJson(filePath) {

@@ -2,26 +2,21 @@ import os
 import sys
 import json
 from http import HTTPStatus
+from pathlib import Path
 import dashscope
 from dashscope import Files
 from dashscope.audio.asr import Transcription
 
-def _read_dotenv_value(key):
-    """从仓库根 .env 读某 key（skills/<skill>/scripts/ 上四级 = 仓库根）。"""
-    base = os.path.abspath(__file__)
-    for _ in range(4):
-        base = os.path.dirname(base)
-    env_file = os.path.join(base, ".env")
-    if os.path.exists(env_file):
-        with open(env_file, encoding="utf-8") as f:
-            for line in f:
-                if line.strip().startswith(key + "="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'") or None
-    return None
+ROOT = Path(__file__).resolve().parents[3]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from ncds_opus_factory.common.capabilities.transcribe import read_dashscope_key  # noqa: E402
 
 def get_api_key():
     """DashScope key：环境变量 DASHSCOPE_API_KEY > 仓库根 .env（~/.openclaw 已弃用）。"""
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or _read_dotenv_value("DASHSCOPE_API_KEY")
+    api_key = read_dashscope_key()
     if not api_key:
         raise ValueError("缺少 DASHSCOPE_API_KEY：请设环境变量，或写进仓库根 .env（模板见 .env.example）")
     return api_key

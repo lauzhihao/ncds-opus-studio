@@ -25,6 +25,13 @@ except ImportError:
     DashscopeFiles = None
     DashscopeTranscription = None
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_DIR = REPO_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from ncds_opus_factory.common.capabilities.transcribe import read_dashscope_key
+
 
 def resolve_binary(name: str, env_var: str | None = None, *, required: bool = True) -> str | None:
     candidates = []
@@ -129,15 +136,7 @@ def load_openclaw_config() -> dict:
 
 
 def load_dashscope_key() -> str | None:
-    if os.environ.get("DASHSCOPE_API_KEY"):
-        return os.environ.get("DASHSCOPE_API_KEY")
-    # ~/.openclaw 已弃用：回退读仓库根 .env（统一走环境变量 / .env）
-    env_file = Path(__file__).resolve().parents[3] / ".env"
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("DASHSCOPE_API_KEY="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'") or None
-    return None
+    return read_dashscope_key()
 
 
 def load_runtime_config() -> dict[str, Any]:

@@ -3,70 +3,20 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import os
 from pathlib import Path
-import re
-import shutil
-import subprocess
 import sys
-from typing import Any, Dict, List
 
-from ncds_opus_core.gpt_image.paths import GPT_IMAGE_OUTPUT_ROOT
-
-DEFAULT_OUTPUT_ROOT = GPT_IMAGE_OUTPUT_ROOT
-CLEANUP_MAX_AGE_DAYS = 14
-
-
-def fail(message: str, code: int = 1) -> None:
-    print(message, file=sys.stderr)
-    raise SystemExit(code)
-
-
-def redact(text: str) -> str:
-    text = re.sub(r"(x-api-key:\s*)[^\s'\"\\]+", r"\1REDACTED", text, flags=re.I)
-    text = re.sub(r"(-u\s+)[^\s]+", r"\1REDACTED", text)
-    text = re.sub(r"(token\s*[:=]\s*)[^\s]+", r"\1REDACTED", text, flags=re.I)
-    return text
-
-
-def run(args: List[str], cwd: Path, env: Dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        cwd=str(cwd),
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-    )
-
-
-def cleanup_old_outputs(root: Path, max_age_days: int = CLEANUP_MAX_AGE_DAYS) -> None:
-    if not root.is_dir():
-        return
-    cutoff = dt.datetime.now().timestamp() - max_age_days * 86400
-    for child in root.iterdir():
-        if child.is_dir() and child.stat().st_mtime < cutoff:
-            shutil.rmtree(child, ignore_errors=True)
-
-
-def resolve_output_dir(raw_output_dir: str | None) -> Path:
-    if raw_output_dir:
-        output_dir = Path(raw_output_dir).expanduser().resolve()
-    else:
-        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-        output_dir = (DEFAULT_OUTPUT_ROOT / stamp).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir
-
-
-def load_manifest(output_dir: Path) -> Dict[str, Any]:
-    manifest_path = output_dir / "manifest.json"
-    if not manifest_path.exists():
-        fail(f"Generation finished but manifest was not found: {manifest_path}")
-    return json.loads(manifest_path.read_text(encoding="utf-8"))
+from ncds_opus_core.gpt_image.common import (
+    DEFAULT_OUTPUT_ROOT,
+    cleanup_old_outputs,
+    fail,
+    load_manifest,
+    redact,
+    resolve_output_dir,
+    run_subprocess,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,7 +58,7 @@ def main() -> None:
         edit_cmd.extend(["--size", args.size])
 
     env = os.environ.copy()
-    result = run(edit_cmd, cwd=Path.cwd(), env=env, timeout=args.timeout + 30)
+    result = run_subprocess(edit_cmd, cwd=Path.cwd(), env=env, timeout=args.timeout + 30)
     (output_dir / "generation_stderr.log").write_text(redact(result.stderr), encoding="utf-8")
     if result.returncode != 0:
         fail("Image edit failed:\n" + redact(result.stderr or result.stdout), result.returncode)

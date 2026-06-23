@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { mkdir, appendFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appendJobTrace } from './job_trace.mjs';
 import {
   addMemberPermission,
   createDoc,
@@ -70,17 +71,8 @@ export function hydrateRewritePayload(rawPayload = {}, deps = {}) {
   return hydrated;
 }
 
-function getTracePath(jobId, workspaceDir = defaultWorkspaceDir) {
-  return path.join(workspaceDir, 'video-jobs', jobId, 'trace.log');
-}
-
 async function appendTrace(jobId, stage, detail, workspaceDir = defaultWorkspaceDir) {
-  if (!jobId) return;
-  const logPath = getTracePath(jobId, workspaceDir);
-  await mkdir(path.dirname(logPath), { recursive: true });
-  const timestamp = new Date().toISOString();
-  const body = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
-  await appendFile(logPath, `[${timestamp}] [rw-runner] ${stage}\n${body}\n\n`, 'utf8');
+  await appendJobTrace({ workspaceDir, jobId, source: 'rw-runner', stage, detail });
 }
 
 // 老逻辑里 fetchTenantToken / buildFeishuApi / readDocxRawContent / buildDocBlocks
