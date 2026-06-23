@@ -1,5 +1,5 @@
-// tts 节点抽屉：按 beats 顺序逐行渲染 [NN] [zh 单行输入] [▶ 试听] [↻ 重生]，
-// 顶部右整体 开始/停止/重新执行，底部右"用此配音 · 下一步"启动 image。
+// 伯牙「声音结果」面板：包装当前 tts 节点，按 beats 顺序逐行渲染
+// [NN] [zh 单行输入] [▶ 试听] [下载] [↻ 重生]，底部启动 image 回补吴道子画面资产。
 //
 // 数据来源
 //   - episode.json beats 数组 → zh 的 source of truth（可编辑回写）
@@ -8,7 +8,7 @@
 // 试听按钮按 HTML5 <audio> 一次播一条；audio_relpath null 时 disabled。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pause, Play, RefreshCw, Square, VolumeX } from 'lucide-react';
+import { Download, Pause, Play, RefreshCw, Square, VolumeX } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type { Episode, NodeState, PipelineNodeDef, TtsItem } from '../../api/types';
@@ -173,8 +173,8 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      showToast('启动 IMAGE 失败，请稍后再试');
-      console.error('[TtsResultPanel] 启动 IMAGE 失败', e);
+      showToast('启动画面资产生成失败，请稍后再试');
+      console.error('[TtsResultPanel] advance to image failed', e);
     } finally {
       setAdvanceBusy(false);
     }
@@ -202,7 +202,7 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
     }
     return (
       <button className="btn primary sm" disabled={actionBusy} onClick={doRun}>
-        <Play size={12} strokeWidth={2} /> 开始配音
+        <Play size={12} strokeWidth={2} /> 开始声音合成
       </button>
     );
   }
@@ -222,22 +222,22 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
   if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
   } else if (status === 'idle') {
-    hint = { tone: 'info', text: '点击下方「开始配音」启动，按 scene 整段合成。' };
+    hint = { tone: 'info', text: '伯牙会按视觉方案里的 scene 整段合成配音。' };
   } else if (items.length === 0 && status === 'done') {
-    hint = { tone: 'info', text: '暂无字幕；先在 BEATS 抽屉里编辑。' };
+    hint = { tone: 'info', text: '暂无声音片段；请先确认吴道子的视觉方案里有可配音文本。' };
   }
 
   return (
     <div className="rw-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
 
-      {/* 配音状态行：跑过就常驻（done 后不消失，与 BEATS/RW 一致） */}
+      {/* 配音状态行：跑过就常驻（done 后不消失，与 RW 一致） */}
       {status !== 'idle' && (
         <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
           <ProcStatusRow
             row={{
               id: 'tts',
-              label: '分段式高情感度语音合成',
+              label: '伯牙配音合成',
               status: status === 'done' ? 'done' : status === 'failed' ? 'failed' : 'running',
             }}
             runningText="合成中"
@@ -250,7 +250,7 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
           className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
           style={{ margin: 0, flex: 1 }}
         >
-          TTS / {sceneGroups.length} 段 / {items.length} 句{statusBadge}
+          声音结果 · {sceneGroups.length} 段 · {items.length} 句{statusBadge}
           {hasPending && (
             <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
               · 保存中…
@@ -287,6 +287,16 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
                         <Play size={12} strokeWidth={1.8} fill="currentColor" />
                       )}
                     </button>
+                    {g.audioRelpath && (
+                      <a
+                        className="btn sm icon-only ghost"
+                        href={`/jobs/${jobId}/files/${g.audioRelpath}`}
+                        download
+                        title="下载此段音频"
+                      >
+                        <Download size={12} strokeWidth={1.7} />
+                      </a>
+                    )}
                     <button
                       type="button"
                       className="btn sm icon-only ghost"
@@ -321,11 +331,11 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
             <button
               type="button"
               className="btn primary sm"
-              title="用此配音 · 下一步（启动 IMAGE）"
+              title="声音完成 · 回补吴道子画面资产"
               disabled={advanceBusy || actionBusy || status !== 'done'}
               onClick={doAdvance}
             >
-              <Play size={12} strokeWidth={2} fill="currentColor" /> 下一步
+              <Play size={12} strokeWidth={2} fill="currentColor" /> 生成画面资产
             </button>
           </div>
         </>
@@ -333,8 +343,8 @@ export function TtsResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props)
 
       <ConfirmDialog
         open={pendingRerun}
-        title="重新执行 TTS？"
-        message={<>会清空所有音频产物 + 所有下游节点的状态与产物，然后整体重新配音。</>}
+        title="重新执行声音合成？"
+        message={<>会清空所有音频产物以及下游画面资产/成片状态，然后整体重新配音。</>}
         confirmLabel="重新执行"
         danger
         onConfirm={async () => {

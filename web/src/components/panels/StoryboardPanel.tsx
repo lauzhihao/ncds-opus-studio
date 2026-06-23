@@ -1,9 +1,9 @@
-// storyboard（分镜）节点抽屉：展示 / 微调 director agent 产出的视觉层。
+// 吴道子「视觉方案」入口：先隐藏准备台词结构，再展示 / 微调 director agent 产出的视觉层。
 //
 // 数据源：02_rw/episode.json 的 scenes{}（director 产出，含每个子场景的容器图 prompt
 //         与 sketches[]）+ beats[].scene（子场景归属）。本面板按 scene.group 分段展示，
 //         允许就地编辑容器 prompt / 简笔画 prompt / pos / at.match，防抖整份回写 episode。
-// 顶部右：开始分镜 / 停止 / 重新执行；底部右：用此分镜 · 下一步 → runNode('tts')。
+// 顶部右：生成视觉方案 / 停止 / 重新执行；底部右：确认视觉方案 → runNode('tts') 交给伯牙。
 //
 // 风格对齐 BEATS/TTS：panel-hint banner + proc-rows 状态行 + section-h loading。
 
@@ -14,7 +14,7 @@ import { api } from '../../api/client';
 import type { Episode, NodeState, PipelineNodeDef, Scene, Sketch } from '../../api/types';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useToast } from '../Toast';
-import { ProcStatusRow } from './ProcStatusRow';
+import { ProcStatusRow, type ProcStatus } from './ProcStatusRow';
 
 interface Props {
   jobId: string;
@@ -24,6 +24,37 @@ interface Props {
 }
 
 const NEXT_NODE = 'tts';
+const PREFLIGHT_NODE = 'lines';
+
+function defaultNodeState(name: string): NodeState {
+  return {
+    name,
+    status: 'idle',
+    started_at: null,
+    finished_at: null,
+    progress: '',
+    outputs: {},
+    error: null,
+    task_id: null,
+  };
+}
+
+function isActive(status: NodeState['status']): boolean {
+  return status === 'queued' || status === 'running';
+}
+
+function hasLineOutputs(node: NodeState | null): boolean {
+  if (!node || node.status !== 'done') return false;
+  const beats = node.outputs?.beats_count;
+  return (typeof beats === 'number' && beats > 0) || typeof node.outputs?.lines_relpath === 'string';
+}
+
+function isLineStale(lines: NodeState | null, rw: NodeState | null): boolean {
+  if (!lines || !rw || lines.status !== 'done' || rw.status !== 'done') return false;
+  if (!hasLineOutputs(lines)) return true;
+  // 当前 job state 没有源版本号；第一版用 finished_at 判断柳永定稿是否晚于台词结构。
+  return !!(rw.finished_at && lines.finished_at && lines.finished_at < rw.finished_at);
+}
 
 interface SceneGroup {
   group: string;
@@ -53,6 +84,76 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
   const [actionBusy, setActionBusy] = useState(false);
   const [advanceBusy, setAdvanceBusy] = useState(false);
   const [pendingRerun, setPendingRerun] = useState(false);
+  const [rwState, setRwState] = useState<NodeState | null>(null);
+  const [lineState, setLineState] = useState<NodeState | null>(null);
+  const [preflightLoadErr, setPreflightLoadErr] = useState<string | null>(null);
+  const [preflightRunErr, setPreflightRunErr] = useState<string | null>(null);
+  const [preflightBusy, setPreflightBusy] = useState(false);
+  const autoPreflightKeys = useRef<Set<string>>(new Set());
+
+  const refreshPreflight = useCallback(async () => {
+    try {
+      const job = await api.getJob(jobId);
+      setRwState(job.nodes.rw ?? defaultNodeState('rw'));
+      setLineState(job.nodes[PREFLIGHT_NODE] ?? defaultNodeState(PREFLIGHT_NODE));
+      setPreflightLoadErr(null);
+    } catch (e) {
+      setPreflightLoadErr((e as Error).message);
+    }
+  }, [jobId]);
+
+  useEffect(() => {
+    void refreshPreflight();
+  }, [refreshPreflight, nodeState.started_at, nodeState.finished_at, status]);
+
+  const linesStale = isLineStale(lineState, rwState);
+  const preflightReady = !!lineState && lineState.status === 'done' && !linesStale && hasLineOutputs(lineState);
+  const preflightActive = !!lineState && isActive(lineState.status);
+  const rwReady = rwState?.status === 'done';
+
+  const runPreflight = useCallback(async () => {
+    if (!rwReady) return;
+    setPreflightBusy(true);
+    setPreflightRunErr(null);
+    try {
+      const job = await api.runNode(jobId, PREFLIGHT_NODE);
+      setRwState(job.nodes.rw ?? defaultNodeState('rw'));
+      setLineState(job.nodes[PREFLIGHT_NODE] ?? defaultNodeState(PREFLIGHT_NODE));
+    } catch (e) {
+      const msg = (e as Error).message;
+      setPreflightRunErr(msg);
+      showToast('准备视觉前置结构失败，请稍后重试');
+      console.error('[StoryboardPanel] preflight failed', e);
+    } finally {
+      setPreflightBusy(false);
+    }
+  }, [jobId, rwReady, showToast]);
+
+  useEffect(() => {
+    if (!rwReady || !lineState) return;
+    const missingOrIdle = lineState.status === 'idle';
+    const staleDone = lineState.status === 'done' && linesStale;
+    if (!missingOrIdle && !staleDone) return;
+
+    const key = [
+      jobId,
+      rwState?.finished_at ?? 'rw',
+      lineState.status,
+      lineState.finished_at ?? 'none',
+      staleDone ? 'stale' : 'fresh',
+    ].join(':');
+    if (autoPreflightKeys.current.has(key)) return;
+    autoPreflightKeys.current.add(key);
+    void runPreflight();
+  }, [jobId, lineState, linesStale, runPreflight, rwReady, rwState?.finished_at]);
+
+  useEffect(() => {
+    if (!preflightActive && !preflightBusy) return undefined;
+    const t = window.setInterval(() => {
+      void refreshPreflight();
+    }, 1600);
+    return () => window.clearInterval(t);
+  }, [preflightActive, preflightBusy, refreshPreflight]);
 
   // 只在 done 时拉 episode（running/idle 时 scenes 还没产出）
   useEffect(() => {
@@ -137,8 +238,8 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      showToast('启动 TTS 失败，请稍后再试');
-      console.error('[StoryboardPanel] 启动 TTS 失败', e);
+      showToast('交给伯牙失败，请稍后再试');
+      console.error('[StoryboardPanel] advance to boya failed', e);
     } finally {
       setAdvanceBusy(false);
     }
@@ -156,7 +257,7 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
       return (
         <button
           className="btn primary sm"
-          title="重跑 director 分镜（会覆盖 scenes 与下游状态）"
+          title="重做视觉方案（会覆盖 scenes 与下游状态）"
           disabled={actionBusy}
           onClick={() => setPendingRerun(true)}
         >
@@ -166,7 +267,7 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
     }
     return (
       <button className="btn primary sm" disabled={actionBusy} onClick={doRun}>
-        <Clapperboard size={12} strokeWidth={2} /> 开始分镜
+        <Clapperboard size={12} strokeWidth={2} /> 生成视觉方案
       </button>
     );
   }
@@ -187,22 +288,102 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
   if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
   } else if (status === 'idle') {
-    hint = { tone: 'info', text: '点击右上「开始分镜」，导演 agent 会切子场景并设计容器图与简笔画。' };
+    hint = { tone: 'info', text: '吴道子会把成稿转成视觉方案：子场景、容器图提示词与简笔画设计。' };
+  }
+
+  if (!preflightReady) {
+    const lineStatus = lineState?.status ?? 'idle';
+    const preflightError = lineState?.error || preflightRunErr || preflightLoadErr;
+    const loadingPreflight = rwState == null || lineState == null;
+    const waitingForRw = rwState != null && !rwReady;
+    const rowStatus: ProcStatus =
+      preflightLoadErr ? 'unavailable'
+        : preflightRunErr ? 'failed'
+          : loadingPreflight ? 'pending'
+            : lineStatus === 'failed' ? 'failed'
+              : preflightActive || preflightBusy ? 'running'
+                : 'pending';
+    const readyText =
+      preflightLoadErr ? `读取准备状态失败：${preflightLoadErr}`
+        : preflightRunErr ? `视觉前置准备启动失败：${preflightRunErr}`
+          : loadingPreflight ? '正在读取吴道子工作台状态。'
+            : waitingForRw ? '先完成柳永成稿，吴道子会自动准备视觉结构。'
+              : lineStatus === 'failed' ? `视觉前置准备失败：${lineState?.error || '未知错误'}`
+                : linesStale ? '柳永成稿已更新，正在重新准备视觉前置结构。'
+                  : '正在准备台词结构，完成后进入视觉方案工作台。';
+    const canRetry = rwReady && !preflightActive && !preflightBusy && !preflightLoadErr;
+
+    return (
+      <div className="rw-panel-root">
+        <div className={`panel-hint ${lineStatus === 'failed' || preflightLoadErr || preflightRunErr ? 'panel-hint-error' : 'panel-hint-info'}`}>
+          {readyText}
+        </div>
+
+        <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
+          <ProcStatusRow
+            row={{
+              id: 'wudaozi-preflight',
+              label: '视觉前置准备（台词结构）',
+              status: rowStatus,
+              detail: preflightError || lineState?.progress || undefined,
+            }}
+            runningText="准备中"
+          />
+        </div>
+
+        {(preflightActive || preflightBusy) && lineState?.progress && (
+          <div className="dim-mono">{lineState.progress}</div>
+        )}
+
+        <div className="rw-panel-header">
+          <div
+            className={`section-h${preflightActive || preflightBusy ? ' loading' : ''}`}
+            style={{ margin: 0, flex: 1 }}
+          >
+            视觉工作台准备
+          </div>
+          {preflightLoadErr ? (
+            <button className="btn primary sm" disabled={preflightBusy} onClick={() => { void refreshPreflight(); }}>
+              <RefreshCw size={12} strokeWidth={1.9} /> 重新读取
+            </button>
+          ) : canRetry ? (
+            <button className="btn primary sm" disabled={preflightBusy} onClick={() => { void runPreflight(); }}>
+              {lineStatus === 'failed' ? (
+                <RefreshCw size={12} strokeWidth={1.9} />
+              ) : (
+                <Play size={12} strokeWidth={2} fill="currentColor" />
+              )}
+              {lineStatus === 'failed' ? '重试准备' : '准备结构'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="rw-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
 
+      <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
+        <ProcStatusRow
+          row={{
+            id: 'wudaozi-preflight',
+            label: `台词结构已准备 · ${(lineState?.outputs?.beats_count as number | undefined) ?? 0} 句`,
+            status: 'done',
+          }}
+        />
+      </div>
+
       {status !== 'idle' && (
         <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
           <ProcStatusRow
             row={{
               id: 'storyboard',
-              label: '导演分镜（子场景 + 简笔画设计）',
+              label: '视觉方案（子场景 + 提示词 + 简笔画设计）',
               status: status === 'done' ? 'done' : status === 'failed' ? 'failed' : 'running',
             }}
-            runningText="分镜中"
+            runningText="设计中"
           />
         </div>
       )}
@@ -212,7 +393,7 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
           className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
           style={{ margin: 0, flex: 1 }}
         >
-          分镜 · {scenesCount} 子场景 · {sketchesCount} 简笔画{statusBadge}
+          视觉方案 · {scenesCount} 子场景 · {sketchesCount} 简笔画{statusBadge}
           {hasPending && (
             <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
               · 保存中…
@@ -264,18 +445,18 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
               </section>
             ))}
             {groups.length === 0 && (
-              <div className="dim-mono">（scenes 为空，重跑分镜或检查 BEATS 是否有内容）</div>
+              <div className="dim-mono">（暂无视觉方案；可重新生成，或检查柳永成稿是否为空）</div>
             )}
           </div>
           <div className="image-footer">
             <button
               type="button"
               className="btn primary sm"
-              title="用此分镜 · 下一步（启动 TTS）"
+              title="确认视觉方案 · 交给伯牙配音"
               disabled={advanceBusy || actionBusy || status !== 'done'}
               onClick={doAdvance}
             >
-              <Play size={12} strokeWidth={2} fill="currentColor" /> 下一步
+              <Play size={12} strokeWidth={2} fill="currentColor" /> 交给伯牙
             </button>
           </div>
         </>
@@ -283,8 +464,8 @@ export function StoryboardPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props
 
       <ConfirmDialog
         open={pendingRerun}
-        title="重跑分镜？"
-        message={<>会让 director agent 重新切子场景并覆盖 scenes{'{}'}，并重置下游（TTS/IMAGE…）的状态与产物。</>}
+        title="重做视觉方案？"
+        message={<>会重新切子场景并覆盖 scenes{'{}'}、画面提示词与简笔画设计，同时重置下游声音和画面资产。</>}
         confirmLabel="重新执行"
         danger
         onConfirm={async () => {

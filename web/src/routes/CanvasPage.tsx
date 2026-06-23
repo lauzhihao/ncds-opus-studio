@@ -23,6 +23,31 @@ const MIN_SIZE = 120;
 const MAX_SIZE = 800;
 const DEFAULT_SIZE = 300;
 const CARD_PAD = 12;
+const CHAT_DRAWER_MIN_WIDTH = 420;
+const CHAT_DRAWER_DEFAULT_WIDTH = 560;
+const CHAT_DRAWER_VIEWPORT_PAD = 32;
+const CHAT_INPUT_LINE_HEIGHT = 20;
+const CHAT_INPUT_EXPANDED_HEIGHT = CHAT_INPUT_LINE_HEIGHT * 5 + 14;
+const CHAT_INPUT_MAX_HEIGHT = 320;
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+function defaultChatDrawerWidth(): number {
+  if (typeof window === 'undefined') return CHAT_DRAWER_DEFAULT_WIDTH;
+  return Math.min(CHAT_DRAWER_DEFAULT_WIDTH, window.innerWidth * 0.92);
+}
+
+function maxChatDrawerWidth(): number {
+  if (typeof window === 'undefined') return CHAT_DRAWER_DEFAULT_WIDTH;
+  return Math.max(CHAT_DRAWER_MIN_WIDTH, window.innerWidth - CHAT_DRAWER_VIEWPORT_PAD);
+}
+
+function maxChatInputHeight(): number {
+  if (typeof window === 'undefined') return CHAT_INPUT_MAX_HEIGHT;
+  return Math.max(CHAT_INPUT_EXPANDED_HEIGHT, Math.min(CHAT_INPUT_MAX_HEIGHT, window.innerHeight - 260));
+}
 
 interface CardSize { w: number; h: number }
 interface CardPos { x: number; y: number }
@@ -327,12 +352,31 @@ export function CanvasPage() {
   const [dragOver, setDragOver] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [chatDrawerWidth, setChatDrawerWidth] = useState(defaultChatDrawerWidth);
+  const [chatInputHeight, setChatInputHeight] = useState(CHAT_INPUT_EXPANDED_HEIGHT);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const chatBodyRef = useRef<HTMLDivElement>(null);
   const dragCountRef = useRef(0);
   const cancelledRef = useRef(new Set<string>());
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  const scrollChatToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = chatBodyRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const frame = window.requestAnimationFrame(() => scrollChatToBottom('smooth'));
+    return () => window.cancelAnimationFrame(frame);
+  }, [drawerOpen, messages, scrollChatToBottom]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const frame = window.requestAnimationFrame(() => scrollChatToBottom('auto'));
+    return () => window.cancelAnimationFrame(frame);
+  }, [chatInputHeight, drawerOpen, scrollChatToBottom]);
+
   useEffect(() => { saveImages(images); }, [images]);
 
   useEffect(() => {
@@ -364,6 +408,58 @@ export function CanvasPage() {
     setCmdPrefix('');
     setInput('');
     setEditingId(null);
+  }
+
+  function startDrawerResize(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = chatDrawerWidth;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: PointerEvent) => {
+      setChatDrawerWidth(clamp(startWidth + ev.clientX - startX, CHAT_DRAWER_MIN_WIDTH, maxChatDrawerWidth()));
+    };
+    const onEnd = () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
+  }
+
+  function startInputResize(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    inputRef.current?.focus();
+    const startY = e.clientY;
+    const startHeight = chatInputHeight;
+    const prevCursor = document.body.style.cursor;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: PointerEvent) => {
+      setChatInputHeight(clamp(startHeight + startY - ev.clientY, CHAT_INPUT_EXPANDED_HEIGHT, maxChatInputHeight()));
+    };
+    const onEnd = () => {
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = prevUserSelect;
+      scrollChatToBottom('auto');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
   }
 
   function updateItem(id: string, patch: Partial<CanvasImageItem>) {
@@ -611,7 +707,20 @@ export function CanvasPage() {
       {drawerOpen && (
         <>
           <div className="drawer-backdrop" onClick={closeDrawer} />
-          <aside className="drawer chat-drawer" role="dialog" aria-modal aria-label="AI 对话">
+          <aside
+            className="drawer chat-drawer"
+            role="dialog"
+            aria-modal
+            aria-label="AI 对话"
+            style={{ width: chatDrawerWidth }}
+          >
+            <div
+              className="chat-drawer-resize"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整抽屉宽度"
+              onPointerDown={startDrawerResize}
+            />
             <div className="head">
               <div className="titles">
                 <h3 className="title">{cmdPrefix === '/tst' ? '图生图' : '文生图'}</h3>
@@ -624,7 +733,7 @@ export function CanvasPage() {
                 <X size={14} strokeWidth={1.6} />
               </button>
             </div>
-            <div className="body chat-body">
+            <div className="body chat-body" ref={chatBodyRef}>
               {messages.length === 0 && (
                 <div className="chat-hint dim-mono">输入描述开始创作</div>
               )}
@@ -661,28 +770,37 @@ export function CanvasPage() {
                         </div>
                         <div className="chat-grid">
                           {msg.imgs.map((src, j) => (
-                            <img key={j} src={src} alt={`图 ${j + 1}`} loading="lazy" />
+                            <img key={j} src={src} alt={`图 ${j + 1}`} loading="lazy" onLoad={() => scrollChatToBottom('auto')} />
                           ))}
                         </div>
                       </>
                     ) : (
                       <>
                         {msg.text}
-                        {msg.img && <img src={msg.img} alt="" className="chat-thumb" />}
+                        {msg.img && <img src={msg.img} alt="" className="chat-thumb" onLoad={() => scrollChatToBottom('auto')} />}
                       </>
                     )}
                   </div>
                 </div>
               ))}
-              <div ref={bottomRef} />
             </div>
+            <div
+              className="chat-input-height-resize"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="调整输入区域高度"
+              onPointerDown={startInputResize}
+            />
             <div className="chat-ratios">
               {RATIOS.map((r) => (
                 <button key={r} type="button" className={`chat-ratio-pill${ratio === r ? ' active' : ''}`} onClick={() => setRatio(r)}>{r}</button>
               ))}
             </div>
             <div className="chat-input-row">
-              <div className="chat-input-wrap">
+              <div
+                className="chat-input-wrap"
+                style={{ '--chat-input-height': `${chatInputHeight}px` } as React.CSSProperties}
+              >
                 {cmdPrefix && <span className="chat-input-prefix">{cmdPrefix}</span>}
                 <textarea
                   ref={inputRef}

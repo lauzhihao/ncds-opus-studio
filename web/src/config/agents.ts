@@ -38,10 +38,12 @@ export interface AgentDef {
   role: string; // 采集/转写入库 ...
   description: string;
   icon: LucideIcon;
+  // 隐藏前置步骤：归属本 agent 的底层节点，但不作为抽屉 tab 暴露给用户。
+  preflight?: AgentMember[];
   members: AgentMember[];
 }
 
-// 6 个有序 agent。顺序即产线：沈括→鬼谷子→柳永→吴道子→伯牙→渲染出片。
+// 6 个有序 agent。顺序即产线：沈括→鬼谷子→柳永→吴道子→伯牙→成片。
 // 卧龙不在产线顺序里，作任务级总览（见 WOLONG）。
 export const AGENTS: AgentDef[] = [
   {
@@ -66,8 +68,8 @@ export const AGENTS: AgentDef[] = [
   {
     id: 'liuyong',
     name: '柳永',
-    role: '出稿',
-    description: '多模型改写出稿。',
+    role: '编剧成稿',
+    description: '多模型改写并质检口播稿，定稿后交给吴道子做画面。',
     icon: PenLine,
     members: [
       { node: 'rw', label: '改写' },
@@ -76,33 +78,33 @@ export const AGENTS: AgentDef[] = [
   {
     id: 'wudaozi',
     name: '吴道子',
-    role: '美术',
-    // 台词(切 beats)是分镜的前置：切台词 -> 分镜 -> 画面，归到美术线一气呵成。
-    description: '把口播稿切成台词行，再做分镜与画面。',
+    role: '画面',
+    description: '负责视觉方案、分镜提示词、简笔画设计与画面资产检查。',
     icon: Palette,
+    // lines 是 storyboard 所需的结构化准备，不再作为用户主入口暴露。
+    preflight: [{ node: 'lines', label: '台词结构' }],
     members: [
-      { node: 'lines', label: '台词' },
-      { node: 'storyboard', label: '分镜' },
-      { node: 'image', label: '画面' },
+      { node: 'storyboard', label: '视觉方案' },
+      { node: 'image', label: '画面资产' },
     ],
   },
   {
     id: 'boya',
     name: '伯牙',
     role: '声音',
-    description: '台词配音合成。',
+    description: '负责配音合成、试听、重试与音频下载。',
     icon: Music,
-    members: [{ node: 'tts', label: '配音' }],
+    members: [{ node: 'tts', label: '声音结果' }],
   },
   {
     id: 'render',
-    name: '渲染出片',
-    role: '合成出片',
-    description: '审片、渲染并导出成片。',
+    name: '成片',
+    role: '审片合成',
+    description: '审片、渲染并导出最终 MP4。',
     icon: Clapperboard,
     members: [
-      { node: 'preview', label: '审片' },
-      { node: 'render', label: '渲染' },
+      { node: 'preview', label: '成片检查' },
+      { node: 'render', label: '合成' },
       { node: 'download', label: '下载' },
     ],
   },
@@ -123,7 +125,9 @@ export const WOLONG = {
 // 底层 job 节点 → 所属 agentId（含 virtual 的 guiguzi）。
 export const AGENT_BY_NODE: Record<string, AgentId> = (() => {
   const m: Record<string, AgentId> = {};
-  for (const a of AGENTS) for (const mem of a.members) m[mem.node] = a.id;
+  for (const a of AGENTS) {
+    for (const mem of [...(a.preflight ?? []), ...a.members]) m[mem.node] = a.id;
+  }
   // input 不再是沈括的抽屉成员（采集源 tab 已移除、改为进画布自动采集），但它仍是
   // 沈括名下的采集源持有节点：保留映射，使首页进度灯 / NODE_ORDER 的归属与之前一致。
   m.input = 'shenkuo';
@@ -131,6 +135,7 @@ export const AGENT_BY_NODE: Record<string, AgentId> = (() => {
 })();
 
 // 引擎真实 NEXT 链（鬼谷子 gate 插在 asr 与 rw 之间）。末步 download 无 next。
+// 产品上 lines 是吴道子的隐藏 preflight，image 虽在 tts 后执行但仍归属吴道子的画面资产。
 export const NODE_NEXT: Record<string, string | null> = {
   input: 'asr',
   asr: 'guiguzi',
@@ -196,13 +201,45 @@ export function agentMemberStatuses(
   });
 }
 
+function memberStatuses(
+  members: AgentMember[],
+  jobNodes: Record<string, NodeState> | undefined,
+): NodeStatus[] {
+  return members.map((m) => jobNodes?.[m.node]?.status ?? 'idle');
+}
+
 // agent 整体状态（聚合 + virtual 处理）。
 export function agentStatus(
   agent: AgentDef,
   jobNodes: Record<string, NodeState> | undefined,
   ctx: { angleConfirmed?: boolean } = {},
 ): NodeStatus {
-  return aggregateAgentStatus(agentMemberStatuses(agent, jobNodes, ctx));
+  if (agent.id === 'wudaozi') {
+    return wudaoziStatus(jobNodes);
+  }
+  return aggregateAgentStatus([
+    ...memberStatuses(agent.preflight ?? [], jobNodes),
+    ...agentMemberStatuses(agent, jobNodes, ctx),
+  ]);
+}
+
+function wudaoziStatus(jobNodes: Record<string, NodeState> | undefined): NodeStatus {
+  const rw = jobNodes?.rw?.status ?? 'idle';
+  const lines = jobNodes?.lines?.status ?? 'idle';
+  const storyboard = jobNodes?.storyboard?.status ?? 'idle';
+  const tts = jobNodes?.tts?.status ?? 'idle';
+  const image = jobNodes?.image?.status ?? 'idle';
+
+  if ([lines, storyboard, image].some((s) => s === 'failed')) return 'failed';
+  if ([lines, storyboard, image].some((s) => s === 'running' || s === 'queued')) return 'running';
+  if (image === 'done') return 'done';
+
+  // 第一版 backend DAG 仍是 storyboard -> tts -> image。视觉方案完成后先把当前阶段
+  // 交给伯牙；伯牙完成后再回到吴道子补齐画面资产。
+  if (storyboard === 'done' && tts !== 'done') return 'done';
+  if (storyboard === 'done' && tts === 'done') return 'running';
+  if (lines === 'done') return 'running';
+  return rw === 'done' ? 'running' : 'idle';
 }
 
 // —— 作品列表的「设计进度灯」——
@@ -225,7 +262,8 @@ const NODE_ORDER: string[] = (() => {
   while (cur && !seen.has(cur)) {
     seen.add(cur);
     const aid = AGENT_BY_NODE[cur];
-    const virtual = AGENTS.find((a) => a.id === aid)?.members.find((m) => m.node === cur)?.virtual;
+    const agent = AGENTS.find((a) => a.id === aid);
+    const virtual = [...(agent?.preflight ?? []), ...(agent?.members ?? [])].find((m) => m.node === cur)?.virtual;
     if (!virtual) order.push(cur);
     cur = NODE_NEXT[cur] ?? null;
   }
@@ -256,7 +294,14 @@ export function agentProgressText(
   agent: AgentDef,
   jobNodes: Record<string, NodeState> | undefined,
 ): string {
-  for (const m of agent.members) {
+  if (agent.id === 'wudaozi') {
+    const storyboard = jobNodes?.storyboard?.status ?? 'idle';
+    const tts = jobNodes?.tts?.status ?? 'idle';
+    const image = jobNodes?.image?.status ?? 'idle';
+    if (storyboard === 'done' && tts === 'done' && image === 'idle') return '待生成画面资产';
+  }
+
+  for (const m of [...(agent.preflight ?? []), ...agent.members]) {
     if (m.virtual) continue;
     const ns = jobNodes?.[m.node];
     if (ns && ns.status === 'running') return ns.progress || '执行中…';

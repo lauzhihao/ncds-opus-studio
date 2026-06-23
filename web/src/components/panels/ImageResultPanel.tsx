@@ -1,5 +1,6 @@
-// image 节点抽屉：按 scenes 卡片栅格 + 每张卡可就地编辑 prompt + 单图重生 +
-// 顶部右整体 开始/停止/重新执行，底部右"用此组图 · 下一步"启动 preview。
+// 吴道子「画面资产」面板：包装当前 image 节点，按 scenes 卡片栅格展示 /
+// 编辑 prompt / 单图重生 / 下载图片。当前 backend DAG 仍要求 tts 先完成，
+// 因此前端把 idle 状态封装成「等待伯牙声音完成后补齐画面资产」。
 //
 // 数据来源
 //   - episode.json scenes 字典 → prompt 的 source of truth（可编辑回写）
@@ -8,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, ImageOff, Play, RefreshCw, Square, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, ImageOff, Play, RefreshCw, Square, X } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type { Episode, ImageItem, NodeState, PipelineNodeDef } from '../../api/types';
@@ -40,6 +41,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
   const [regenBusy, setRegenBusy] = useState<Record<string, boolean>>({});
   const [pendingRerun, setPendingRerun] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+  const [ttsState, setTtsState] = useState<NodeState | null>(null);
+  const [ttsLoadErr, setTtsLoadErr] = useState<string | null>(null);
 
   // 加载 episode（拿 scenes 的 prompt 作为可编辑文本的 source of truth）；
   // 节点 finished_at 变化时重拉（重跑 image 后 prompt 可能没改但 episode mtime 变了）
@@ -48,6 +51,28 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
       .then((ep) => { setEpisode(ep); setEpErr(null); })
       .catch((e: Error) => setEpErr(e.message));
   }, [jobId, nodeState.finished_at]);
+
+  const refreshTtsState = useCallback(async () => {
+    try {
+      const job = await api.getJob(jobId);
+      setTtsState(job.nodes.tts ?? null);
+      setTtsLoadErr(null);
+    } catch (e) {
+      setTtsLoadErr((e as Error).message);
+    }
+  }, [jobId]);
+
+  useEffect(() => {
+    void refreshTtsState();
+  }, [refreshTtsState, status, nodeState.started_at, nodeState.finished_at]);
+
+  useEffect(() => {
+    if (ttsState?.status !== 'queued' && ttsState?.status !== 'running') return undefined;
+    const t = window.setInterval(() => {
+      void refreshTtsState();
+    }, 1600);
+    return () => window.clearInterval(t);
+  }, [refreshTtsState, ttsState?.status]);
 
   // 防抖落盘整份 episode（沿用 EpisodeEditorPanel 模式）
   const debounceTimer = useRef<number | null>(null);
@@ -131,6 +156,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
     }
   }
 
+  const waitingForBoya = status === 'idle' && !!ttsState && ttsState.status !== 'done';
+
   async function doAdvance() {
     setAdvanceBusy(true);
     try {
@@ -138,14 +165,21 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      showToast('启动 PREVIEW 失败，请稍后再试');
-      console.error('[ImageResultPanel] 启动 PREVIEW 失败', e);
+      showToast('进入成片检查失败，请稍后再试');
+      console.error('[ImageResultPanel] advance to preview failed', e);
     } finally {
       setAdvanceBusy(false);
     }
   }
 
   function renderActionBtn() {
+    if (waitingForBoya) {
+      return (
+        <button className="btn primary sm" disabled title="等待伯牙声音完成后继续">
+          <Play size={12} strokeWidth={2} /> {ttsState?.status === 'failed' ? '先修声音' : '等待伯牙'}
+        </button>
+      );
+    }
     if (status === 'running' || status === 'queued') {
       return (
         <button className="btn primary sm" disabled={actionBusy} onClick={doCancel}>
@@ -167,7 +201,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
     }
     return (
       <button className="btn primary sm" disabled={actionBusy} onClick={doRun}>
-        <Play size={12} strokeWidth={2} /> 开始生图
+        <Play size={12} strokeWidth={2} /> 生成画面资产
       </button>
     );
   }
@@ -186,23 +220,49 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
   if (epErr) {
     hint = { tone: 'error', text: `episode 加载失败：${epErr}` };
+  } else if (ttsLoadErr && status === 'idle') {
+    hint = { tone: 'error', text: `伯牙声音状态读取失败：${ttsLoadErr}` };
+  } else if (waitingForBoya && ttsState?.status === 'failed') {
+    hint = { tone: 'error', text: '伯牙声音生成失败；请先回到伯牙重试，再继续画面资产。' };
+  } else if (waitingForBoya) {
+    hint = { tone: 'info', text: '等待伯牙声音完成后继续生成画面资产。' };
   } else if (status === 'idle') {
-    hint = { tone: 'info', text: '点击右上「开始生图」启动，按 scene 批量图生图。' };
+    hint = { tone: 'info', text: '伯牙声音已完成，可以按 scene 生成容器图和简笔画资产。' };
   } else if (items.length === 0 && status === 'done') {
-    hint = { tone: 'info', text: '暂无场景；先在 PREVIEW 抽屉里添加 scene。' };
+    hint = { tone: 'info', text: '暂无画面资产；可重新生成，或检查视觉方案里的 scene。' };
   }
 
   return (
     <div className="rw-panel-root">
       {hint && <div className={`panel-hint panel-hint-${hint.tone}`}>{hint.text}</div>}
 
-      {/* 生图状态行：跑过就常驻（done 后不消失，与 BEATS/TTS 一致） */}
+      {waitingForBoya && ttsState && (
+        <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
+          <ProcStatusRow
+            row={{
+              id: 'boya-audio',
+              label: '伯牙声音结果',
+              status: ttsState.status === 'failed'
+                ? 'failed'
+                : ttsState.status === 'done'
+                  ? 'done'
+                  : ttsState.status === 'queued' || ttsState.status === 'running'
+                    ? 'running'
+                    : 'pending',
+              detail: ttsState.error || ttsState.progress || undefined,
+            }}
+            runningText="合成中"
+          />
+        </div>
+      )}
+
+      {/* 画面资产状态行：跑过就常驻（done 后不消失，与声音面板一致） */}
       {status !== 'idle' && (
         <div className="proc-rows" style={{ marginBottom: 'var(--s-3)' }}>
           <ProcStatusRow
             row={{
               id: 'image',
-              label: '批量图生图',
+              label: '画面资产生成',
               status: status === 'done' ? 'done' : status === 'failed' ? 'failed' : 'running',
             }}
             runningText="生成中"
@@ -215,7 +275,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
           className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
           style={{ margin: 0, flex: 1 }}
         >
-          IMAGE 生成 · {items.length} 个场景{statusBadge}
+          画面资产 · {items.length} 个场景{statusBadge}
           {hasPending && (
             <span className="dim-mono" style={{ marginLeft: 6, fontSize: 'var(--text-2xs)' }}>
               · 保存中…
@@ -225,7 +285,7 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
         {renderActionBtn()}
       </div>
 
-      {/* 批量生图较慢（每 scene 一次 gpt-image-2），running 时保留逐条进度明细 */}
+      {/* 批量生成较慢（每 scene 一次 gpt-image-2），running 时保留逐条进度明细 */}
       {(status === 'running' || status === 'queued') && nodeState.progress && (
         <div className="dim-mono">{nodeState.progress}</div>
       )}
@@ -254,11 +314,11 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
             <button
               type="button"
               className="btn primary sm"
-              title="用此组图 · 下一步（启动 PREVIEW）"
+              title="确认画面资产 · 进入成片检查"
               disabled={advanceBusy || actionBusy || status !== 'done'}
               onClick={doAdvance}
             >
-              <Play size={12} strokeWidth={2} fill="currentColor" /> 下一步
+              <Play size={12} strokeWidth={2} fill="currentColor" /> 进入成片检查
             </button>
           </div>
         </>
@@ -266,8 +326,8 @@ export function ImageResultPanel({ jobId, nodeDef, nodeState, onAdvanced }: Prop
 
       <ConfirmDialog
         open={pendingRerun}
-        title="重新执行 IMAGE？"
-        message={<>会清空所有图片产物 + 所有下游节点的状态与产物，然后整体重新生图。</>}
+        title="重新生成画面资产？"
+        message={<>会清空所有图片产物以及下游成片状态，然后整体重新生成画面资产。</>}
         confirmLabel="重新执行"
         danger
         onConfirm={async () => {
@@ -405,6 +465,16 @@ function ImageCard({
         spellCheck={false}
       />
       <div className="image-card-footer">
+        {hasImage && (
+          <a
+            className="btn sm icon-only ghost"
+            href={`/jobs/${jobId}/files/${item.image_relpath}`}
+            download
+            title="下载画面资产"
+          >
+            <Download size={12} strokeWidth={1.7} />
+          </a>
+        )}
         <button
           type="button"
           className="btn sm icon-only ghost"

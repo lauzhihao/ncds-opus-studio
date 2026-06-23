@@ -5,9 +5,9 @@
 //   - 编辑 toggle：仅当本 tab 已 done（有 draft 内容）才能切到编辑
 //   - 「重写本模型」(ghost RefreshCw)：仅当本模型 status !== running 且整体节点 not running
 //   - 「整体重新执行」(顶部)：仅当整体节点 status === done（所有 4 模型都 done/failed）
-//   - 「用此模型 · 下一步」(primary Play)：本模型 success + 节点 done
+//   - 「定稿交给吴道子」(primary Play)：本模型 success + 节点 done
 //
-// 注：本阶段（A）RW 不再出 beats JSON；LINES 节点接收 02_rw/draft.md 后调 LLM 把它结构化。
+// 注：本阶段 RW 不直接出视觉结构；lines 仍是底层 preflight，由吴道子入口隐藏承接。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, FileText, Play, RefreshCw, Sparkles, Square } from 'lucide-react';
@@ -367,8 +367,8 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced, onReconnec
       await api.runNode(jobId, NEXT_NODE);
       onAdvanced?.();
     } catch (e) {
-      showToast('进入下一步失败，请稍后再试');
-      console.error('[LiuyongPanel] 进入下一步失败', e);
+      showToast('交给吴道子失败，请稍后再试');
+      console.error('[LiuyongPanel] advance to wudaozi failed', e);
     } finally {
       setActionBusy(false);
     }
@@ -481,7 +481,7 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced, onReconnec
             <button
               type="button"
               className="btn sm icon-only primary"
-              title="用此模型 · 下一步（启动 lines）"
+              title="定稿交给吴道子画面工作台"
               disabled={actionBusy || refineBusy || status !== 'done' || !tab}
               onClick={doAdvance}
             >
