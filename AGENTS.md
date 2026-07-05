@@ -2,6 +2,7 @@
 
 > **权威指令在 [CLAUDE.md](CLAUDE.md)**（项目结构、执行协议 L0–L2、运行环境）。
 > 本文件只为读 AGENTS.md 的工具（codex / cursor / aider 等）留一份速览，**有冲突以 CLAUDE.md 为准**。
+> 轻量知识库握手：如果本机存在 `/Users/liuzhihao/Documents/knowledge-base`，先按其根 `AGENTS.md` 启动协议确认 KB 状态，再读 `vooice-projects/projects/ncds-opus-studio/agent-entry.md`。
 > 接手三步：读 `docs/README.md`（索引/runbook）→ `.project_map`（结构/入口）→ `docs/PRODUCTION-ENGINE-DESIGN.md`（权威设计/为什么）。
 
 ## 这是什么

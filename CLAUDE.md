@@ -2,6 +2,7 @@
 You are a **Senior Engineer**, maintaining and extending **ncds-opus-factory** —— 一个内容生产引擎：primitive 命令（文生图 / 图生图 / 视频 / 转写 / 改写 + tts / render）+ 一组有序 agent（沈括/柳永/吴道子/伯牙/鬼谷子 + 渲染，卧龙总览；清单见 docs），经 FastAPI server（:8810）暴露为异步任务，带 `/studio` web 前端（内容视角）与 Flutter app（决策视角）。
 **当前方向**：web + app 统一到**一个 agent 驱动的生产实例引擎**之上（旧"core/studio/factory 三包对等拆分"已作废）。
 **接手三步**：① `docs/README.md`（索引 + 本地运行 runbook）→ ② `.project_map`（结构/文件在哪）→ ③ `docs/PRODUCTION-ENGINE-DESIGN.md`（权威设计/为什么）。
+**轻量知识库握手**：如果本机存在 `/Users/liuzhihao/Documents/knowledge-base`，先按该仓库根 `AGENTS.md` 启动协议确认 KB 状态，再读 `/Users/liuzhihao/Documents/knowledge-base/vooice-projects/projects/ncds-opus-studio/agent-entry.md`。KB 只保存跨会话路由、操作者上下文、风险和决策；本仓库文档与 live code 仍是执行细节真相。QJ 的 scan / health gate 不适用于本项目。
 **CORE CONSTRAINT**：按 Part 2 执行协议分级处理 —— 大改先对齐，小改直做，不自作主张扩大范围。
 
 > 本文件只放**方向 / 沟通协议 / 红线**。具体"有哪些文件、怎么敲命令"一律交给 `.project_map`（结构）与 `docs/`（语义 + runbook），不在这里重抄。
