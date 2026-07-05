@@ -37,6 +37,25 @@ logger = logging.getLogger(__name__)
 _DEFAULT_INTERVAL_HOURS = 3.0
 # 配置异常时的重试间隔，别让坏文件把循环打成忙等
 _ERROR_RETRY_S = 600
+_SUPPORTED_PLATFORMS = {"douyin", "tiktok", "youtube"}
+
+
+def _platform(v: Any) -> str:
+    p = str(v or "douyin").strip().lower() or "douyin"
+    return p if p in _SUPPORTED_PLATFORMS else "douyin"
+
+
+def _author_task_key(author: dict[str, Any]) -> str:
+    platform = _platform(author.get("platform"))
+    return authors_repo.author_key(platform, str(author.get("sec_uid") or ""), str(author.get("unique_id") or ""))
+
+
+def _task_key_from_params(params: dict[str, Any]) -> str:
+    author = str(params.get("author") or "")
+    if not author:
+        return ""
+    platform = _platform(params.get("platform"))
+    return f"{platform}:{author}"
 
 
 def subscriptions_path(state_dir: Path) -> Path:
@@ -69,7 +88,7 @@ def load_subscriptions(path: Path) -> dict[str, Any]:
         if not sec_uid:
             continue
         note = a.get("note")
-        platform = str(a.get("platform") or "douyin").strip().lower() or "douyin"
+        platform = _platform(a.get("platform"))
         # 每账号更新频率(小时)；None=用全局 interval_hours。非法/<=0 回退 None。
         ih_raw = a.get("interval_hours")
         try:
@@ -87,7 +106,7 @@ def load_subscriptions(path: Path) -> dict[str, Any]:
             "platform": platform,
             "interval_hours": interval_hours,
         }
-        # 领域 profile（finance/emotion，见 web config/domains.ts + domain_profiles.py）。
+        # 领域 profile（见 web config/domains.ts + domain_profiles.py）。
         # present-only：仅有非空字符串时写入，保手编文件干净 + 老 author 不被注入 null。
         domain = a.get("domain")
         if isinstance(domain, str) and domain.strip():
@@ -151,8 +170,7 @@ async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path
     - cron 配额桶耗尽 -> 整轮停止(别制造注定 failed 的任务行去打扰 Leader)。
     """
     cfg = load_subscriptions(path)
-    # 只对抖音作者派沈括刷新；TikTok 等其它平台采集暂未接入，跳过以免堆失败 cron 任务。
-    authors = [a for a in cfg["authors"] if a["enabled"] and a.get("platform", "douyin") == "douyin"]
+    authors = [a for a in cfg["authors"] if a["enabled"] and _author_task_key(a)]
     if not authors:
         return 0
     global_interval_h = cfg["interval_hours"]
@@ -162,20 +180,26 @@ async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path
     for meta in store.list_tasks():
         if meta.cmd != "shenkuo" or meta.source != "cron":
             continue
-        author = str(meta.params.get("author") or "")
+        key = _task_key_from_params(meta.params)
+        if not key:
+            continue
         if meta.status in ("pending", "running"):
-            active.add(author)
-        if author and meta.created_at > last_created.get(author, ""):
-            last_created[author] = meta.created_at
+            active.add(key)
+        if key and meta.created_at > last_created.get(key, ""):
+            last_created[key] = meta.created_at
 
     now = datetime.now()
     submitted = 0
     for author in authors:
-        sec_uid = author["sec_uid"]
-        if sec_uid in active:
-            logger.info("[subscriptions] %s 已有在途刷新,本轮跳过", sec_uid[:16])
+        platform = _platform(author.get("platform"))
+        author_key = _author_task_key(author)
+        if not author_key:
             continue
-        last = last_created.get(sec_uid)
+        task_key = f"{platform}:{author_key}"
+        if task_key in active:
+            logger.info("[subscriptions] %s 已有在途刷新,本轮跳过", task_key[:32])
+            continue
+        last = last_created.get(task_key)
         if last:
             try:
                 # per-account 频率优先,回退全局；0.9 容差:循环调度抖动不该把整轮顺延
@@ -189,12 +213,14 @@ async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path
             break
         try:
             task_id = await runner.submit(
-                "shenkuo", {"author": sec_uid, "refresh_only": True}, source="cron"
+                "shenkuo",
+                {"author": author_key, "platform": platform, "refresh_only": True},
+                source="cron",
             )
             submitted += 1
-            logger.info("[subscriptions] 刷新派发: %s -> %s", sec_uid[:16], task_id)
+            logger.info("[subscriptions] 刷新派发: %s -> %s", task_key[:32], task_id)
         except Exception:  # noqa: BLE001 — 单作者失败不影响其余
-            logger.exception("[subscriptions] 派发失败: %s", sec_uid[:16])
+            logger.exception("[subscriptions] 派发失败: %s", task_key[:32])
     return submitted
 
 
@@ -215,7 +241,7 @@ async def subscription_loop(runner: TaskRunner, store: TaskStore, path: Path) ->
             candidates = [float(cfg.get("interval_hours", _DEFAULT_INTERVAL_HOURS))]
             candidates += [
                 a["interval_hours"] for a in cfg["authors"]
-                if a.get("enabled") and a.get("platform", "douyin") == "douyin" and a.get("interval_hours")
+                if a.get("enabled") and _author_task_key(a) and a.get("interval_hours")
             ]
             interval = max(0.25, min(candidates))
             await asyncio.sleep(interval * 3600)

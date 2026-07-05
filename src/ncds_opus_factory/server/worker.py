@@ -38,12 +38,18 @@ except ImportError:
     pass
 
 from ncds_opus_factory.server import rounds_gate
+from ncds_opus_factory.server.douk_sidecar import ensure_douk_sidecar, stop_douk_sidecar
 from ncds_opus_factory.server.maintenance import _discard_sweeper, _round_reconciler
 from ncds_opus_factory.server.queue import get_default_queue
-from ncds_opus_factory.server.state import RUNNER, STATE_DIR, STORE
+from ncds_opus_factory.server.state import PIPELINE_RUNNER, RUNNER, STATE_DIR, STORE
 from ncds_opus_factory.server.subscriptions import subscription_loop, subscriptions_path
 
 logger = logging.getLogger(__name__)
+
+
+async def _handle_terminal(meta, status, result) -> None:
+    await rounds_gate.handle_terminal(meta, status, result)
+    await PIPELINE_RUNNER.handle_pipeline_terminal(meta, status, result)
 
 
 def _install_signal_handlers(stop_event: asyncio.Event) -> list[signal.Signals]:
@@ -86,10 +92,12 @@ async def _amain() -> None:
     stop_event = asyncio.Event()
     installed_signals = _install_signal_handlers(stop_event)
     background_tasks: list[asyncio.Task] = []
+    douk_sidecar = None
 
     # 连 Redis 探活(决策 D：不静默吞任务)。startup ping 失败=fail-fast 退出，
     # 让 launchd/操作者立刻看到(运行期 Redis blip 由 BRPOP 指数退避兜，不在这退)。
     try:
+        douk_sidecar = await ensure_douk_sidecar()
         ok = await get_default_queue().ping()
         if not ok:
             raise RuntimeError("[nof-worker] Redis ping failed; exiting (not silently dropping tasks)")
@@ -97,7 +105,7 @@ async def _amain() -> None:
                     STATE_DIR, RUNNER.list_commands())
 
         # 先挂 on_terminal 钩子再 recover(别漏积压任务的终态事件)，与 app.py startup 一致。
-        RUNNER.on_terminal = rounds_gate.handle_terminal
+        RUNNER.on_terminal = _handle_terminal
         # Redis 协调恢复 + 起 per-cmd BRPOP consumer（不清空 Redis 队列）
         recovered = await RUNNER.recover_and_start()
         if recovered:
@@ -126,7 +134,10 @@ async def _amain() -> None:
         logger.info("[nof-worker] stopping background loops")
         await _cancel_background_tasks(background_tasks)
         logger.info("[nof-worker] stopping task runner")
-        await RUNNER.shutdown()
+        try:
+            await RUNNER.shutdown()
+        finally:
+            await stop_douk_sidecar(douk_sidecar)
         logger.info("[nof-worker] stopped")
 
 

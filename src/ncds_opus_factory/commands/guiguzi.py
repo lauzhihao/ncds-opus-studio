@@ -222,7 +222,7 @@ def analyze(
     """第一步:双模型并行反推爆款原因。返回 {opus:{analysis,error}, deepseek:{analysis,error}}。
 
     require_comment=False:无评论「直接拆解」,仅凭原文(items 为 [{text, comment:''}, ...])。
-    domain: 领域 key（如 finance/emotion）。非空时从 domain_profiles 取 guiguzi 槽位作软背景，
+    domain: 领域 key（如 finance/emotion/film/comedy）。非空时从 domain_profiles 取 guiguzi 槽位作软背景，
       以"仅供参考"形式追加到 prompt 末尾；不改变核心分析逻辑，空/未知 domain 回退原通用 prompt。
     """
     from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile  # 避免循环 import
@@ -272,6 +272,7 @@ def _build_topic_prompt_template(
     items: list[dict[str, str]],
     analysis: dict[str, Any] | None,
     domain_guidance: str | None = None,
+    n_topics: int | None = None,
 ) -> str:
     """拼凑选题提示词模板:分析 + 任务 + JSON schema + $source(原文占位) + 编号评论。
 
@@ -302,7 +303,7 @@ def _build_topic_prompt_template(
         )
     else:
         # 无评论:不锚定评论(评论可能误导选题),仅凭原文 + 分析自由出固定条数,角度各异。
-        n = NO_COMMENT_TOPIC_COUNT
+        n = n_topics or NO_COMMENT_TOPIC_COUNT
         template = (
             f"你是抖音选题官。下面给出对标作品的提取文案,以及对{works}为什么成为爆款({BAOKUAN_DEF})的分析。\n"
             "请严格以【爆款原因分析】为指导(受众/钩子/方向都来自它),不要自己另设赛道、不要套固定公式。\n"
@@ -408,7 +409,7 @@ def generate_topics(
     返回 {candidates, topics(扁平), out, added, prompt}(向后兼容卧龙/artifacts)。
 
     require_comment=False:无评论「直接拆解」,仅凭原文+分析自由出固定条数(不逐条锚定评论)。
-    domain: 领域 key（如 finance/emotion）。非空时从 domain_profiles 取 guiguzi 槽位作软背景；
+    domain: 领域 key（如 finance/emotion/film/comedy）。非空时从 domain_profiles 取 guiguzi 槽位作软背景；
       用户自定义 prompt 传入时 domain_guidance 不追加（用户已掌控 prompt 内容）。
     """
     from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile  # 避免循环 import
@@ -427,7 +428,10 @@ def generate_topics(
             dp = _get_domain_profile(domain)
             if dp is not None:
                 domain_guidance = dp.get("guiguzi")
-        template = _build_topic_prompt_template(norm, analysis, domain_guidance=domain_guidance)
+        template = _build_topic_prompt_template(
+            norm, analysis, domain_guidance=domain_guidance,
+            n_topics=None if has_comments else n,
+        )
     exec_prompt = _render_topic_prompt(template, norm)
     label = f"{len(norm)} 条评论" if has_comments else f"{len(norm)} 篇原文(无评论)"
     on_progress(f"鬼谷子: {label} -> opus/deepseek 双模型并行,各出 {n} 个选题...")
@@ -476,7 +480,7 @@ def run(
 
     供卧龙/CLI/自动场景用(无人工介入)。前端走 analyze / generate_topics 两步交互版。
     返回在 generate_topics 结果上附 analysis(双模型分析) + chosen_analysis(自动选定那份)。
-    domain: 领域 key（如 finance/emotion），透传给 analyze / generate_topics 作软背景。
+    domain: 领域 key（如 finance/emotion/film/comedy），透传给 analyze / generate_topics 作软背景。
     """
     analyses = analyze(items, timeout_seconds=timeout_seconds, on_progress=on_progress, domain=domain)
     chosen = _pick_analysis(analyses)

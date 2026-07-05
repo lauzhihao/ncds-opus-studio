@@ -216,6 +216,72 @@ def test_get_job_reconciles_active_pipeline_task_over_failed_facade(tmp_path: Pa
     assert updated.nodes["image"].finished_at is None
 
 
+def test_pipeline_terminal_hook_reconciles_completed_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """worker 终态 hook 应主动把 pipeline_node 完成态推回 /jobs facade。"""
+
+    class FakeStore:
+        def __init__(self, meta: TaskMeta) -> None:
+            self.meta = meta
+
+        def list_tasks(self) -> list[TaskMeta]:
+            return []
+
+        def get_meta(self, task_id: str) -> TaskMeta | None:
+            return self.meta if task_id == self.meta.task_id else None
+
+        def get_result(self, task_id: str) -> dict[str, Any] | None:
+            if task_id != self.meta.task_id:
+                return None
+            return {"job_id": job.job_id, "node": "image", "outputs": {"ok": True}}
+
+    class FakeTaskRunner:
+        def __init__(self, meta: TaskMeta) -> None:
+            self.store = FakeStore(meta)
+
+    runner = pr.PipelineRunner(tmp_path)
+    job = runner.create_job("final_preview", "t", {})
+    meta = TaskMeta(
+        task_id="pipeline_node_1780000000000abcdef12",
+        cmd="pipeline_node",
+        params={"job_id": job.job_id, "node_name": "image"},
+        status="completed",
+        created_at="2026-06-23T15:00:00",
+        started_at="2026-06-23T15:00:01",
+        finished_at="2026-06-23T15:00:02",
+        source="pipeline",
+    )
+    runner.attach_task_runner(FakeTaskRunner(meta))
+
+    state = runner._load(job.job_id)
+    state.nodes["image"].status = "running"
+    state.nodes["image"].task_id = meta.task_id
+    state.nodes["image"].started_at = time.time() - 5
+    runner._save(state)
+
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(runner, "_emit", lambda _job_id, event: emitted.append(event))
+
+    asyncio.run(
+        runner.handle_pipeline_terminal(
+            meta,
+            "completed",
+            {"job_id": job.job_id, "node": "image", "outputs": {"ok": True}},
+        )
+    )
+
+    updated = runner._load(job.job_id)
+    assert updated.nodes["image"].status == "done"
+    assert updated.nodes["image"].outputs == {"ok": True}
+    assert updated.nodes["image"].progress == "完成"
+    assert any(
+        event.get("node") == "image" and event["state"]["status"] == "done"
+        for event in emitted
+    )
+
+
 def test_polish_transcript_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     transcript = tmp_path / "t.txt"
     transcript.write_text("这是一段语音转写得到的原稿内容,足够长。", encoding="utf-8")
@@ -396,8 +462,9 @@ def test_execute_asr_collect_uses_extracted_run_context(
 
     async def fake_thread_cancellable(fn: Any, flag_path: Any, /, *args: Any, **kwargs: Any) -> Any:
         seen["calls"].append((args, kwargs, flag_path))
-        assert kwargs["do_audio"] is False
+        assert kwargs["do_audio"] is True
         assert kwargs["do_frames"] is False
+        assert kwargs["top_comments"] == 20
         assert kwargs["meta"] == {"desc": "meta desc"}
         return {
             "aweme_id": args[0],
@@ -422,6 +489,125 @@ def test_execute_asr_collect_uses_extracted_run_context(
 
     patched = runner.get_job(job.job_id).nodes["asr"].outputs["collected"]
     assert [e.get("aweme_id") for e in patched] == ["aweme-ok", ""]
+
+
+def test_execute_asr_collect_film_domain_is_transcript_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import ncds_opus_factory.common.tikhub_client as tc
+
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("final_preview", "t", {
+        "domain": "film",
+        "shares": [{"url": "https://v.douyin.com/film"}],
+    })
+    seen: dict[str, Any] = {}
+
+    async def fake_thread_cancellable(fn: Any, flag_path: Any, /, *args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return {
+            "aweme_id": args[0],
+            "desc": "film",
+            "status": {"transcribe": "ok"},
+            "text": "影视解说原稿",
+        }
+
+    monkeypatch.setattr(tc, "resolve_aweme_id", lambda _url: "aweme-film")
+    monkeypatch.setattr(tc, "fetch_one_video_detail", lambda aweme_id: {"id": aweme_id})
+    monkeypatch.setattr(tc, "extract_meta", lambda _detail: {"desc": "film meta"})
+    runner._run_in_thread_cancellable = fake_thread_cancellable  # type: ignore[method-assign]
+
+    out = asyncio.run(runner._execute_asr_collect(job.job_id))
+
+    assert out["collected"][0]["text"] == "影视解说原稿"
+    assert seen["do_audio"] is True
+    assert seen["do_frames"] is False
+    assert seen["top_comments"] == 0
+
+
+def test_execute_asr_collect_tiktok_passes_platform_and_source_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import ncds_opus_factory.common.tikhub_client as tc
+
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    url = "https://www.tiktok.com/@kevinpoterfield/video/7650894465690766623?is_from_webapp=1"
+    job = runner.create_job("final_preview", "t", {
+        "domain": "film",
+        "shares": [{"url": url}],
+    })
+    seen: dict[str, Any] = {}
+
+    async def fake_thread_cancellable(fn: Any, flag_path: Any, /, *args: Any, **kwargs: Any) -> Any:
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return {
+            "platform": kwargs["platform"],
+            "aweme_id": args[0],
+            "desc": kwargs["meta"]["desc"],
+            "status": {"transcribe": "ok"},
+            "text": "TK 原稿",
+        }
+
+    monkeypatch.setattr(
+        tc, "fetch_one_video_detail",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("TikTok 不该取抖音元数据")),
+    )
+    monkeypatch.setattr(
+        tc, "fetch_video_ref_meta",
+        lambda _ref: {"desc": "TK meta", "author": "kevinpoterfield", "cover_url": "http://tk/cover.jpg"},
+    )
+    runner._run_in_thread_cancellable = fake_thread_cancellable  # type: ignore[method-assign]
+
+    out = asyncio.run(runner._execute_asr_collect(job.job_id))
+
+    assert out["collected"][0]["platform"] == "tiktok"
+    assert out["collected"][0]["aweme_id"] == "7650894465690766623"
+    assert seen["kwargs"]["platform"] == "tiktok"
+    assert seen["kwargs"]["source_url"].startswith("https://www.tiktok.com/@kevinpoterfield/video/")
+    assert seen["kwargs"]["meta"]["cover_url"] == "http://tk/cover.jpg"
+    assert seen["kwargs"]["top_comments"] == 0
+
+
+def test_execute_asr_collect_download_failed_without_text_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import ncds_opus_factory.common.tikhub_client as tc
+
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("final_preview", "t", {
+        "shares": [{"url": "https://v.douyin.com/down"}],
+    })
+
+    async def fake_thread_cancellable(fn: Any, flag_path: Any, /, *args: Any, **kwargs: Any) -> Any:
+        return {"aweme_id": args[0], "status": {"download": "failed"}}
+
+    monkeypatch.setattr(tc, "resolve_aweme_id", lambda _url: "aweme-down")
+    monkeypatch.setattr(tc, "fetch_one_video_detail", lambda aweme_id: {"id": aweme_id})
+    monkeypatch.setattr(tc, "extract_meta", lambda _detail: {})
+    runner._run_in_thread_cancellable = fake_thread_cancellable  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="全部"):
+        asyncio.run(runner._execute_asr_collect(job.job_id))
+
+
+def test_film_domain_skips_asr_enrich_and_shenkuo_refresh(tmp_path: Path):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("final_preview", "t", {"domain": "film"})
+    job.nodes["asr"].status = "done"
+    job.nodes["asr"].outputs = {
+        "collected": [{"index": 1, "aweme_id": "aweme-film", "text": "影视解说原稿"}],
+    }
+    runner._save(job)
+
+    assert runner.refresh_shenkuo(job.job_id) is False
+    assert job.job_id not in runner._refresh_tasks
+
+    runner._spawn_asr_enrich(job.job_id)
+    assert job.job_id not in runner._enrich_tasks
 
 
 def test_select_rw_model_copies_selected_draft(tmp_path: Path):
@@ -450,6 +636,31 @@ def test_select_rw_model_copies_selected_draft(tmp_path: Path):
     assert updated["selected_model_id"] == "opus"
     with pytest.raises(ValueError, match="unknown model or failed model"):
         runner.select_rw_model(job.job_id, "bad")
+
+
+def test_select_rw_model_blocks_ai_taste_fail(tmp_path: Path):
+    runner = pr.PipelineRunner(video_jobs_dir=tmp_path)
+    job = runner.create_job("final_preview", "t", {})
+    rw_dir = tmp_path / job.job_id / "02_rw"
+    model_dir = rw_dir / "deepseek"
+    model_dir.mkdir(parents=True)
+    (model_dir / "draft.md").write_text("然而，事情远没有这么简单。", encoding="utf-8")
+
+    state = runner.get_job(job.job_id)
+    state.nodes["rw"].status = "done"
+    state.nodes["rw"].outputs = {
+        "drafts": [{"model_id": "deepseek", "status": "success"}],
+        "selected_model_id": None,
+    }
+    runner._save(state)
+
+    with pytest.raises(ValueError, match="质检未通过"):
+        runner.select_rw_model(job.job_id, "deepseek")
+
+    updated = runner.get_job(job.job_id).nodes["rw"].outputs
+    assert updated["selected_model_id"] is None
+    assert updated["drafts"][0]["needs_fix"] is True
+    assert not (rw_dir / "draft.md").exists()
 
 
 def test_regen_scene_image_from_preview_updates_image_outputs(

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -73,19 +74,49 @@ def _fetch_and_store(platform: str, author_id: str) -> dict[str, Any] | None:
         return authors_repo.save_profile(platform, author_id, prof)
 
 
-def _should_dispatch_refresh(platform: str, author_id: str) -> bool:
-    """过期作者是否值得派 worker 刷新:仅已关注的抖音号,且当前无在途刷新(防堆积)。
+def _author_task_key(platform: str, sec_uid: str = "", unique_id: str = "") -> str:
+    return authors_repo.author_key(platform, sec_uid, unique_id)
 
-    未关注者不派——免得给随手解析的号建 benchmark 目录,留待被关注后由订阅环刷。
-    """
-    if platform != "douyin":
-        return False
+
+def _task_key(platform: str, author_id: str) -> str:
+    return f"{platform}:{author_id}"
+
+
+def _safe_author_id(author_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.\-]", "_", (author_id or "").strip()) or "unknown"
+
+
+def _benchmark_dir(platform: str, author_id: str) -> Path:
+    if platform == "douyin":
+        return _BENCH_DIR / f"author_{author_id}"
+    return _BENCH_DIR / f"author_{platform}_{_safe_author_id(author_id)}"
+
+
+def _post_share_url(platform: str, aid: str, author_id: str = "") -> str:
+    if platform == "youtube":
+        return f"https://www.youtube.com/watch?v={aid}"
+    if platform == "tiktok":
+        handle = author_id.strip().lstrip("@") or "_"
+        return f"https://www.tiktok.com/@{handle}/video/{aid}"
+    return f"https://www.douyin.com/video/{aid}"
+
+
+def _should_dispatch_refresh(platform: str, author_id: str) -> bool:
+    """过期作者是否值得派 worker 刷新:仅已关注账号,且当前无在途刷新(防堆积)。"""
     authors = load_subscriptions(subscriptions_path(STATE_DIR)).get("authors", [])
-    if not any(a.get("sec_uid") == author_id and a.get("enabled", True) for a in authors):
+    if not any(
+        a.get("enabled", True)
+        and str(a.get("platform") or "douyin") == platform
+        and _author_task_key(platform, str(a.get("sec_uid") or ""), str(a.get("unique_id") or "")) == author_id
+        for a in authors
+    ):
         return False
+    wanted = _task_key(platform, author_id)
     for meta in STORE.list_tasks():
+        meta_platform = str(meta.params.get("platform") or "douyin")
+        meta_author = str(meta.params.get("author") or "")
         if (meta.cmd == "shenkuo"
-                and str(meta.params.get("author") or "") == author_id
+                and _task_key(meta_platform, meta_author) == wanted
                 and meta.status in ("pending", "running")):
             return False
     return True
@@ -97,7 +128,11 @@ async def _dispatch_refresh(platform: str, author_id: str) -> None:
         return
     try:
         # source=cron:与订阅环共享配额/去重/自动归档,不进待验收桶
-        await RUNNER.submit("shenkuo", {"author": author_id, "refresh_only": True}, source="cron")
+        await RUNNER.submit(
+            "shenkuo",
+            {"author": author_id, "platform": platform, "refresh_only": True},
+            source="cron",
+        )
     except Exception:  # noqa: BLE001
         logger.exception("[accounts] 过期刷新派发失败: %s", author_id[:16])
 
@@ -140,12 +175,14 @@ def _load_json(path: Path) -> Any:
 
 
 @router.get("/accounts/{sec_uid}/posts")
-def get_account_posts(sec_uid: str) -> dict[str, Any]:
+def get_account_posts(sec_uid: str, platform: str = "douyin", unique_id: str | None = None) -> dict[str, Any]:
     """返回某对标号的作品列表(高赞优先), 每条带封面/四项数据/share_url/是否已采集。
 
     sync def（走线程池）—— 老数据缺封面时会重拉一次列表（带封面）并回写，自愈一次。
     """
-    author_dir = _BENCH_DIR / f"author_{sec_uid}"
+    platform = (platform or "douyin").strip().lower() or "douyin"
+    author_id = _author_task_key(platform, sec_uid, unique_id or "")
+    author_dir = _benchmark_dir(platform, author_id)
     posts = _load_json(author_dir / "all_posts.json")
     if not isinstance(posts, list):
         # 还没采集过这个账号 -> 空列表, 前端展示"暂无作品, 待采集"。
@@ -154,7 +191,7 @@ def get_account_posts(sec_uid: str) -> dict[str, Any]:
     # 老数据缺封面或缺时长（cover_url/duration 都是后加的）-> 重拉一次补齐并回写，之后命中缓存。
     if posts and isinstance(posts[0], dict) and (not posts[0].get("cover_url") or "duration" not in posts[0]):
         try:
-            fresh = tikhub_client.fetch_user_posts(sec_uid, max_items=max(len(posts), 30))
+            fresh = tikhub_client.fetch_author_posts(platform, author_id, max_items=max(len(posts), 30))
             if fresh:
                 (author_dir / "all_posts.json").write_text(
                     json.dumps(fresh, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -189,8 +226,7 @@ def get_account_posts(sec_uid: str) -> dict[str, Any]:
                 "create": p.get("create", 0),
                 "cover_url": p.get("cover_url") or "",
                 "duration": p.get("duration", 0),  # 秒；0=未知，前端不渲染时长徽标
-                # 构造抖音作品页链接: 衍生作品画布据此 seed 源(沈括单链/asr 都能解析)。
-                "share_url": f"https://www.douyin.com/video/{aid}",
+                "share_url": p.get("share_url") or _post_share_url(platform, aid, author_id),
                 "collected": aid in collected_ids,
             }
         )

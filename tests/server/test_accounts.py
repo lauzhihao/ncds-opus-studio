@@ -34,8 +34,8 @@ def client_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return TestClient(app_mod.app), bench
 
 
-def _seed(bench: Path, sec_uid: str, posts: list[dict], collected_ids: list[str]) -> None:
-    d = bench / f"author_{sec_uid}"
+def _seed(bench: Path, sec_uid: str, posts: list[dict], collected_ids: list[str], *, platform: str = "douyin") -> None:
+    d = bench / f"author_{sec_uid}" if platform == "douyin" else bench / f"author_{platform}_{sec_uid}"
     d.mkdir(parents=True, exist_ok=True)
     (d / "all_posts.json").write_text(json.dumps(posts, ensure_ascii=False), encoding="utf-8")
     (d / "collected.json").write_text(
@@ -77,6 +77,25 @@ def test_posts_merged_sorted_and_share_url(client_env):
     assert top["cover_url"] == "http://c/222.jpg"
     assert top["comment"] == 9 and top["share"] == 8 and top["collect"] == 7
     assert posts[1]["collected"] is False
+
+
+def test_tiktok_posts_use_platform_directory_and_share_url(client_env):
+    client, bench = client_env
+    _seed(
+        bench,
+        "creator_1",
+        posts=[
+            {"aweme_id": "7650894465690766623", "desc": "TK", "digg": 5, "cover_url": "http://c/tk.jpg"},
+        ],
+        collected_ids=[],
+        platform="tiktok",
+    )
+
+    resp = client.get("/accounts/TTSEC/posts?platform=tiktok&unique_id=creator_1")
+
+    assert resp.status_code == 200
+    post = resp.json()["posts"][0]
+    assert post["share_url"] == "https://www.tiktok.com/@creator_1/video/7650894465690766623"
 
 
 def test_resolve_sec_uid_offline_paths():
@@ -180,7 +199,9 @@ def test_resolve_stale_returns_old_and_dispatches_refresh(client_env, tmp_path: 
     client, _ = client_env
     b = client.post("/accounts/resolve", json={"text": "MS4wSTALE"}).json()
     assert b["cached"] is True and b["stale"] is True and b["nickname"] == "旧号"
-    assert submitted == [("shenkuo", {"author": "MS4wSTALE", "refresh_only": True}, "cron")]
+    assert submitted == [
+        ("shenkuo", {"author": "MS4wSTALE", "platform": "douyin", "refresh_only": True}, "cron")
+    ]
 
 
 def test_bad_all_posts_json_returns_empty(client_env):

@@ -132,7 +132,7 @@ class TaskRunner:
         self._workers: list[asyncio.Task] = []
         self._started = False
         self._shutdown_requested = False
-        # 终态钩子(round 事件接线,§4.2):app startup 注入 rounds_gate.handle_terminal,
+        # 终态钩子：worker 注入组合 hook（round 事件接线 + pipeline node 状态回写）。
         # 不在此 import——避免 server 子模块循环依赖
         self.on_terminal: Callable[..., Any] | None = None
         # 在途集合和任务状态均在 Redis 中跨进程可见，见 queue.py。
@@ -596,8 +596,8 @@ class TaskRunner:
             await self._rq.remove_inflight(task_id)
 
     async def _fire_terminal(self, meta: TaskMeta, status: str, result: dict[str, Any] | None) -> None:
-        """机器反馈(§4.2):带 round_id 的任务终态通知编排层。失败不影响任务本身。"""
-        if self.on_terminal is None or not meta.round_id:
+        """机器反馈：任务终态通知编排层。失败不影响任务本身。"""
+        if self.on_terminal is None:
             return
         try:
             await self.on_terminal(meta, status, result)

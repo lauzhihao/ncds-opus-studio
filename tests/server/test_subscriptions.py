@@ -56,7 +56,9 @@ def test_tick_submits_enabled_only(tmp_path: Path):
 
     assert n == 1
     cmd, params, source = runner.calls[0]
-    assert cmd == "shenkuo" and params == {"author": "S1", "refresh_only": True} and source == "cron"
+    assert cmd == "shenkuo"
+    assert params == {"author": "S1", "platform": "douyin", "refresh_only": True}
+    assert source == "cron"
 
 
 def test_tick_skips_author_with_active_refresh(tmp_path: Path):
@@ -143,18 +145,23 @@ def test_tick_respects_per_account_interval(tmp_path: Path):
     assert n == 1
 
 
-def test_tick_skips_non_douyin_platform(tmp_path: Path):
-    """TikTok 等非抖音平台暂不接入采集 -> tick 跳过,不派沈括(免堆失败 cron)。"""
+def test_tick_dispatches_supported_platforms(tmp_path: Path):
+    """抖音/TikTok/YouTube 都派沈括刷新，platform 随任务参数下发。"""
     p = tmp_path / "subs.json"
     save_subscriptions(p, {"authors": [
         {"sec_uid": "DY", "enabled": True, "platform": "douyin"},
-        {"sec_uid": "TT", "enabled": True, "platform": "tiktok"},
+        {"sec_uid": "TTSEC", "unique_id": "tt_handle", "enabled": True, "platform": "tiktok"},
+        {"sec_uid": "YT", "unique_id": "@yt_handle", "enabled": True, "platform": "youtube"},
     ]})
     store = TaskStore(tmp_path / "tasks")
     runner = StubRunner()
     n = asyncio.run(run_subscription_tick(runner, store, p))
-    assert n == 1
-    assert runner.calls[0][1] == {"author": "DY", "refresh_only": True}
+    assert n == 3
+    assert [c[1] for c in runner.calls] == [
+        {"author": "DY", "platform": "douyin", "refresh_only": True},
+        {"author": "tt_handle", "platform": "tiktok", "refresh_only": True},
+        {"author": "@yt_handle", "platform": "youtube", "refresh_only": True},
+    ]
 
 
 @pytest.fixture()

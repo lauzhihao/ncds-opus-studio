@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from ncds_opus_factory.commands import shenkuo
+from ncds_opus_factory.server.pipeline_asr_tasks import collect_entry_error
 from ncds_opus_factory.server.pipeline_rw_helpers import _rw_source_text
 
 
@@ -99,8 +100,113 @@ def test_collect_one_second_pass_fills_audio(tmp_path, monkeypatch):
     assert entry2.get("audio") and "vocals" in entry2["audio"]
 
 
+def test_collect_one_prefers_raw_transcript_over_clean_file(tmp_path, monkeypatch):
+    """提取文案必须展示/喂下游原始听写稿，不被 clean 文件翻译稿覆盖。"""
+    _works_env(tmp_path, monkeypatch)
+    author_dir = tmp_path / "author_x"
+    author_dir.mkdir()
+    aid = "raw_first"
+    wdir = shenkuo.works_repo.work_dir("tiktok", aid)
+    (wdir / "video.mp4").write_bytes(b"MP4")
+    (wdir / "asr.paraformer.json").write_text('{"backend":"whisper"}', encoding="utf-8")
+    (wdir / "asr.txt").write_text("raw English commentary", encoding="utf-8")
+    (wdir / "asr.clean.txt").write_text("中文翻译稿", encoding="utf-8")
+
+    entry = shenkuo.collect_one(
+        aid, author_dir, platform="tiktok", top_comments=0, do_audio=False, do_frames=False,
+    )
+
+    assert entry["status"]["transcribe"] == "cached"
+    assert entry["text"] == "raw English commentary"
+    assert entry["text_raw"].endswith("asr.txt")
+    assert entry["text_clean"].endswith("asr.clean.txt")
+
+
+def test_collect_one_tiktok_rewrites_legacy_paraformer_cache(tmp_path, monkeypatch):
+    """TikTok 旧 paraformer 缓存不复用，改走 whisper 原文听写。"""
+    _works_env(tmp_path, monkeypatch)
+    author_dir = tmp_path / "author_x"
+    author_dir.mkdir()
+    aid = "tk_old_para"
+    wdir = shenkuo.works_repo.work_dir("tiktok", aid)
+    (wdir / "video.mp4").write_bytes(b"MP4")
+    (wdir / "asr.paraformer.json").write_text(
+        '{"backend":"dashscope-paraformer","model":"paraformer-v1"}',
+        encoding="utf-8",
+    )
+    (wdir / "asr.txt").write_text("嗯。现在我们服务。", encoding="utf-8")
+    (wdir / "asr.clean.txt").write_text("旧中文清洗稿", encoding="utf-8")
+    seen: dict[str, str | None] = {}
+
+    def fake_transcribe(video, op, *, engine=None, language=None):
+        seen["engine"] = engine
+        return ({"backend": "whisper", "model": "base"}, "Cole gouged out the man's eyes.")
+
+    monkeypatch.setattr(shenkuo.capabilities, "transcribe", fake_transcribe)
+    monkeypatch.setattr(shenkuo.capabilities, "clean_transcript", lambda raw, op=shenkuo._noop: None)
+
+    entry = shenkuo.collect_one(
+        aid, author_dir, platform="tiktok", top_comments=0, do_audio=False, do_frames=False,
+    )
+
+    assert seen["engine"] == "whisper"
+    assert entry["status"]["transcribe"] == "ok"
+    assert entry["text"] == "Cole gouged out the man's eyes."
+    assert not (wdir / "asr.clean.txt").exists()
+    assert '"backend": "whisper"' in (wdir / "asr.paraformer.json").read_text(encoding="utf-8")
+
+
+def test_collect_one_does_not_reuse_stale_transcript_when_retry_fails(tmp_path, monkeypatch):
+    """重转写失败时不能把旧 asr.txt 塞回本次 entry。"""
+    _works_env(tmp_path, monkeypatch)
+    author_dir = tmp_path / "author_x"
+    author_dir.mkdir()
+    aid = "tk_retry_failed"
+    wdir = shenkuo.works_repo.work_dir("tiktok", aid)
+    (wdir / "video.mp4").write_bytes(b"MP4")
+    (wdir / "asr.paraformer.json").write_text('{"backend":"dashscope-paraformer"}', encoding="utf-8")
+    (wdir / "asr.txt").write_text("stale translated text", encoding="utf-8")
+
+    monkeypatch.setattr(shenkuo.capabilities, "transcribe", lambda *_a, **_k: (None, ""))
+
+    entry = shenkuo.collect_one(
+        aid, author_dir, platform="tiktok", top_comments=0, do_audio=False, do_frames=False,
+    )
+
+    assert entry["status"]["transcribe"] == "failed"
+    assert "text" not in entry
+    assert "txt" not in entry
+    assert collect_entry_error(entry) == "转写失败，未产出文案"
+
+
+def test_collect_one_records_empty_transcript_without_error(tmp_path, monkeypatch):
+    """首选+fallback 都空时记录 empty，不生成可用正文，也不按失败阻塞。"""
+    _works_env(tmp_path, monkeypatch)
+    author_dir = tmp_path / "author_x"
+    author_dir.mkdir()
+    aid = "tk_empty"
+    wdir = shenkuo.works_repo.work_dir("tiktok", aid)
+    (wdir / "video.mp4").write_bytes(b"MP4")
+
+    monkeypatch.setattr(
+        shenkuo.capabilities,
+        "transcribe",
+        lambda *_a, **_k: ({"backend": "whisper", "empty": True}, ""),
+    )
+    monkeypatch.setattr(shenkuo.capabilities, "clean_transcript", lambda raw, op=shenkuo._noop: None)
+
+    entry = shenkuo.collect_one(
+        aid, author_dir, platform="tiktok", top_comments=0, do_audio=False, do_frames=False,
+    )
+
+    assert entry["status"]["transcribe"] == "empty"
+    assert entry["text"] == ""
+    assert (wdir / "asr.txt").read_text(encoding="utf-8") == ""
+    assert collect_entry_error(entry) is None
+
+
 def test_rw_source_text_prefers_collected_text(tmp_path):
-    """rw 取数：优先 collected 内嵌清洗稿 text，标题取 desc 并剥掉内嵌话题。"""
+    """rw 取数：优先 collected 内嵌 text，标题取 desc 并剥掉内嵌话题。"""
     items = [
         {"index": 1, "desc": "标题A #话题x", "hashtags": ["话题x"], "text": "清洗稿正文A"},
         {"index": 2, "desc": "标题B", "text": ""},  # 空 text 且无文件 → 跳过

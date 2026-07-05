@@ -1,26 +1,36 @@
 """通义听悟 vendor adapter：只负责提交听写任务并取回原始文本。"""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from http import HTTPStatus
 import json
 import os
-from pathlib import Path
 import time
+from dataclasses import dataclass
+from http import HTTPStatus
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from ._base import read_dashscope_key, read_repo_env_value
 
 try:
+    import dashscope as dashscope_module
     from dashscope import Files as DashScopeFiles
+    from dashscope.audio.asr import Transcription as DashScopeTranscription
+except ImportError:  # pragma: no cover - depends on optional runtime package
+    dashscope_module = None
+    DashScopeFiles = None
+    DashScopeTranscription = None
+
+try:
     from dashscope.multimodal.tingwu.tingwu import TingWu
 except ImportError:  # pragma: no cover - depends on optional runtime package
-    DashScopeFiles = None
     TingWu = None
 
 
 DEFAULT_BASE_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 DEFAULT_MODEL = "tingwu-meeting"
+LEGACY_MODEL = "paraformer-v1"
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 DEFAULT_MAX_POLLS = 180
 
@@ -81,6 +91,13 @@ def resolve_app_id(config: dict[str, Any] | None = None) -> str:
     return app_id.strip()
 
 
+def resolve_optional_app_id(config: dict[str, Any] | None = None) -> str | None:
+    try:
+        return resolve_app_id(config)
+    except TingwuUnavailableError:
+        return None
+
+
 def resolve_base_api_url(config: dict[str, Any] | None = None) -> str:
     cfg = config or load_runtime_config()
     return (
@@ -102,8 +119,9 @@ def resolve_model(config: dict[str, Any] | None = None) -> str:
 def is_configured(config: dict[str, Any] | None = None) -> bool:
     try:
         resolve_api_key(config)
-        resolve_app_id(config)
-        return TingWu is not None and DashScopeFiles is not None
+        if resolve_optional_app_id(config):
+            return TingWu is not None and DashScopeFiles is not None
+        return DashScopeTranscription is not None and DashScopeFiles is not None
     except TingwuUnavailableError:
         return False
 
@@ -150,6 +168,12 @@ def _response_payload(response: Any) -> dict[str, Any]:
         return response
     payload = json.loads(json.dumps(response, default=lambda item: getattr(item, "__dict__", str(item))))
     return payload if isinstance(payload, dict) else {}
+
+
+def _field(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
 
 
 def _raise_for_response(response: Any, operation: str) -> None:
@@ -209,6 +233,38 @@ def extract_text_from_task(task_payload: dict[str, Any]) -> str:
     return "\n".join(seen).strip()
 
 
+def extract_legacy_text(response: Any) -> str:
+    payload = _response_payload(response)
+    direct_text = extract_text_from_task(payload)
+    if direct_text:
+        return direct_text
+
+    output = _field(response, "output", {})
+    results = _field(output, "results", []) or []
+    text_parts: list[str] = []
+    for item in results:
+        transcription = _field(item, "transcription", "")
+        if transcription:
+            text_parts.append(str(transcription))
+            continue
+        transcription_url = _field(item, "transcription_url", "")
+        if transcription_url:
+            parsed = urlparse(str(transcription_url))
+            if parsed.scheme not in {"http", "https"}:
+                raise RuntimeError(f"unsupported transcription_url scheme: {parsed.scheme or '<empty>'}")
+            request = Request(  # noqa: S310 - scheme checked above.
+                str(transcription_url),
+                headers={"User-Agent": "ncds-opus-factory/1.0"},
+            )
+            with urlopen(request, timeout=120) as handle:  # noqa: S310 - scheme checked above.
+                data = json.loads(handle.read().decode("utf-8"))
+            for transcript in data.get("transcripts", []) or []:
+                text = transcript.get("text", "")
+                if text:
+                    text_parts.append(str(text))
+    return "\n".join(text_parts).strip()
+
+
 def create_task(*, api_key: str, base_api_url: str, model: str, app_id: str, file_url: str) -> str:
     if TingWu is None:
         raise TingwuUnavailableError("tingwu sdk unavailable")
@@ -262,6 +318,65 @@ def poll_task(
     )
 
 
+def _wait_legacy_task(task_id: str, api_key: str) -> Any:
+    if DashScopeTranscription is None:
+        raise TingwuUnavailableError("dashscope transcription sdk unavailable")
+    wait = getattr(DashScopeTranscription, "wait", None)
+    if callable(wait):
+        try:
+            return wait(task=task_id, api_key=api_key)
+        except TypeError:
+            return wait(task=task_id)
+
+    fetch = getattr(DashScopeTranscription, "fetch", None)
+    if callable(fetch):
+        for _ in range(DEFAULT_MAX_POLLS):
+            response = fetch(task_id, api_key=api_key)
+            output = _field(response, "output", {})
+            status = _field(output, "task_status")
+            if status in {"SUCCEEDED", "FAILED"}:
+                return response
+            time.sleep(DEFAULT_POLL_INTERVAL_SECONDS)
+        raise TimeoutError(f"dashscope transcription timeout after {DEFAULT_MAX_POLLS} polls")
+
+    raise TingwuUnavailableError("dashscope transcription polling unavailable")
+
+
+def transcribe_file_legacy(*, api_key: str, file_url: str) -> TingwuTranscript:
+    if dashscope_module is None or DashScopeTranscription is None:
+        raise TingwuUnavailableError("dashscope transcription sdk unavailable")
+    try:
+        dashscope_module.api_key = api_key
+    except Exception as exc:  # noqa: BLE001 - SDK 全局配置失败属于运行时不可用
+        raise TingwuUnavailableError(f"dashscope setup failed: {exc}") from exc
+
+    response = DashScopeTranscription.async_call(model=LEGACY_MODEL, file_urls=[file_url])
+    _raise_for_response(response, "dashscope transcription create")
+    output = _field(response, "output", {})
+    task_id = _field(output, "task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise TingwuUnavailableError(f"dashscope transcription missing task_id: {json.dumps(_response_payload(response), ensure_ascii=True)}")
+
+    result = _wait_legacy_task(task_id.strip(), api_key)
+    _raise_for_response(result, "dashscope transcription result")
+    result_output = _field(result, "output", {})
+    status = _field(result_output, "task_status")
+    if status == "FAILED":
+        message = _field(result_output, "message") or _field(result, "message") or "dashscope transcription failed"
+        raise RuntimeError(str(message))
+
+    text = extract_legacy_text(result)
+    if not text:
+        raise TingwuUnavailableError(f"dashscope transcription completed without transcript text: {json.dumps(_response_payload(result), ensure_ascii=True)}")
+    return TingwuTranscript(
+        text=text,
+        raw_response=_response_payload(result),
+        data_id=task_id.strip(),
+        backend="dashscope-paraformer",
+        model=LEGACY_MODEL,
+    )
+
+
 def normalize_file_url(file_value: str | Path) -> str:
     return str(file_value)
 
@@ -286,9 +401,6 @@ def transcribe_file(
 ) -> TingwuTranscript:
     cfg = config or load_runtime_config()
     resolved_api_key = (api_key or resolve_api_key(cfg)).strip()
-    resolved_app_id = (app_id or resolve_app_id(cfg)).strip()
-    resolved_base_api_url = (base_api_url or resolve_base_api_url(cfg)).strip()
-    resolved_model = (model or resolve_model(cfg)).strip()
     resolved_max_polls = max_polls if max_polls is not None else int(
         os.environ.get("OPENCLAW_TINGWU_MAX_POLLS", DEFAULT_MAX_POLLS)
     )
@@ -296,14 +408,19 @@ def transcribe_file(
         os.environ.get("OPENCLAW_TINGWU_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS)
     )
     file_url = resolve_file_url(file_value, resolved_api_key)
+    resolved_app_id = app_id.strip() if app_id else resolve_optional_app_id(cfg)
+    if not resolved_app_id:
+        return transcribe_file_legacy(api_key=resolved_api_key, file_url=file_url)
 
     data_id = create_task(
         api_key=resolved_api_key,
-        base_api_url=resolved_base_api_url,
-        model=resolved_model,
-        app_id=resolved_app_id,
+        base_api_url=(base_api_url or resolve_base_api_url(cfg)).strip(),
+        model=(model or resolve_model(cfg)).strip(),
+        app_id=resolved_app_id.strip(),
         file_url=file_url,
     )
+    resolved_base_api_url = (base_api_url or resolve_base_api_url(cfg)).strip()
+    resolved_model = (model or resolve_model(cfg)).strip()
     response = poll_task(
         api_key=resolved_api_key,
         base_api_url=resolved_base_api_url,

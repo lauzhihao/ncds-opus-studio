@@ -199,6 +199,10 @@
     return shotByBeat.get(i + 1) || shots[i] || null;
   }
 
+  function isEditMode() {
+    return document.body.classList.contains('fp-editing');
+  }
+
   function renderShot(i) {
     const shot = currentShotForBeat(i);
     if (!shot) {
@@ -209,14 +213,16 @@
       return;
     }
     const assets = Array.isArray(shot.assets) ? shot.assets : [];
+    const edit = isEditMode();
     if (window.__overlays && window.__overlays.renderSketches) {
       window.__overlays.renderSketches(stageEl, assets, {
         srcFor: (n) => picAssetSrcFor(shot, assets[n - 1], n, i + 1),
+        edit,
       });
     }
     if (window.__overlays && window.__overlays.renderInto) {
       const emphasis = Array.isArray(shot.emphasis) ? shot.emphasis : [];
-      window.__overlays.renderInto(stageEl, emphasis);
+      window.__overlays.renderInto(stageEl, emphasis, { edit });
     }
   }
 
@@ -644,5 +650,21 @@
     }
   }
 
-  window.__player = { play, pause, showBeat, enterRecording, exitRecording, startRecordingPlayback, refreshSceneMotion, refreshVisual, beats, scenes, sceneNodes, sceneOrder, audioElements };
+  window.__player = {
+    play,
+    pause,
+    showBeat,
+    enterRecording,
+    exitRecording,
+    startRecordingPlayback,
+    refreshSceneMotion,
+    refreshVisual,
+    currentBeat: () => cur,
+    currentShot: () => currentShotForBeat(cur),
+    beats,
+    scenes,
+    sceneNodes,
+    sceneOrder,
+    audioElements,
+  };
 })();

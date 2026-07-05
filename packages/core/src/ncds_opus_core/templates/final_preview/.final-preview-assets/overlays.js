@@ -67,6 +67,7 @@
   function motionToClass(motion) {
     if (!motion || !motion.enter) return null;
     const e = motion.enter;
+    if (e === 'none') return null;
     if (e === 'fly-in' && motion.from) {
       const dir = ({ left: 'left', right: 'right', top: 'top', up: 'top', bottom: 'bottom', down: 'bottom' })[motion.from] || 'right';
       return 'oa-fly-' + dir;
@@ -80,7 +81,7 @@
 
   const STYLE_INLINE_KEYS = ['font', 'size', 'weight', 'color', 'rotation', 'letterSpacing',
             'shadow', 'padding', 'background', 'border', 'borderRadius', 'textDecoration',
-            'fontStyle', 'whiteSpace'];
+            'fontStyle', 'whiteSpace', 'baselineShift'];
 
   function hasStyleKeys(s) {
     if (!s || typeof s !== 'object') return false;
@@ -104,6 +105,7 @@
     if (s.textDecoration) el.style.setProperty('--os-text-decoration', s.textDecoration);
     if (s.fontStyle)    el.style.setProperty('--os-font-style', s.fontStyle);
     if (s.whiteSpace)   el.style.setProperty('--os-white-space', s.whiteSpace);
+    if (s.baselineShift) el.style.setProperty('--os-baseline-shift', s.baselineShift);
     if (s.rotation != null) el.style.setProperty('--os-rotate', s.rotation + 'deg');
   }
 
@@ -333,9 +335,16 @@
     'fade': 'sk-enter-fade', 'zoom-pop': 'sk-enter-zoom', 'zoom-in': 'sk-enter-zoom',
     'drift-in': 'sk-enter-drift', 'bounce': 'sk-enter-bounce', 'ink-bleed': 'sk-enter-ink',
     'slide-clip': 'sk-enter-drift', 'handwrite': 'sk-enter-fade',
+    'slide-left': 'sk-enter-slide-left', 'slide-right': 'sk-enter-slide-right',
+    'slide-up': 'sk-enter-slide-up', 'slide-down': 'sk-enter-slide-down',
+    'spin-in': 'sk-enter-spin', 'drop-in': 'sk-enter-drop',
+    'shake-attention': 'sk-enter-shake', 'unfold': 'sk-enter-unfold',
+    'elastic-pop': 'sk-enter-elastic', 'tilt-in': 'sk-enter-tilt',
+    'blur-pulse': 'sk-enter-blur', 'rise-glow': 'sk-enter-rise',
   };
   function sketchEnterClass(motion) {
     const e = motion && motion.enter;
+    if (e === 'none') return '';
     return (e && SK_ENTER[e]) || 'sk-enter-zoom';
   }
 
@@ -440,12 +449,25 @@
         img.dataset.pendingMotion = enterClass;
         img.style.display = 'none';
       } else {
-        img.classList.add(enterClass);
+        if (enterClass) img.classList.add(enterClass);
       }
     });
 
     void layer.offsetHeight;
   }
 
-  window.__overlays = { renderInto, onBeat, clear, updateLive, renderSketches, STYLES, ANIMS };
+  function updateSketchLive(sceneEl, index, patch) {
+    if (!sceneEl || !patch) return;
+    const el = sceneEl.querySelector(
+      ':scope > .sketch-layer > .scene-sketch[data-sketch-index="' + (index + 1) + '"]'
+    );
+    if (!el) return;
+    if (patch.pos) {
+      if (patch.pos.x != null) el.style.left = patch.pos.x + '%';
+      if (patch.pos.y != null) el.style.top = patch.pos.y + '%';
+    }
+    if (patch.size != null) el.style.setProperty('--sk-size', patch.size + '%');
+  }
+
+  window.__overlays = { renderInto, onBeat, clear, updateLive, updateSketchLive, renderSketches, STYLES, ANIMS };
 })();

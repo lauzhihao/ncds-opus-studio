@@ -178,8 +178,25 @@ def save_chains(chains: list[dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 @dataclass
 class _Index:
-    # aweme_id -> 最近一个(在途或 24h 内创建)cron 深采任务 id
+    # platform:aweme_id -> 最近一个(在途或 24h 内创建)cron 深采任务 id
     shenkuo_recent: dict[str, str] = field(default_factory=dict)
+
+
+def _work_key(platform: str, aweme: str) -> str:
+    return f"{(platform or 'douyin').strip().lower() or 'douyin'}:{aweme}"
+
+
+def _source_url_for(platform: str, aweme: str, author: str = "") -> str:
+    platform = (platform or "douyin").strip().lower() or "douyin"
+    if platform == "youtube":
+        return f"https://www.youtube.com/watch?v={aweme}"
+    if platform == "tiktok":
+        handle = author
+        if ":" in handle:
+            handle = handle.split(":", 1)[1]
+        handle = handle.strip().lstrip("@") or "_"
+        return f"https://www.tiktok.com/@{handle}/video/{aweme}"
+    return f"https://www.douyin.com/video/{aweme}"
 
 
 def _build_index(store: TaskStore) -> _Index:
@@ -195,7 +212,8 @@ def _build_index(store: TaskStore) -> _Index:
         if m.cmd == "shenkuo":
             aweme = str(m.params.get("aweme") or "")
             if aweme and recent:
-                idx.shenkuo_recent.setdefault(aweme, m.task_id)
+                platform = str(m.params.get("platform") or "douyin")
+                idx.shenkuo_recent.setdefault(_work_key(platform, aweme), m.task_id)
     return idx
 
 
@@ -258,12 +276,14 @@ async def _consume_events(
         except (json.JSONDecodeError, UnicodeDecodeError):
             logger.warning("[planner] 坏事件行,跳过照常推进: %r", line[:120])
         if isinstance(ev, dict) and ev.get("type") in _EVENT_TYPES:
+            platform = str(ev.get("platform") or "douyin").strip().lower() or "douyin"
             aweme = str(ev.get("aweme_id") or "").strip()
             sec_uid = str(ev.get("sec_uid") or "").strip()
             if not aweme or not sec_uid:
                 logger.warning("[planner] 事件缺 aweme_id/sec_uid,跳过: %r", line[:120])
             else:
-                existing = idx.shenkuo_recent.get(aweme)
+                key = _work_key(platform, aweme)
+                existing = idx.shenkuo_recent.get(key)
                 if existing is not None:
                     # 防重命中(在途或 24h 内已深采):不重派;链缺失则补登记
                     # ——覆盖「crash 在 submit 后、链落盘前」的重放窗口
@@ -276,11 +296,18 @@ async def _consume_events(
                     # 「防重检查→submit」之间无 await:同一事件循环内原子
                     try:
                         task_id = await runner.submit(
-                            "shenkuo", {"aweme": aweme}, source="cron")
+                            "shenkuo",
+                            {
+                                "aweme": aweme,
+                                "platform": platform,
+                                "source_url": _source_url_for(platform, aweme, sec_uid),
+                            },
+                            source="cron",
+                        )
                     except Exception:  # noqa: BLE001 — 派发失败不消费该行,下轮重试
                         logger.exception("[planner] 深采派发失败,事件消费暂停: %s", aweme)
                         break
-                    idx.shenkuo_recent[aweme] = task_id
+                    idx.shenkuo_recent[key] = task_id
                     chains_dirty |= _register_chain(chains, aweme, sec_uid, task_id)
                     logger.info("[planner] 信号深采派发: aweme=%s -> %s", aweme, task_id)
         pos = line_end

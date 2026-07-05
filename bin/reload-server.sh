@@ -10,10 +10,29 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${NOF_SERVER_PORT:-8810}"
 VITE_PORT=5173
+SELF_PGID="$(ps -o pgid= -p "$$" | tr -d ' ' || true)"
 
 kill_pids() {
   local label="$1"
   local pids="$2"
+  if [ -z "$pids" ]; then
+    return
+  fi
+  local pgids=""
+  local pid pgid
+  for pid in $pids; do
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    if [ -n "$pgid" ] && [ "$pgid" != "$SELF_PGID" ] && [ "$pgid" != "1" ]; then
+      pgids="$pgids $pgid"
+    fi
+  done
+  pgids="$(printf '%s\n' $pgids 2>/dev/null | sort -u | tr '\n' ' ' || true)"
+  if [ -n "$pgids" ]; then
+    for pgid in $pgids; do
+      kill -9 -- "-$pgid" 2>/dev/null || true
+    done
+    echo "[reload-server] kill -9 $label process groups: $pgids"
+  fi
   if [ -n "$pids" ]; then
     # shellcheck disable=SC2086
     kill -9 $pids 2>/dev/null || true
@@ -21,11 +40,30 @@ kill_pids() {
   fi
 }
 
+port_listening() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
+
 kill_port_listener() {
   local port="$1"
   local pids
   pids="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | sort -u || true)"
   kill_pids ":$port" "$pids"
+}
+
+wait_port_free() {
+  local port="$1"
+  local i
+  for i in $(seq 1 30); do
+    if ! port_listening "$port"; then
+      return 0
+    fi
+    kill_port_listener "$port"
+    sleep 0.2
+  done
+  echo "[reload-server] ERROR: :$port still listening after kill -9" >&2
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN >&2 || true
+  exit 1
 }
 
 kill_matching_processes() {
@@ -61,12 +99,15 @@ done
 
 # 2) 再杀 uvicorn reloader 父/子进程。它可能不再 LISTEN，但仍会卡住 screen/session。
 kill_matching_processes "nof-server" "ncds_opus_factory.server.app:app"
+kill_matching_processes "vite" "$ROOT/web/node_modules/.bin/vite"
 
 # 3) 最后杀 dev_up 创建的 screen session 外壳，避免 stale session 影响下一次启动。
 kill_screen_session "dev-nof"
 kill_screen_session "dev-vite"
 
-sleep 0.2
+for p in "$PORT" "$VITE_PORT"; do
+  wait_port_free "$p"
+done
 
 # 起 HMR 三件套(redis + vite:5173 + NOF_DEV=1 --reload 的 nof-server)；dev_up 内部 nohup+disown detach
 exec "$ROOT/bin/dev_up.sh" up

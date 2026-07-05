@@ -30,6 +30,7 @@ SCREEN_NOF="dev-nof"
 log() { echo "[dev_up] $*"; }
 
 port_listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+http_ok() { curl -fsS --max-time 2 "$1" >/dev/null 2>&1; }
 
 ensure_redis() {
   if redis-cli ping >/dev/null 2>&1; then
@@ -72,18 +73,26 @@ start_vite() {
 }
 
 start_server() {
+  if port_listening "$PORT"; then
+    if http_ok "http://127.0.0.1:$PORT/health"; then
+      log "nof-server: already running (:$PORT, health OK)"
+      return 0
+    fi
+    log "ERROR: :$PORT is listening but /health is not ready; run bin/reload-server.sh" >&2
+    exit 1
+  fi
   mkdir -p "$STATE_DIR"
   screen -dmS "$SCREEN_NOF" bash -c \
     "NOF_DEV=1 exec '$VENV_UVICORN' ncds_opus_factory.server.app:app --host '$HOST' --port '$PORT' --reload --reload-dir src > '$SERVER_LOG' 2>&1"
   local i
-  for i in $(seq 1 10); do
-    if port_listening "$PORT"; then
-      log "nof-server: up (NOF_DEV=1 + --reload, :$PORT)"
+  for i in $(seq 1 30); do
+    if http_ok "http://127.0.0.1:$PORT/health"; then
+      log "nof-server: up (NOF_DEV=1 + --reload, :$PORT, health OK)"
       return 0
     fi
     sleep 1
   done
-  log "ERROR: nof-server didn't start on :$PORT within 10s, see $SERVER_LOG" >&2
+  log "ERROR: nof-server health check failed on :$PORT within 30s, see $SERVER_LOG" >&2
   exit 1
 }
 
@@ -117,7 +126,13 @@ case "$cmd" in
   status)
     redis-cli ping >/dev/null 2>&1 && log "redis: up" || log "redis: down"
     port_listening "$VITE_PORT" && log "vite: up (:$VITE_PORT)" || log "vite: down"
-    port_listening "$PORT" && log "nof-server: up (:$PORT)" || log "nof-server: down"
+    if http_ok "http://127.0.0.1:$PORT/health"; then
+      log "nof-server: up (:$PORT, health OK)"
+    elif port_listening "$PORT"; then
+      log "nof-server: listening but health failed (:$PORT)"
+    else
+      log "nof-server: down"
+    fi
     worker_status
     ;;
   *)

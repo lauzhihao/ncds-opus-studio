@@ -9,7 +9,7 @@
       {platform, sec_uid, unique_id, nickname, avatar,
        follower_count, like_count, works_count, refreshed_at}
 
-寻址键(author_key):douyin = sec_uid;tiktok = unique_id(handle,resolve 阶段
+寻址键(author_key):douyin = sec_uid;tiktok/youtube = unique_id(handle/channel,resolve 阶段
 就拿得到,sec_uid 要拉档案后才知道)。refreshed_at = 我方最后一次写入该档案的
 unix 秒,既给卡片"最近更新 X前",也做 TTL 新鲜判定。
 
@@ -62,10 +62,10 @@ def ttl_seconds() -> float:
 
 
 def author_key(platform: str, sec_uid: str = "", unique_id: str = "") -> str:
-    """库寻址键:tiktok 用 handle(unique_id),其余(douyin)用 sec_uid;各自缺失时互为兜底。"""
+    """库寻址键:tiktok/youtube 用 handle/channel(unique_id),douyin 用 sec_uid。"""
     sec_uid = (sec_uid or "").strip()
     unique_id = (unique_id or "").strip()
-    if platform == "tiktok":
+    if platform in {"tiktok", "youtube"}:
         return unique_id or sec_uid
     return sec_uid or unique_id
 
@@ -113,7 +113,7 @@ def save_profile(
     path.parent.mkdir(parents=True, exist_ok=True)
     doc = dict(profile)
     doc["platform"] = platform
-    if platform == "tiktok":
+    if platform in {"tiktok", "youtube"}:
         doc.setdefault("unique_id", author_id)
         doc.setdefault("sec_uid", profile.get("sec_uid") or "")
     else:

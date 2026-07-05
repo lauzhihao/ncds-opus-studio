@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ncds_opus_core.common import cancel as _cancel
+from ncds_opus_factory.server.pipeline_asr_tasks import is_transcript_only_collect
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,15 @@ class PipelineAgentTasksMixin:
     """ASR enrich / Shenkuo refresh / Guiguzi background task methods."""
 
     def _spawn_asr_enrich(self, job_id: str) -> None:
-        """asr 快采 done 后，后台补 Demucs 音轨分离 + 抠图（_push_outputs_patch 增量推）。
+        """asr 快采 done 后，后台补抠图等素材（音轨已在首趟采集，二趟幂等确认）。
         重跑 asr 前先 cancel 旧 enrich task，避免两趟竞态写 outputs.collected。"""
+        try:
+            state = self._load(job_id)
+        except FileNotFoundError:
+            return
+        if is_transcript_only_collect(state.inputs):
+            self._push_progress(job_id, "asr", "沈括纯文案模式：跳过音轨/抠图后台补齐")
+            return
         old = self._enrich_tasks.get(job_id)
         if old is not None and not old.done():
             old.cancel()
@@ -32,7 +40,7 @@ class PipelineAgentTasksMixin:
 
     async def _enrich_asr_collected(self, job_id: str) -> None:
         """后台第二趟采集：对 asr.outputs.collected 每条作品 collect_one(do_audio/do_frames=True)
-        补音轨/抠图（transcribe/comments 已 cached 跳过），字段级合并回 collected 并增量推送。
+        补抠图并幂等确认音轨（transcribe/comments 已 cached 跳过），字段级合并回 collected 并增量推送。
         失败不影响主链路（快采产物已能驱动下游 rw）。"""
         from ncds_opus_factory.commands import shenkuo
 
@@ -61,6 +69,8 @@ class PipelineAgentTasksMixin:
                     entry["aweme_id"], collect_dir,
                     meta={}, on_progress=on_progress,
                     do_audio=True, do_frames=True,
+                    platform=entry.get("platform") or "douyin",
+                    source_url=entry.get("url") if isinstance(entry.get("url"), str) else None,
                 )
             except asyncio.CancelledError:
                 raise
@@ -90,6 +100,8 @@ class PipelineAgentTasksMixin:
             state = self._load(job_id)
         except FileNotFoundError as e:
             raise KeyError(job_id) from e
+        if is_transcript_only_collect(state.inputs):
+            return False
         asr = state.nodes.get("asr")
         if asr is None or asr.status in ("running", "queued"):
             return False
@@ -181,6 +193,18 @@ class PipelineAgentTasksMixin:
         p = self._guiguzi_path(job_id)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def save_guiguzi_selection(self, job_id: str, topic: dict[str, Any], analysis: dict[str, Any] | None = None) -> None:
+        """把用户最终选中的鬼谷子选题落到 guiguzi.json，供柳永重跑时服务端兜底读取。"""
+        if not isinstance(topic, dict) or not str(topic.get("title") or "").strip():
+            return
+        doc = self.get_guiguzi(job_id) or {}
+        doc["chosen_topic"] = topic
+        doc["chosen_title"] = str(topic.get("title") or "").strip()
+        if isinstance(analysis, dict) and analysis:
+            doc["chosen_analysis"] = analysis
+        doc["updated_at"] = time.time()
+        self._write_guiguzi(job_id, doc)
 
     @staticmethod
     def _norm_guiguzi_items(items: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -291,6 +315,8 @@ class PipelineAgentTasksMixin:
         prompt 传入(用户编辑后的提示词模板,含 $source)则用它,且按全量重出(自定义 prompt 不做增量)。
         prompt 为空时按 analysis 拼默认模板:force=False（增量,只为新评论补题）/ True（全部重出）。mock 一律全量。
         """
+        from ncds_opus_factory.commands.guiguzi import MODELS as GUIGUZI_MODELS
+
         try:
             mock = self._load(job_id).mock
         except FileNotFoundError as e:
@@ -310,16 +336,21 @@ class PipelineAgentTasksMixin:
 
         has_prompt = bool(prompt and prompt.strip())
         existing = self.get_guiguzi(job_id) or {}
-        base: dict[str, list[dict[str, Any]]] = {"opus": [], "deepseek": []}
+        existing_cands = existing.get("candidates") or {}
+        model_ids = list(GUIGUZI_MODELS)
+        if isinstance(existing_cands, dict):
+            for m in existing_cands:
+                if m not in model_ids:
+                    model_ids.append(m)
+        base: dict[str, list[dict[str, Any]]] = {m: [] for m in model_ids}
         gen = norm
         # 自定义 prompt 总是全量(prompt 已把 N 条评论拼死);否则按 force 决定增量。
         # 无评论「直接拆解」一律全量(增量靠评论 anchor 比对,不适用)。
-        if not no_comments and not force and not has_prompt and not mock and existing.get("candidates"):
+        if not no_comments and not force and not has_prompt and not mock and existing_cands:
             cur_comments = {it["comment"] for it in norm}
             covered: set[str] = set()
-            cands = existing.get("candidates") or {}
-            for m in ("opus", "deepseek"):
-                kept = [t for t in ((cands.get(m) or {}).get("topics") or [])
+            for m in model_ids:
+                kept = [t for t in ((existing_cands.get(m) or {}).get("topics") or [])
                         if t.get("anchor_comment") in cur_comments]
                 base[m] = kept
                 covered |= {t.get("anchor_comment") for t in kept}
@@ -371,14 +402,19 @@ class PipelineAgentTasksMixin:
             else:
                 # 纯移除（没有新评论）：无需跑模型，只落保留的旧题。
                 new_cands = {}
+            model_ids = list(guiguzi.MODELS)
+            for source in (base, new_cands):
+                for m in source:
+                    if m not in model_ids:
+                        model_ids.append(m)
             candidates: dict[str, Any] = {}
-            for m in ("opus", "deepseek"):
+            for m in model_ids:
                 new_m = new_cands.get(m) or {"topics": [], "error": None}
                 candidates[m] = {
                     "topics": list(base.get(m) or []) + list(new_m.get("topics") or []),
                     "error": new_m.get("error"),
                 }
-            flat = [t for m in ("opus", "deepseek") for t in candidates[m]["topics"]]
+            flat = [t for m in model_ids for t in candidates[m]["topics"]]
             doc = {"stage": "done", "status": "done", "items": full_items,
                    "analysis": kept_analysis, "chosen_analysis": analysis,
                    "candidates": candidates, "topics": flat, "prompt": used_prompt,

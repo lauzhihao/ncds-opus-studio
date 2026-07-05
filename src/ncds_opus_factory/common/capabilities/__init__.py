@@ -4,11 +4,11 @@
 形成一个统一的「这是哪个能力该用哪个实现」的 import 面：
 
     from ncds_opus_factory.common import capabilities
-    txt = capabilities.transcribe(video)          # 转写(听悟/Paraformer)
+    txt = capabilities.transcribe(video)          # 转写(Bcut 首选，听悟/Paraformer fallback)
     capabilities.separate_audio(video, out_dir)   # 抽原声 + Demucs 分离
     capabilities.extract_frames(video, out_dir)   # 静止帧检测
     capabilities.cutout(frames, out_dir)          # 裁舞台区 + 阈值抠图
-    capabilities.fetch_and_download               # 下载(yt-dlp 匿名优先 + TikHub 兜底)
+    capabilities.fetch_and_download               # 下载(DouK sidecar -> yt-dlp -> TikHub 兜底)
     capabilities.fetch_video_url / download_video / download_cover  # 下载原语(真身 tikhub_client)
     capabilities.fetch_top_comments               # 评论(真身 tikhub_client)
 

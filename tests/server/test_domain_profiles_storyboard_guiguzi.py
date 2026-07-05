@@ -460,3 +460,36 @@ class TestGuiguziGenerateTopicsDomain:
 
         assert captured
         assert all("领域软背景" not in p for p in captured)
+
+    def test_film_no_comment_prompt_still_outputs_five_topics(self, monkeypatch: pytest.MonkeyPatch):
+        """domain=film 且无评论 → 鬼谷子仍出 5 个选题，不把柳永增量指令当出题数量。"""
+        from ncds_opus_factory.commands import guiguzi
+
+        mock_topics = json.dumps([
+            {"index": i, "title": f"选题{i}", "angle": "角度", "why": "可补强成稿", "potential": 7}
+            for i in range(1, 6)
+        ], ensure_ascii=False)
+        captured: list[str] = []
+
+        def fake_call(prompt: str, **_: Any) -> str:
+            captured.append(prompt)
+            return mock_topics
+
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_opus", fake_call)
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_deepseek", fake_call)
+        monkeypatch.setattr("ncds_opus_factory.commands.guiguzi.call_agy", fake_call)
+        monkeypatch.setattr("ncds_opus_factory.common.topic_store.merge",
+                            lambda topics, **_: {"added": len(topics), "skipped": 0})
+
+        result = guiguzi.generate_topics(
+            [{"text": "女主推开地下室的门，发现墙上有旧照片。", "comment": ""}],
+            self._ANALYSIS,
+            require_comment=False,
+            domain="film",
+        )
+
+        assert captured
+        assert "产出 5 个" in result["prompt"]
+        assert "10 个增量" not in result["prompt"]
+        assert all("长度 5" in p for p in captured)
+        assert all("女主推开地下室的门" in p for p in captured)

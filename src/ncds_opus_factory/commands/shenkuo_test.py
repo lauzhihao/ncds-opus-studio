@@ -26,8 +26,17 @@ def test_simplify_aweme():
         "statistics": {"digg_count": 100, "comment_count": 5, "share_count": 2, "collect_count": 9},
     }
     assert tikhub_client.simplify_aweme(a) == {
-        "aweme_id": "123", "desc": "测试", "digg": 100, "comment": 5, "share": 2, "collect": 9,
-        "create": 1700, "cover_url": "", "duration": 0,  # 无 video 字段 -> 封面/时长回退
+        "platform": "douyin",
+        "aweme_id": "123",
+        "desc": "测试",
+        "digg": 100,
+        "comment": 5,
+        "share": 2,
+        "collect": 9,
+        "create": 1700,
+        "cover_url": "",
+        "duration": 0,
+        "share_url": "https://www.douyin.com/video/123",
     }
 
 
@@ -97,7 +106,7 @@ def test_fetch_posts_multipass_unions_flaky_passes(monkeypatch):
     ]
     calls = {"n": 0}
 
-    def fake(author, max_items, on_progress=None):
+    def fake(author, max_items, token=None, on_progress=None):
         r = seq[min(calls["n"], len(seq) - 1)]
         calls["n"] += 1
         return r
@@ -113,7 +122,7 @@ def test_fetch_posts_multipass_tolerates_exception(monkeypatch):
     seq = [[{"aweme_id": "1"}, {"aweme_id": "2"}], "boom", [{"aweme_id": "2"}, {"aweme_id": "3"}]]
     calls = {"n": 0}
 
-    def fake(author, max_items, on_progress=None):
+    def fake(author, max_items, token=None, on_progress=None):
         item = seq[calls["n"]]
         calls["n"] += 1
         if item == "boom":
@@ -123,6 +132,21 @@ def test_fetch_posts_multipass_tolerates_exception(monkeypatch):
     monkeypatch.setattr(shenkuo.tikhub_client, "fetch_user_posts", fake)
     out = shenkuo._fetch_posts_multipass("sec", 200, shenkuo._noop)
     assert {p["aweme_id"] for p in out} == {"1", "2", "3"}  # 异常趟跳过,前后并集
+
+
+def test_fetch_posts_multipass_passes_platform(monkeypatch):
+    seen = {}
+
+    def fake(platform, author, max_items, token=None, on_progress=None):
+        seen.update({"platform": platform, "author": author, "max_items": max_items})
+        return [{"aweme_id": "tk1"}]
+
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_author_posts", fake)
+
+    out = shenkuo._fetch_posts_multipass("creator", 10, shenkuo._noop, platform="tiktok")
+
+    assert out == [{"aweme_id": "tk1"}]
+    assert seen == {"platform": "tiktok", "author": "creator", "max_items": 10}
 
 
 # --------------------------------------------------------------------------- #
@@ -354,12 +378,12 @@ def test_run_author_picks_top_by_digg(tmp_path, monkeypatch):
         {"aweme_id": "3", "desc": "c", "digg": 50},
     ]
     monkeypatch.setattr(shenkuo.tikhub_client, "fetch_user_posts",
-                        lambda sec, max_items, on_progress=None: posts)
+                        lambda sec, max_items, token=None, on_progress=None: posts)
     seen: list[str] = []
 
     def fake_collect(aid, ad, meta=None, max_frames=8, engine="threshold",
                      top_comments=20, platform="douyin", on_progress=shenkuo._noop,
-                     author_domain=None):
+                     author_domain=None, source_url=None):
         seen.append(aid)
         return {"aweme_id": aid, "digg": (meta or {}).get("digg"), "status": {"download": "ok"}}
 
@@ -372,6 +396,44 @@ def test_run_author_picks_top_by_digg(tmp_path, monkeypatch):
     coll = json.loads((ad / "collected.json").read_text(encoding="utf-8"))
     assert len(coll["items"]) == 2
     assert result["all_posts"] == 3
+
+
+def test_run_tiktok_author_uses_platform_dir_and_source_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(shenkuo, "BENCH", tmp_path / "benchmark")
+    monkeypatch.setattr(shenkuo, "COLLECTED", tmp_path / "collected")
+    monkeypatch.setattr(shenkuo, "BENCH_DB", tmp_path / "shenkuo" / "benchmark.db")
+    posts = [
+        {
+            "aweme_id": "7650894465690766623",
+            "desc": "tk",
+            "digg": 10,
+            "share_url": "https://www.tiktok.com/@creator/video/7650894465690766623",
+        }
+    ]
+    monkeypatch.setattr(
+        shenkuo.tikhub_client,
+        "fetch_author_posts",
+        lambda platform, author, max_items, token=None, on_progress=None: posts,
+    )
+    monkeypatch.setattr(shenkuo.tikhub_client, "fetch_tiktok_profile", lambda *_a, **_k: None)
+    seen: dict[str, object] = {}
+
+    def fake_collect(aid, ad, **kwargs):
+        seen["aid"] = aid
+        seen["author_dir"] = ad
+        seen.update(kwargs)
+        return {"aweme_id": aid, "platform": kwargs["platform"], "status": {"download": "ok"}}
+
+    monkeypatch.setattr(shenkuo, "collect_one", fake_collect)
+
+    result = shenkuo.run(author="creator", platform="tiktok", top=1)
+
+    ad = tmp_path / "benchmark" / "author_tiktok_creator"
+    assert result["author_dir"] == str(ad)
+    assert (ad / "all_posts.json").exists()
+    assert seen["author_dir"] == ad
+    assert seen["platform"] == "tiktok"
+    assert seen["source_url"] == "https://www.tiktok.com/@creator/video/7650894465690766623"
 
 
 # --------------------------------------------------------------------------- #

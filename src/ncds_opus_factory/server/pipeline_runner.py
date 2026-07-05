@@ -140,7 +140,15 @@ class PipelineRunner(
             raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
         domain_guidance = rw_helpers._rw_domain_guidance(state.inputs.get("domain"))
-        system_prompt, user_prompt = rw_helpers._build_rw_prompt(source_text, domain_guidance=domain_guidance)
+        rw_config = state.node_configs.get("rw") or {}
+        guiguzi_context = rw_helpers._rw_guiguzi_context(
+            rw_config, job_dir, domain=state.inputs.get("domain")
+        )
+        system_prompt, user_prompt = rw_helpers._build_rw_prompt(
+            source_text,
+            domain_guidance=domain_guidance,
+            guiguzi_context=guiguzi_context,
+        )
 
         return await PipelineRwRun(
             runner=self,

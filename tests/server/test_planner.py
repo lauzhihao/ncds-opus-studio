@@ -70,6 +70,17 @@ def _event(aweme: str, sec_uid: str, etype="new_post") -> str:
     return json.dumps({"type": etype, "aweme_id": aweme, "sec_uid": sec_uid,
                        "ts": 1750000000, "desc": "测试事件"}, ensure_ascii=False)
 
+
+def _aweme_params(aweme: str, platform: str = "douyin", sec_uid: str = "uidA") -> dict[str, str]:
+    if platform == "youtube":
+        source_url = f"https://www.youtube.com/watch?v={aweme}"
+    elif platform == "tiktok":
+        source_url = f"https://www.tiktok.com/@{sec_uid}/video/{aweme}"
+    else:
+        source_url = f"https://www.douyin.com/video/{aweme}"
+    return {"aweme": aweme, "platform": platform, "source_url": source_url}
+
+
 def _write_events(lines: list[str], tail: str | None = None) -> None:
     """整批写事件文件;tail 是不带 \\n 的不完整尾行。"""
     d = planner.shenkuo_dir()
@@ -109,9 +120,9 @@ def test_events_dispatch_shenkuo_and_register_chains():
 
     assert stats["events_consumed"] == 3
     assert [s["cmd"] for s in runner.submits] == ["shenkuo", "shenkuo"]
-    assert runner.submits[0] == {"cmd": "shenkuo", "params": {"aweme": "a1"},
+    assert runner.submits[0] == {"cmd": "shenkuo", "params": _aweme_params("a1"),
                                  "source": "cron"}
-    assert runner.submits[1]["params"] == {"aweme": "a2"}
+    assert runner.submits[1]["params"] == _aweme_params("a2", sec_uid="uidB")
     chains = planner.load_chains()
     assert [(c["aweme_id"], c["sec_uid"]) for c in chains] == [("a1", "uidA"),
                                                                ("a2", "uidB")]
@@ -143,6 +154,32 @@ def test_dedup_skip_still_registers_missing_chain():
     assert len(chains) == 1 and chains[0]["shenkuo_task_id"] == "t_old"
 
 
+def test_platform_event_dispatches_platform_params():
+    _write_events([
+        json.dumps(
+            {
+                "type": "new_post",
+                "platform": "tiktok",
+                "aweme_id": "7650894465690766623",
+                "sec_uid": "creator",
+                "ts": 1750000000,
+                "desc": "tk",
+            },
+            ensure_ascii=False,
+        )
+    ])
+    store = _FakeStore()
+    runner = _FakeRunner(store=store)
+
+    _tick(runner, store)
+
+    assert runner.submits[0]["params"] == _aweme_params(
+        "7650894465690766623",
+        platform="tiktok",
+        sec_uid="creator",
+    )
+
+
 def test_bad_line_skipped_offset_advances():
     _write_events(["{这不是json", _event("a1", "uidA"),
                    json.dumps({"type": "unknown_event"})])
@@ -150,7 +187,7 @@ def test_bad_line_skipped_offset_advances():
     runner = _FakeRunner(store=store)
     stats = _tick(runner, store)
     assert stats["events_consumed"] == 3
-    assert len(runner.submits) == 1 and runner.submits[0]["params"] == {"aweme": "a1"}
+    assert len(runner.submits) == 1 and runner.submits[0]["params"] == _aweme_params("a1")
     assert planner.read_offset() == planner.events_path().stat().st_size
 
 
@@ -179,7 +216,7 @@ def test_incomplete_tail_line_not_consumed():
         f.write(',"sec_uid":"uidB","ts":1}\n')
     runner2 = _FakeRunner(store=store)
     _tick(runner2, store)
-    assert len(runner2.submits) == 1 and runner2.submits[0]["params"] == {"aweme": "a2"}
+    assert len(runner2.submits) == 1 and runner2.submits[0]["params"] == _aweme_params("a2", sec_uid="uidB")
     assert planner.read_offset() == planner.events_path().stat().st_size
 
 
@@ -231,7 +268,7 @@ def test_event_submit_exception_freezes_offset():
     # 下轮恢复:续读只剩失败那行
     runner2 = _FakeRunner(store=store)
     _tick(runner2, store)
-    assert len(runner2.submits) == 1 and runner2.submits[0]["params"] == {"aweme": "a2"}
+    assert len(runner2.submits) == 1 and runner2.submits[0]["params"] == _aweme_params("a2", sec_uid="uidB")
     assert planner.read_offset() == planner.events_path().stat().st_size
 
 

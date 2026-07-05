@@ -543,3 +543,37 @@ class PipelineSchedulerMixin:
                         {"type": "node_status", "job_id": state.job_id, "node": node_name, "state": asdict(node)},
                     )
         return state
+
+    async def handle_pipeline_terminal(self, meta: Any, status: str, result: dict[str, Any] | None) -> None:
+        """TaskRunner terminal hook: push finished pipeline_node status back to /jobs SSE."""
+        if getattr(meta, "cmd", None) != self._PIPELINE_TASK_CMD:
+            return
+        params = getattr(meta, "params", None) or {}
+        job_id = params.get("job_id")
+        node_name = params.get("node_name")
+        if not isinstance(job_id, str) or not isinstance(node_name, str):
+            return
+        try:
+            state = self.reconcile_runtime_state(self._load(job_id), emit=True)
+            node = state.nodes.get(node_name)
+            if node is not None and node.status in {"queued", "running"}:
+                if status == "completed":
+                    outputs = result.get("outputs") if isinstance(result, dict) else None
+                    node.outputs = outputs if isinstance(outputs, dict) else node.outputs
+                    node.status = "done"
+                    node.progress = "完成"
+                    node.error = None
+                elif status == "failed":
+                    node.status = "failed"
+                    node.error = getattr(meta, "error", None) or "后台任务失败，请重试"
+                elif status == "cancelled":
+                    self._reset_node(node)
+                    node.error = "cancelled"
+                node.finished_at = time.time()
+                self._save(state)
+                self._emit(
+                    job_id,
+                    {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(node)},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[pipeline] terminal reconcile failed %s/%s: %s", job_id, node_name, exc)

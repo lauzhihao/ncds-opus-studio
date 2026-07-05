@@ -13,6 +13,8 @@ set -euo pipefail
 SERVER="${DEPLOY_SSH:-root@154.201.79.83}"
 REMOTE_DIR="${DEPLOY_DIR:-/root/projects/ncds-opus-studio}"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+FINAL_PREVIEW_FONTS_DIR="packages/core/src/ncds_opus_core/templates/final_preview/.final-preview-assets/fonts"
+FINAL_PREVIEW_FONT_SENTINEL="$FINAL_PREVIEW_FONTS_DIR/xy-kaiti/Regular.woff2"
 
 HARD=""
 [ "${1:-}" = "--hard" ] && HARD="--hard"
@@ -30,5 +32,15 @@ git push origin "$BRANCH"
 echo "[deploy] 触发服务器更新部署"
 # shellcheck disable=SC2029  # 故意在本地展开变量传给远端
 ssh "$SERVER" "cd '$REMOTE_DIR' && ./scripts/server_deploy.sh --branch '$BRANCH' $HARD"
+
+if ssh "$SERVER" "test -f '$REMOTE_DIR/$FINAL_PREVIEW_FONT_SENTINEL'"; then
+  echo "[deploy] 成片预览字体已存在,跳过 scp"
+elif [ -d "$FINAL_PREVIEW_FONTS_DIR" ]; then
+  echo "[deploy] 远端缺少成片预览字体,scp -> $SERVER:$REMOTE_DIR/$FINAL_PREVIEW_FONTS_DIR"
+  ssh "$SERVER" "mkdir -p '$REMOTE_DIR/$FINAL_PREVIEW_FONTS_DIR'"
+  scp -r "$FINAL_PREVIEW_FONTS_DIR/." "$SERVER:$REMOTE_DIR/$FINAL_PREVIEW_FONTS_DIR/"
+else
+  echo "[deploy] WARN: 远端缺少字体,但本地字体目录不存在,跳过字体 scp: $FINAL_PREVIEW_FONTS_DIR"
+fi
 
 echo "[deploy] 完成。线上: https://opus.vooice.tech/studio/"

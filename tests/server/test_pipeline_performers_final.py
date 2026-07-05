@@ -505,7 +505,68 @@ def test_run_asr_step_normal_two_urls(tmp_path: Path, monkeypatch: pytest.Monkey
     assert [it["index"] for it in out["collected"]] == [1, 2]
     assert [it["url"] for it in out["collected"]] == urls
     assert all(c["author_dir"] == jd / "01_collect" for c in calls)
-    assert all(c["do_audio"] is False and c["do_frames"] is False for c in calls)
+    assert all(c["do_audio"] is True and c["do_frames"] is False for c in calls)
+    assert all(c["top_comments"] == 20 for c in calls)
+
+
+def test_run_asr_step_film_domain_skips_comments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """domain=film → 沈括纯文案模式：不拉评论、不做抠图，保留音轨采集。"""
+    jd = tmp_path / "video-jobs" / "job1"
+    seen: dict[str, Any] = {}
+
+    monkeypatch.setattr(perf, "_resolve_aweme_id", lambda _url: "film1")
+    monkeypatch.setattr(perf, "_fetch_one_video_detail", lambda aweme_id: {"aweme_id": aweme_id})
+    monkeypatch.setattr(perf, "_extract_meta", lambda _detail: {"desc": "film meta"})
+
+    def fake_collect_one(aweme_id, author_dir, **kwargs):
+        seen.update(kwargs)
+        return {"aweme_id": aweme_id, "text": "影视解说原稿", "status": {"ok": True}}
+
+    monkeypatch.setattr(perf, "_collect_one", fake_collect_one)
+
+    out = perf.run_asr_step(_noop, job_dir=str(jd), urls=["https://example.com/film"], domain="film")
+
+    assert out["collected"][0]["text"] == "影视解说原稿"
+    assert seen["do_audio"] is True
+    assert seen["do_frames"] is False
+    assert seen["top_comments"] == 0
+
+
+def test_run_asr_step_youtube_passes_platform_source_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """YouTube URL → 不取抖音元数据，platform/source_url 传给沈括下载层。"""
+    jd = tmp_path / "video-jobs" / "job1"
+    seen: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        perf, "_fetch_one_video_detail",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("YouTube 不该取抖音元数据")),
+    )
+    monkeypatch.setattr(
+        perf,
+        "_fetch_video_ref_meta",
+        lambda _ref: {"desc": "YT meta", "author": "yt_author", "cover_url": "http://yt/cover.jpg"},
+    )
+
+    def fake_collect_one(aweme_id, author_dir, **kwargs):
+        seen["aweme_id"] = aweme_id
+        seen.update(kwargs)
+        return {"platform": kwargs["platform"], "aweme_id": aweme_id, "text": "YouTube 原稿", "status": {}}
+
+    monkeypatch.setattr(perf, "_collect_one", fake_collect_one)
+
+    out = perf.run_asr_step(
+        _noop,
+        job_dir=str(jd),
+        urls=["https://youtu.be/dQw4w9WgXcQ?si=x"],
+        domain="film",
+    )
+
+    assert out["collected"][0]["platform"] == "youtube"
+    assert out["collected"][0]["aweme_id"] == "dQw4w9WgXcQ"
+    assert seen["platform"] == "youtube"
+    assert seen["source_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert seen["meta"]["cover_url"] == "http://yt/cover.jpg"
+    assert seen["top_comments"] == 0
 
 
 def test_run_asr_step_metadata_failure_uses_share_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -568,6 +629,25 @@ def test_run_asr_step_all_failed_raises(tmp_path: Path, monkeypatch: pytest.Monk
 
     with pytest.raises(RuntimeError, match="全部"):
         perf.run_asr_step(_noop, job_dir=str(jd), urls=["https://example.com/x"])
+
+
+def test_run_asr_step_download_failed_without_text_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """collect_one 降级返回 download=failed 且无 text 时，上层必须判失败。"""
+    jd = tmp_path / "video-jobs" / "job1"
+    monkeypatch.setattr(perf, "_resolve_aweme_id", lambda _url: "aweme1")
+    monkeypatch.setattr(perf, "_fetch_one_video_detail", lambda aweme_id: {"aweme_id": aweme_id})
+    monkeypatch.setattr(perf, "_extract_meta", lambda _detail: {})
+    monkeypatch.setattr(
+        perf,
+        "_collect_one",
+        lambda aweme_id, _author_dir, **_kwargs: {
+            "aweme_id": aweme_id,
+            "status": {"download": "failed"},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="全部"):
+        perf.run_asr_step(_noop, job_dir=str(jd), urls=["https://example.com/a"])
 
 
 def test_run_asr_step_task_cancelled_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

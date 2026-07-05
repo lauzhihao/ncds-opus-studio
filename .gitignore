@@ -36,6 +36,11 @@ web/vite.config.js
 /assets/figure_lib/figures/*
 !/assets/figure_lib/figures/.gitkeep
 
+# 成片预览字体包：体积大且来源于 ncds-materials，本地/服务器按需 scp，不入库
+/packages/core/src/ncds_opus_core/templates/final_preview/.final-preview-assets/fonts/
+
 # 测试/工具产物
 .coverage
 uv.lock
+/outputs/
+/tmp/

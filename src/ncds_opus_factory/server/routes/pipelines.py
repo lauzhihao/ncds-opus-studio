@@ -42,11 +42,11 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import FileResponse
+from ncds_opus_core.pipelines import PIPELINE_REGISTRY
+from ncds_opus_core.templates import template_dir as _core_template_dir
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from ncds_opus_core.pipelines import PIPELINE_REGISTRY
-from ncds_opus_core.templates import template_dir as _core_template_dir
 from ncds_opus_factory.server.state import PIPELINE_RUNNER
 
 logger = logging.getLogger(__name__)
@@ -217,6 +217,17 @@ async def run_node(
     params = (body or {}).get("params") if isinstance(body, dict) else None
     force = bool((body or {}).get("force")) if isinstance(body, dict) else False
     try:
+        if node == "rw" and isinstance(params, dict):
+            guiguzi = params.get("guiguzi")
+            if isinstance(guiguzi, dict):
+                topic = guiguzi.get("chosen_topic")
+                analysis = guiguzi.get("chosen_analysis")
+                if isinstance(topic, dict):
+                    PIPELINE_RUNNER.save_guiguzi_selection(
+                        job_id,
+                        topic,
+                        analysis if isinstance(analysis, dict) else None,
+                    )
         await PIPELINE_RUNNER.run_node(job_id, node, params, force=force)
     except KeyError as e:
         raise HTTPException(404, _exc_msg(e))
@@ -345,7 +356,7 @@ async def refresh_shenkuo(job_id: str) -> dict[str, Any]:
     """进画布触发：后台刷新沈括已采作品的播放数据 + 评论（仅这两项，其余产物不动）。
 
     立即返回（fire-and-forget）；逐条作品 1 小时内只采一次（Redis 节流锁）省 API 成本。
-    refreshing=False 表示没起刷新（未采过 / 正在采 / 已有刷新在跑），属正常 no-op。
+    refreshing=False 表示没起刷新（未采过 / 正在采 / 已有刷新在跑 / 纯文案模式），属正常 no-op。
     """
     try:
         refreshing = PIPELINE_RUNNER.refresh_shenkuo(job_id)
@@ -536,6 +547,10 @@ async def stream_events(job_id: str, since_seq: int | None = None) -> EventSourc
                                     replay_lines.append(raw)
                             except (json.JSONDecodeError, ValueError):
                                 pass
+                    else:
+                        # 默认连接只要 snapshot + 后续增量；先跳到 EOF，避免把历史 job_updated
+                        # 当成新事件推给前端，触发一串 GET /jobs/{id}。
+                        fh.seek(0, 2)
                     tail_start_pos = fh.tell()
             except OSError:
                 tail_start_pos = 0

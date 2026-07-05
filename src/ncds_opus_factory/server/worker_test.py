@@ -62,10 +62,9 @@ def test_worker_wires_loops(monkeypatch):
     - RUNNER.recover_and_start -> 0
     - asyncio.create_task -> 记录调用次数
     - asyncio.Event().wait -> 立即返回（截断无限等待）
-    确认：on_terminal 被设为 rounds_gate.handle_terminal，recover 被调，
+    确认：on_terminal 被设为组合终态 hook，recover 被调，
     5 个 loop 被 create_task（NOF_* 默认全开）。
     """
-    from ncds_opus_factory.server import rounds_gate
     from ncds_opus_factory.server import worker as worker_mod
 
     # --- 准备 mock_runner ---
@@ -103,18 +102,20 @@ def test_worker_wires_loops(monkeypatch):
 
         with (
             patch("ncds_opus_factory.server.worker.get_default_queue", return_value=mock_rq),
+            patch("ncds_opus_factory.server.worker.ensure_douk_sidecar", new=AsyncMock(return_value=None)) as ensure_douk,
+            patch("ncds_opus_factory.server.worker.stop_douk_sidecar", new=AsyncMock(return_value=None)) as stop_douk,
             patch("ncds_opus_factory.server.worker._install_signal_handlers", return_value=[]),
             patch("asyncio.Event", return_value=mock_event),
             patch("asyncio.create_task", side_effect=capturing_create_task),
         ):
             await worker_mod._amain()
+            ensure_douk.assert_awaited_once()
+            stop_douk.assert_awaited_once_with(None)
 
     asyncio.run(run())
 
-    # on_terminal 必须被设为 rounds_gate.handle_terminal
-    assert mock_runner.on_terminal is rounds_gate.handle_terminal, (
-        "on_terminal 没被设成 rounds_gate.handle_terminal"
-    )
+    # on_terminal 必须被设为 worker 组合 hook（round + pipeline terminal）。
+    assert mock_runner.on_terminal is worker_mod._handle_terminal
     # recover_and_start 必须被调
     mock_runner.recover_and_start.assert_awaited_once()
     mock_runner.shutdown.assert_awaited_once()
@@ -134,7 +135,11 @@ def test_worker_ping_fail_fast(monkeypatch):
     async def run():
         mock_rq = AsyncMock()
         mock_rq.ping = AsyncMock(return_value=False)
-        with patch("ncds_opus_factory.server.worker.get_default_queue", return_value=mock_rq):
+        with (
+            patch("ncds_opus_factory.server.worker.get_default_queue", return_value=mock_rq),
+            patch("ncds_opus_factory.server.worker.ensure_douk_sidecar", new=AsyncMock(return_value=None)),
+            patch("ncds_opus_factory.server.worker.stop_douk_sidecar", new=AsyncMock(return_value=None)),
+        ):
             with pytest.raises(RuntimeError, match="Redis ping failed"):
                 await worker._amain()
 

@@ -66,6 +66,7 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 | **[PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)** | **权威设计**：目标架构、核心抽象、步骤生命周期/介入点、多配方、E0–E5 迁移分期 |
 | [WOLONG-DESIGN.md](WOLONG-DESIGN.md) | 卧龙子系统实装（调度/闸门/离线学习）——在新架构里=app driver + 自治神经层的规格 |
 | [FRONTEND-API.md](FRONTEND-API.md) | 对外 HTTP API 契约：当前 `/jobs`=web 主路径、`/tasks`=app 主路径、`/instances`=engine 后端 driver API |
+| [DIGITAL-HUMAN-LIPSYNC.md](DIGITAL-HUMAN-LIPSYNC.md) | 数字人口型链路：MuseTalk/DWPose 远端生成、标准 JSON 输入输出、质检产物与性能基线 |
 
 ## [archive/](archive/) —— 历史/已作废，**不要当现状读**
 仅保留少量早期收敛设计作为演进证据；当前架构以本目录 active 文档为准。

@@ -10,6 +10,7 @@ from dataclasses import asdict
 from typing import Any
 
 from ncds_opus_core.pipelines import get_pipeline
+
 from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 
 
@@ -77,7 +78,15 @@ class PipelineRwOperationsMixin:
             raise RuntimeError("asr 采集文案全部为空，无法 rw")
 
         domain_guidance = rw_helpers._rw_domain_guidance(state.inputs.get("domain"))
-        system_prompt, user_prompt = rw_helpers._build_rw_prompt(source_text, domain_guidance=domain_guidance)
+        rw_config = state.node_configs.get("rw") or {}
+        guiguzi_context = rw_helpers._rw_guiguzi_context(
+            rw_config, job_dir, domain=state.inputs.get("domain")
+        )
+        system_prompt, user_prompt = rw_helpers._build_rw_prompt(
+            source_text,
+            domain_guidance=domain_guidance,
+            guiguzi_context=guiguzi_context,
+        )
 
         def on_progress(text: str) -> None:
             self._push_progress(job_id, "rw", f"[rerun {model_id}] {text}")
@@ -85,8 +94,9 @@ class PipelineRwOperationsMixin:
         on_progress("单模型重跑启动")
         try:
             raw_text = await rw_helpers._invoke_rw_candidate(cand, user_prompt, system_prompt, on_progress)
-        except rw_helpers._ModelUnavailable as exc:
-            on_progress(f"模型 {model_id} 不可用，跳过: {exc}")
+        except rw_helpers._ModelUnavailable:
+            return
+        except Exception:  # noqa: BLE001 — 单模型失败静默跳过，不污染前端
             return
 
         cleaned = (raw_text or "").strip()
@@ -95,7 +105,7 @@ class PipelineRwOperationsMixin:
             if inner:
                 cleaned = inner.group(1).strip()
         if not cleaned:
-            raise RuntimeError(f"模型 {model_id} 输出为空")
+            return
 
         rw_root = job_dir / "02_rw"
         model_dir = rw_root / model_id
@@ -139,7 +149,8 @@ class PipelineRwOperationsMixin:
             raise KeyError(f"unknown model: {model_id}")
         if entry.get("status") == "failed":
             raise ValueError("失败的模型无法优化")
-        issues = list((entry.get("qc_rubric") or {}).get("issues") or [])
+        issues = rw_helpers._ai_taste_issue_lines(entry.get("qc") or {})
+        issues.extend(str(x) for x in (entry.get("qc_rubric") or {}).get("issues") or [])
         if not issues:
             raise ValueError("当前稿没有可用的优化建议")
 
@@ -205,6 +216,23 @@ class PipelineRwOperationsMixin:
         dst = out_dir / "draft.md"
         if not src.exists():
             raise FileNotFoundError(f"missing source draft: {src}")
+
+        from ncds_opus_factory.common import ai_taste
+
+        report = ai_taste.scan(src.read_text(encoding="utf-8"))
+        entry = next(
+            (d for d in drafts if isinstance(d, dict) and d.get("model_id") == model_id), None
+        )
+        if entry is not None:
+            entry["qc"] = report
+            entry["needs_fix"] = report.get("verdict") == "fail"
+        if report.get("verdict") == "fail":
+            state.updated_at = time.time()
+            self._save(state)
+            self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": "rw", "state": asdict(n)})
+            summary = str(report.get("summary") or "AI 味未通过")
+            raise ValueError(f"质检未通过：{summary}。请先优化后再定稿")
+
         dst.write_bytes(src.read_bytes())
         n.outputs["selected_model_id"] = model_id
         state.updated_at = time.time()

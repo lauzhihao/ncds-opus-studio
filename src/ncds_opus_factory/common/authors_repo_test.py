@@ -16,9 +16,10 @@ def _state(tmp_path, monkeypatch):
 
 
 def test_author_key_per_platform():
-    # douyin 用 sec_uid,tiktok 用 handle(unique_id)
+    # douyin 用 sec_uid,tiktok/youtube 用 handle/channel(unique_id)
     assert authors_repo.author_key("douyin", sec_uid="MS4wX", unique_id="dy") == "MS4wX"
     assert authors_repo.author_key("tiktok", sec_uid="MS4wY", unique_id="handle") == "handle"
+    assert authors_repo.author_key("youtube", sec_uid="UCxxx", unique_id="@channel") == "@channel"
     # 各自缺失时互为兜底
     assert authors_repo.author_key("tiktok", sec_uid="onlysec") == "onlysec"
     assert authors_repo.author_key("douyin", unique_id="onlyuid") == "onlyuid"

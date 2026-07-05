@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -41,6 +42,7 @@ BENCH_DB = ROOT / "state" / "shenkuo" / "benchmark.db"  # 指标层 SQLite(时�
 # entry["text"](提取文案/下游 rw 源)的安全上限:防极端长稿撑爆 payload。
 # 旧值 3000 会把 rw 改写源也截断,故抬到 2 万(典型稿几千字,等于不截)。
 _TEXT_CAP = 20000
+SUPPORTED_PLATFORMS = {"douyin", "tiktok", "youtube"}
 
 ProgressFn = Callable[[str], None]
 
@@ -55,6 +57,55 @@ def _rel(p: Path | str) -> str:
         return str(Path(p).relative_to(ROOT))
     except ValueError:
         return str(p)
+
+
+def _platform(p: str | None) -> str:
+    v = (p or "douyin").strip().lower()
+    if v not in SUPPORTED_PLATFORMS:
+        raise ValueError(f"不支持的平台: {v}（支持 douyin/tiktok/youtube）")
+    return v
+
+
+def _safe_author_id(author: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.\-]", "_", (author or "").strip()) or "unknown"
+
+
+def author_benchmark_dir(platform: str, author: str) -> Path:
+    """作者 all_posts/collected 索引目录；抖音保留历史路径，非抖音带平台前缀。"""
+    platform = _platform(platform)
+    if platform == "douyin":
+        return BENCH / f"author_{author}"
+    return BENCH / f"author_{platform}_{_safe_author_id(author)}"
+
+
+def _metric_author_key(platform: str, author: str) -> str:
+    return author if _platform(platform) == "douyin" else f"{_platform(platform)}:{author}"
+
+
+def _source_url_for(platform: str, aweme_id: str, author: str | None = None) -> str:
+    if platform == "youtube":
+        return f"https://www.youtube.com/watch?v={aweme_id}"
+    if platform == "tiktok":
+        handle = (author or "_").strip().lstrip("@") or "_"
+        return f"https://www.tiktok.com/@{handle}/video/{aweme_id}"
+    return f"https://www.douyin.com/video/{aweme_id}"
+
+
+def _video_ref_from_input(text: str, platform: str, source_url: str | None = None) -> tikhub_client.VideoRef | None:
+    """Resolve a single-work input, honoring an explicit non-Douyin platform for raw IDs."""
+    if source_url:
+        ref = tikhub_client.resolve_video_ref(source_url)
+        if ref:
+            return ref
+    ref = tikhub_client.resolve_video_ref(text)
+    if ref:
+        if platform != "douyin" and ref.platform == "douyin" and (text or "").strip() == ref.video_id:
+            return tikhub_client.VideoRef(platform, ref.video_id, _source_url_for(platform, ref.video_id))
+        return ref
+    raw = (text or "").strip()
+    if platform != "douyin" and raw:
+        return tikhub_client.VideoRef(platform, raw, source_url or _source_url_for(platform, raw))
+    return None
 
 
 def _adopt_legacy(aweme_id: str, author_dir: Path, mapping: dict[Path, Path]) -> None:
@@ -120,6 +171,31 @@ def _collect_paths(platform: str, aweme_id: str) -> _CollectPaths:
     )
 
 
+def _asr_engine_for_platform(platform: str) -> str | None:
+    return "whisper" if _platform(platform) in {"tiktok", "youtube"} else None
+
+
+def _transcript_backend(path: Path) -> str:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(doc.get("backend") or "").strip().lower() if isinstance(doc, dict) else ""
+
+
+def _transcript_cache_usable(paths: _CollectPaths, platform: str) -> bool:
+    if not paths.para.exists() or not paths.txt.exists():
+        return False
+    expected = _asr_engine_for_platform(platform)
+    if expected == "whisper":
+        return _transcript_backend(paths.para) == "whisper"
+    return True
+
+
+def _transcript_result_empty(result: dict[str, Any] | None) -> bool:
+    return isinstance(result, dict) and result.get("empty") is True
+
+
 def _adopt_collect_legacy(aweme_id: str, author_dir: Path, paths: _CollectPaths) -> None:
     # 历史产物原地兼容(不迁移):旧 author_dir 下产物若在、新仓库位缺,建相对软链指过去。
     # 软链后各支线 exists() 即命中、就地复用旧文件,不搬字节、不重跑下载/转写/截帧。
@@ -136,13 +212,17 @@ def _adopt_collect_legacy(aweme_id: str, author_dir: Path, paths: _CollectPaths)
     })
 
 
-def _new_collect_entry(aweme_id: str, meta: dict[str, Any], paths: _CollectPaths) -> dict[str, Any]:
+def _new_collect_entry(
+    aweme_id: str, meta: dict[str, Any], paths: _CollectPaths, *, platform: str = "douyin",
+) -> dict[str, Any]:
     entry: dict[str, Any] = {
+        "platform": platform,
         "aweme_id": aweme_id,
         "desc": meta.get("desc", ""),
-        "digg": meta.get("digg", 0),
         "status": {},
     }
+    if meta.get("digg") is not None:
+        entry["digg"] = meta["digg"]
     # 展示元数据(沈括详情页直接渲染:作者/话题/四项数据)
     if meta.get("author"):
         entry["author"] = meta["author"]
@@ -196,6 +276,8 @@ def _merge_collect_manifest(
 @dataclass
 class _CollectRun:
     aweme_id: str
+    platform: str
+    source_url: str | None
     entry: dict[str, Any]
     paths: _CollectPaths
     max_frames: int
@@ -218,10 +300,11 @@ class _CollectRun:
             self.report(f"[{self.aweme_id}] mp4 已存在,跳过下载")
             self.entry["status"]["download"] = "cached"
         else:
-            # yt-dlp 匿名优先(免费)，失败回退 TikHub(付费)；两条都没出片才算 failed。
+            # DouK sidecar 优先，失败回退 yt-dlp；抖音最后再回退 TikHub(付费)。
             try:
                 capabilities.fetch_and_download(
                     self.aweme_id, p.video, on_progress=self.report, check=self.check,
+                    platform=self.platform, source_url=self.source_url,
                 )
                 self.report(f"[{self.aweme_id}] 下载完成")
                 self.entry["status"]["download"] = "ok"
@@ -237,16 +320,36 @@ class _CollectRun:
     def branch_transcribe(self) -> None:
         p = self.paths
         self.guard()
-        if p.para.exists():
+        cache_usable = _transcript_cache_usable(p, self.platform)
+        use_transcript_files = False
+        if cache_usable:
             self.report(f"[{self.aweme_id}] 转写已存在,跳过")
             self.entry["status"]["transcribe"] = "cached"
+            use_transcript_files = True
         else:
             try:
-                result, text = capabilities.transcribe(p.video, self.report)
-                if result is not None:
+                engine = _asr_engine_for_platform(self.platform)
+                if p.para.exists() or p.txt.exists():
+                    self.report(f"[{self.aweme_id}] 转写缓存后端不匹配,重新听写")
+                if engine:
+                    result, text = capabilities.transcribe(p.video, self.report, engine=engine)
+                else:
+                    result, text = capabilities.transcribe(p.video, self.report)
+                text = (text or "").strip()
+                if result is not None and text:
                     p.para.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
                     p.txt.write_text(text, encoding="utf-8")
+                    if p.clean.exists():
+                        p.clean.unlink()
                     self.entry["status"]["transcribe"] = "ok"
+                    use_transcript_files = True
+                elif _transcript_result_empty(result):
+                    p.para.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                    p.txt.write_text("", encoding="utf-8")
+                    if p.clean.exists():
+                        p.clean.unlink()
+                    self.entry["status"]["transcribe"] = "empty"
+                    use_transcript_files = True
                 else:
                     self.entry["status"]["transcribe"] = "failed"
             except cancel.TaskCancelled:
@@ -254,9 +357,9 @@ class _CollectRun:
             except Exception as e:  # noqa: BLE001 — 单条转写失败不拖垮整批
                 self.report(f"[{self.aweme_id}] 转写异常: {type(e).__name__}: {e}")
                 self.entry["status"]["transcribe"] = f"error:{type(e).__name__}"
-        if p.para.exists():
+        if use_transcript_files and p.para.exists():
             self.entry["paraformer"] = _rel(p.para)
-        if p.txt.exists():
+        if use_transcript_files and p.txt.exists():
             self.entry["txt"] = _rel(p.txt)
             raw_text = p.txt.read_text(encoding="utf-8").strip()
             self.guard()
@@ -265,13 +368,12 @@ class _CollectRun:
                 cleaned = capabilities.clean_transcript(raw_text, self.report)
                 if cleaned:
                     p.clean.write_text(cleaned, encoding="utf-8")
-            # text 同时供前端「提取文案」展示与下游 rw 改写源（_rw_source_text 优先读它），
-            # 故不再截到 3000（会让 rw 只看到前 3000 字就开写）；留 2 万作极端长稿的安全上限。
+            # text 同时供前端「提取文案」展示与下游 rw 改写源（_rw_source_text 优先读它）。
+            # 用户要的是解说稿原文；清洗稿只作为旁路产物保留，绝不覆盖原始听写语言。
+            self.entry["text"] = raw_text[:_TEXT_CAP]
+            self.entry["text_raw"] = _rel(p.txt)
             if p.clean.exists():
-                self.entry["text"] = p.clean.read_text(encoding="utf-8").strip()[:_TEXT_CAP]
-                self.entry["text_raw"] = _rel(p.txt)
-            else:
-                self.entry["text"] = raw_text[:_TEXT_CAP]
+                self.entry["text_clean"] = _rel(p.clean)
 
     def branch_audio(self) -> None:
         p = self.paths
@@ -316,6 +418,10 @@ class _CollectRun:
     def branch_comments(self) -> None:
         p = self.paths
         self.guard()
+        if self.platform != "douyin":
+            self.report(f"[{self.platform}:{self.aweme_id}] 非抖音作品跳过评论采集")
+            self.entry["status"]["comments"] = "skipped"
+            return
         if p.comments_path.exists():
             self.report(f"[{self.aweme_id}] 评论已存在,跳过")
             self.entry["status"]["comments"] = "cached"
@@ -365,17 +471,19 @@ def collect_one(
     max_frames: int = 8, engine: str = "threshold", top_comments: int = 20,
     platform: str = "douyin", on_progress: ProgressFn = _noop,
     do_audio: bool = True, do_frames: bool = True,
-    author_domain: str | None = None,
+    author_domain: str | None = None, source_url: str | None = None,
 ) -> dict[str, Any]:
     meta = meta or {}
     paths = _collect_paths(platform, aweme_id)
 
     _adopt_collect_legacy(aweme_id, author_dir, paths)
-    entry = _new_collect_entry(aweme_id, meta, paths)
+    entry = _new_collect_entry(aweme_id, meta, paths, platform=platform)
     # 协作式取消:在主线程取 checker(thread-local 不传子线程),闭包给各支线。
     # 支线在步骤边界 guard();Demucs 子进程内部按秒轮询可被 SIGTERM。
     run_ctx = _CollectRun(
         aweme_id=aweme_id,
+        platform=platform,
+        source_url=source_url,
         entry=entry,
         paths=paths,
         max_frames=max_frames,
@@ -417,6 +525,10 @@ def refresh_stats_comments(
     返回只含变化字段的 patch:{stats?, digg?, comments?, top_comments?};某项失败则
     该项不进 patch(不抛错),保证单项故障不影响其它项。
     """
+    if platform != "douyin":
+        on_progress(f"[{platform}:{aweme_id}] 非抖音作品跳过数据/评论刷新")
+        return {}
+
     patch: dict[str, Any] = {}
 
     # 1) 播放数据:重取作品详情 -> meta -> 四项数据。
@@ -456,7 +568,8 @@ def _write_collected(author_dir: Path, collected: list[dict]) -> Path:
 
 
 def _fetch_posts_multipass(
-    author: str, pull_n: int, on_progress: ProgressFn, passes: int = 3
+    author: str, pull_n: int, on_progress: ProgressFn, passes: int = 3,
+    platform: str = "douyin",
 ) -> list[dict]:
     """多趟拉取取并集,逼近作者真实可达作品集。
 
@@ -467,7 +580,9 @@ def _fetch_posts_multipass(
     acc: dict[str, dict] = {}
     for i in range(passes):
         try:
-            batch = tikhub_client.fetch_user_posts(author, max_items=pull_n, on_progress=on_progress)
+            batch = tikhub_client.fetch_author_posts(
+                platform, author, max_items=pull_n, on_progress=on_progress,
+            )
         except Exception as e:  # noqa: BLE001 — 单趟失败不拖垮整次(已得的照样用)
             on_progress(f"第 {i + 1} 趟异常,跳过用已得: {type(e).__name__}: {e}")
             continue
@@ -511,6 +626,7 @@ def _merge_all_posts(path: Path, fresh: list[dict]) -> list[dict]:
 def run(
     author: str | None = None,
     aweme: str | None = None,
+    source_url: str | None = None,
     top: int = 10,
     max_frames: int = 8,
     engine: str = "threshold",
@@ -525,6 +641,7 @@ def run(
     refresh_only=True 时只跑"拉列表 -> 写指标层(SQLite 时间序列)",跳过深采,给高频 cron 用。
     返回 {author_dir, all_posts?, collected:[entry...]}(同时落 all_posts.json + collected.json)。
     """
+    platform = _platform(platform)
     if not author and not aweme:
         raise ValueError("需要 --author <sec_uid> 或 --aweme <aweme_id>")
 
@@ -533,21 +650,31 @@ def run(
         author_dir = BENCH / "adhoc"
         author_dir.mkdir(parents=True, exist_ok=True)
         on_progress(f"沈括: 单条采集 {aweme}")
-        aweme_id = tikhub_client.resolve_aweme_id(aweme)
-        if not aweme_id:
-            raise ValueError(f"解析不出 aweme_id: {aweme}(支持纯数字 id 或抖音分享链接)")
+        ref = _video_ref_from_input(aweme, platform, source_url=source_url)
+        if not ref:
+            raise ValueError(f"解析不出作品 id: {aweme}(支持抖音/TikTok/YouTube 单作品链接)")
+        aweme_id = ref.video_id
+        platform = ref.platform
         if aweme_id != aweme.strip():
-            on_progress(f"短链解析: -> aweme_id {aweme_id}")
+            on_progress(f"链接解析: -> {platform}:{aweme_id}")
         # 取展示元数据(标题/作者/话题/数据/封面);失败不阻塞主链路
         meta: dict[str, Any] = {}
-        try:
-            meta = tikhub_client.extract_meta(tikhub_client.fetch_one_video_detail(aweme_id))
-            if meta.get("desc"):
-                on_progress(f"《{meta['desc'][:36]}》 @{meta.get('author', '')} 赞 {meta.get('digg', 0)}")
-        except Exception as e:  # noqa: BLE001
-            on_progress(f"元数据获取失败(不阻塞): {type(e).__name__}: {e}")
+        if platform == "douyin":
+            try:
+                meta = tikhub_client.extract_meta(tikhub_client.fetch_one_video_detail(aweme_id))
+                if meta.get("desc"):
+                    on_progress(f"《{meta['desc'][:36]}》 @{meta.get('author', '')} 赞 {meta.get('digg', 0)}")
+            except Exception as e:  # noqa: BLE001
+                on_progress(f"元数据获取失败(不阻塞): {type(e).__name__}: {e}")
+        else:
+            try:
+                meta = tikhub_client.fetch_video_ref_meta(ref)
+            except Exception as e:  # noqa: BLE001
+                on_progress(f"元数据获取失败(不阻塞): {type(e).__name__}: {e}")
+                meta = tikhub_client.video_ref_meta(ref)
         entry = collect_one(aweme_id, author_dir, meta=meta, max_frames=max_frames, engine=engine,
-                            top_comments=top_comments, platform=platform, on_progress=on_progress)
+                            top_comments=top_comments, platform=platform, on_progress=on_progress,
+                            source_url=ref.url)
         _write_collected(author_dir, [entry])
         on_progress(f"沈括完成: {author_dir}")
         ret: dict[str, Any] = {"author_dir": str(author_dir), "collected": [entry]}
@@ -565,29 +692,32 @@ def run(
     # 作者模式:拉作品列表 -> 写指标层 -> (refresh_only 止步) -> 选高赞 top -> 逐条采集
     if author is None:
         raise ValueError("需要 --author <sec_uid>")
-    author_dir = BENCH / f"author_{author}"
+    author_dir = author_benchmark_dir(platform, author)
     author_dir.mkdir(parents=True, exist_ok=True)
-    on_progress(f"沈括启动: 拉作者作品(sec_uid={author[:16]}...)")
+    on_progress(f"沈括启动: 拉作者作品({platform}:{author[:32]}...)")
     # refresh-only 要广覆盖(更新历史作品指标),默认拉更多;深采模式只需够挑 top
     pull_n = max_posts or (200 if refresh_only else max(top * 2, 30))
     # 多趟并集拉本次"新鲜"作品(抖音翻页非确定,单趟会欠收),再 merge 进 all_posts.json(只增不减)
-    fresh = _fetch_posts_multipass(author, pull_n, on_progress)
+    fresh = _fetch_posts_multipass(author, pull_n, on_progress, platform=platform)
     posts = _merge_all_posts(author_dir / "all_posts.json", fresh)
     (author_dir / "all_posts.json").write_text(
         json.dumps(posts, ensure_ascii=False, indent=2), encoding="utf-8")
     on_progress(f"本次新鲜 {len(fresh)} 条,合并后累计 {len(posts)} 条,落 all_posts.json")
 
     # 作者库:顺带刷新作者名片(昵称/头像/粉丝数),让 worker 刷新真正更新 /accounts/resolve 缓存。
-    # 仅抖音(tiktok 采集未接入);一次额外档案请求,失败不阻塞采集主链路。
-    if platform == "douyin":
-        try:
-            from ncds_opus_factory.common import authors_repo
+    try:
+        from ncds_opus_factory.common import authors_repo
+        prof = None
+        if platform == "douyin":
             prof = tikhub_client.fetch_douyin_profile(author)
-            if prof:
-                authors_repo.save_profile("douyin", author, prof)
-                on_progress("作者库: 已刷新作者名片")
-        except Exception as e:  # noqa: BLE001
-            on_progress(f"作者库名片刷新失败(不阻塞): {type(e).__name__}: {e}")
+        elif platform == "tiktok":
+            prof = tikhub_client.fetch_tiktok_profile(author)
+        if prof:
+            key = authors_repo.author_key(platform, prof.get("sec_uid", ""), prof.get("unique_id", "")) or author
+            authors_repo.save_profile(platform, key, prof)
+            on_progress("作者库: 已刷新作者名片")
+    except Exception as e:  # noqa: BLE001
+        on_progress(f"作者库名片刷新失败(不阻塞): {type(e).__name__}: {e}")
 
     # 指标层:写身份 + 追加变化的快照(时间序列)。只喂 fresh(真实当前 stats),
     # 不喂 merged——merged 含历史旧条目的旧 stats,会往时间序列里塞陈旧/重复快照。
@@ -595,14 +725,17 @@ def run(
     sig: dict[str, int] = {}
     conn = benchmark_store.connect(BENCH_DB)
     try:
-        stat = benchmark_store.record_refresh(conn, author, fresh, ts)
+        metric_author = _metric_author_key(platform, author)
+        stat = benchmark_store.record_refresh(conn, metric_author, fresh, ts)
         on_progress(f"指标层: 作品 {stat['posts']} 条,新增快照 {stat['snapshots']} 条 -> {_rel(BENCH_DB)}")
         # 信号检测(订阅传感器的产出):新作品/指标飙升 -> events.jsonl 供排产消费。
         # 失败不阻塞采集主链路。
         try:
             from ncds_opus_factory.common import signals
-            sig = signals.emit_signals(conn, author, ts, events_dir=BENCH_DB.parent,
-                                       on_progress=on_progress)
+            sig = signals.emit_signals(
+                conn, metric_author, ts, events_dir=BENCH_DB.parent,
+                on_progress=on_progress, platform=platform,
+            )
         except Exception as e:  # noqa: BLE001
             on_progress(f"信号检测失败(不阻塞): {type(e).__name__}: {e}")
     finally:
@@ -624,7 +757,9 @@ def run(
         _sub_path = subscriptions_path(works_repo._state_root() / "tasks")
         _subs = load_subscriptions(_sub_path)
         for _a in _subs.get("authors") or []:
-            if _a.get("sec_uid") == author and isinstance(_a.get("domain"), str):
+            sub_platform = str(_a.get("platform") or "douyin").strip().lower() or "douyin"
+            _key = _a.get("unique_id") if sub_platform in {"tiktok", "youtube"} else _a.get("sec_uid")
+            if sub_platform == platform and _key == author and isinstance(_a.get("domain"), str):
                 _d = _a["domain"].strip()
                 if _d:
                     author_domain = _d
@@ -643,7 +778,8 @@ def run(
         try:
             entry = collect_one(p["aweme_id"], author_dir, meta=p, max_frames=max_frames, engine=engine,
                                 top_comments=top_comments, platform=platform, on_progress=on_progress,
-                                author_domain=author_domain)
+                                author_domain=author_domain,
+                                source_url=p.get("share_url") or p.get("source_url"))
         except Exception as e:  # noqa: BLE001 — 单条失败不拖垮整批
             on_progress(f"  采集异常: {type(e).__name__}: {e}")
             entry = {"aweme_id": p["aweme_id"], "status": {"error": str(e)}}
@@ -658,6 +794,9 @@ def _cli(argv: list[str] | None = None) -> int:
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--author", help="对标号 sec_user_id(拉其作品)")
     src.add_argument("--aweme", help="单条作品 aweme_id(验证链路用)")
+    parser.add_argument("--platform", default="douyin", choices=sorted(SUPPORTED_PLATFORMS),
+                        help="采集平台: douyin/tiktok/youtube")
+    parser.add_argument("--source-url", default=None, help="单条模式原始作品 URL(可选)")
     parser.add_argument("--top", type=int, default=10, help="作者模式:采集高赞前 N 条")
     parser.add_argument("--frames", type=int, default=8, help="每条视频截帧数上限")
     parser.add_argument("--engine", default="threshold", choices=["threshold", "rembg"],
@@ -673,6 +812,7 @@ def _cli(argv: list[str] | None = None) -> int:
 
     result = run(
         author=args.author, aweme=args.aweme, top=args.top,
+        source_url=args.source_url, platform=args.platform,
         max_frames=args.frames, max_posts=args.max_posts,
         top_comments=args.top_comments, refresh_only=args.refresh_only,
         on_progress=on_progress,

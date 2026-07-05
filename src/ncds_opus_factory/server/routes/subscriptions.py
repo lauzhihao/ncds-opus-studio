@@ -31,9 +31,9 @@ class SubscriptionAuthor(BaseModel):
     sec_uid: str
     note: str | None = None
     enabled: bool = True
-    # 平台：douyin（默认，沈括可采集）/ tiktok（可监控展示，采集暂未接入）
+    # 平台：douyin（默认）/ tiktok / youtube
     platform: str = "douyin"
-    # 领域 profile（finance/emotion，见 domain_profiles.py）；决定后续选题/撰稿提示词
+    # 领域 profile（见 domain_profiles.py）；决定后续选题/撰稿提示词
     domain: str | None = None
     # 每账号更新频率(小时)；None=用全局 interval_hours
     interval_hours: float | None = None
@@ -111,11 +111,13 @@ async def put_subscriptions(body: SubscriptionsConfig) -> dict[str, Any]:
     refs: list[dict[str, Any]] = []
     for a in body.authors:
         a.sec_uid = a.sec_uid.strip()
+        a.platform = (a.platform or "douyin").strip().lower() or "douyin"
         if not a.sec_uid:
             raise HTTPException(status_code=422, detail="sec_uid 不能为空")
-        if a.sec_uid in seen:
-            raise HTTPException(status_code=422, detail=f"重复 sec_uid: {a.sec_uid}")
-        seen.add(a.sec_uid)
+        key = f"{a.platform}:{authors_repo.author_key(a.platform, a.sec_uid, a.unique_id or '')}"
+        if key in seen:
+            raise HTTPException(status_code=422, detail=f"重复账号: {key}")
+        seen.add(key)
         _upsert_author_snapshot(a)
         # 名单只存瘦引用：身份(sec_uid/platform/unique_id) + 订阅设置(note/enabled/频率/领域)
         ref: dict[str, Any] = {

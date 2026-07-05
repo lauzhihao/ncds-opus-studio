@@ -37,6 +37,14 @@
   --type-cap-zh:   78px;     /* 底部中文字幕 */
   --type-cap-en:   38px;     /* 底部英文字幕 */
 
+  /* 入场动画行程（1920×1080 刻度；4K 渲染时随 stage scale 放大） */
+  --motion-enter-sm: 96px;
+  --motion-enter-md: 180px;
+  --motion-enter-lg: 280px;
+  --motion-enter-xl: 420px;
+  --motion-shake: 18px;
+  --motion-shake-half: 10px;
+
   /* 间距 */
   --pad-x: 140px;
   --top-h: 110px;
@@ -150,22 +158,27 @@ body.paper-texture .stage::after {
 }
 
 .brand-title {
-  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
-  font-weight: 700;
-  font-size: var(--type-title);
+  font-family: var(--brand-title-font, "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif);
+  font-weight: var(--brand-title-weight, 700);
+  font-size: var(--brand-title-size, var(--type-title));
+  font-style: var(--brand-title-style, normal);
   color: var(--ink);
   letter-spacing: .02em;
+  text-decoration-line: var(--brand-title-decoration, none);
+  transform: translateY(var(--brand-title-baseline-shift, 0));
   white-space: nowrap;
 }
 
 .disclaimer {
   justify-self: end;
-  font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
-  font-weight: 600;
-  font-size: var(--type-disclaim);
+  font-family: var(--disclaimer-font, "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif);
+  font-weight: var(--disclaimer-weight, 600);
+  font-size: var(--disclaimer-size, var(--type-disclaim));
+  font-style: var(--disclaimer-style, normal);
   color: var(--ink-soft);
   letter-spacing: .04em;
-  transform: translate(var(--disclaimer-x), var(--disclaimer-y));
+  text-decoration-line: var(--disclaimer-decoration, none);
+  transform: translate(var(--disclaimer-x), var(--disclaimer-y)) translateY(var(--disclaimer-baseline-shift, 0));
 }
 
 /* ── 中央卡片 ────────────────────────────────────────────────────── */
@@ -331,11 +344,14 @@ body.band-paper {
 }
 
 .subtitle-zh {
-  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-weight: 700;
-  font-size: var(--type-cap-zh);
+  font-family: var(--subtitle-zh-font, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif);
+  font-weight: var(--subtitle-zh-weight, 700);
+  font-size: var(--subtitle-zh-size, var(--type-cap-zh));
+  font-style: var(--subtitle-zh-style, normal);
   color: var(--band-text);
   letter-spacing: .02em;
+  text-decoration-line: var(--subtitle-zh-decoration, none);
+  transform: translateY(var(--subtitle-zh-baseline-shift, 0));
 }
 .band-dark .subtitle-zh {
   text-shadow: 0 2px 0 rgba(0,0,0,.4);
@@ -346,11 +362,14 @@ body.band-paper {
 }
 
 .subtitle-en {
-  font-family: "Inter", "Helvetica Neue", system-ui, sans-serif;
-  font-weight: 500;
-  font-size: var(--type-cap-en);
+  font-family: var(--subtitle-en-font, "Inter", "Helvetica Neue", system-ui, sans-serif);
+  font-weight: var(--subtitle-en-weight, 500);
+  font-size: var(--subtitle-en-size, var(--type-cap-en));
+  font-style: var(--subtitle-en-style, normal);
   color: var(--band-sub);
   letter-spacing: .01em;
+  text-decoration-line: var(--subtitle-en-decoration, none);
+  transform: translateY(var(--subtitle-en-baseline-shift, 0));
 }
 
 .beat-fade-out .subtitle-zh,
@@ -563,15 +582,15 @@ body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-iris"] {
      - 加新 preset 只需写一行 --os-* 列表，模板统一。 */
 .scene-overlay {
   position: absolute;
-  transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg));
-  font-family: var(--os-font, "Noto Sans SC", "PingFang SC", sans-serif);
-  font-weight: var(--os-weight, normal);
+  transform: translate(-50%, -50%) translateY(var(--os-baseline-shift, var(--text-baseline-shift, 0))) rotate(var(--os-rotate, 0deg));
+  font-family: var(--os-font, var(--text-font, "Noto Sans SC", "PingFang SC", sans-serif));
+  font-weight: var(--os-weight, var(--text-weight, normal));
   font-size: var(--os-size, var(--text-size));
-  font-style: var(--os-font-style, normal);
+  font-style: var(--os-font-style, var(--text-style, normal));
   color: var(--os-color, var(--text-color));
   letter-spacing: var(--os-letter-spacing, normal);
   text-shadow: var(--os-text-shadow, none);
-  text-decoration: var(--os-text-decoration, none);
+  text-decoration: var(--os-text-decoration, var(--text-decoration, none));
   background: var(--os-bg, transparent);
   padding: var(--os-padding, 0);
   border: var(--os-border, none);
@@ -868,19 +887,19 @@ body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-iris"] {
 
 /* ─── 入场动效（oa-*） ──────────────────────────────────────────── */
 @keyframes oa-fly-top {
-  from { opacity: 0; transform: translate(-50%, calc(-50% - 60px)) rotate(var(--os-rotate, 0deg)); }
+  from { opacity: 0; transform: translate(-50%, calc(-50% - var(--motion-enter-md))) rotate(var(--os-rotate, 0deg)); }
   to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 @keyframes oa-fly-bottom {
-  from { opacity: 0; transform: translate(-50%, calc(-50% + 60px)) rotate(var(--os-rotate, 0deg)); }
+  from { opacity: 0; transform: translate(-50%, calc(-50% + var(--motion-enter-md))) rotate(var(--os-rotate, 0deg)); }
   to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 @keyframes oa-fly-left {
-  from { opacity: 0; transform: translate(calc(-50% - 80px), -50%) rotate(var(--os-rotate, 0deg)); }
+  from { opacity: 0; transform: translate(calc(-50% - var(--motion-enter-lg)), -50%) rotate(var(--os-rotate, 0deg)); }
   to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 @keyframes oa-fly-right {
-  from { opacity: 0; transform: translate(calc(-50% + 80px), -50%) rotate(var(--os-rotate, 0deg)); }
+  from { opacity: 0; transform: translate(calc(-50% + var(--motion-enter-lg)), -50%) rotate(var(--os-rotate, 0deg)); }
   to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 @keyframes oa-fade {
@@ -897,7 +916,7 @@ body:not(.motion-enabled) .scene.active .scene-overlay[class*="mo-ov-iris"] {
   100% { opacity: 1; transform: translate(-50%, -50%) scale(1)   rotate(var(--os-rotate, 0deg)); }
 }
 @keyframes oa-blur {
-  from { opacity: 0; filter: blur(8px); transform: translate(-50%, calc(-50% + 18px)) rotate(var(--os-rotate, 0deg)); }
+  from { opacity: 0; filter: blur(8px); transform: translate(-50%, calc(-50% + var(--motion-enter-sm))) rotate(var(--os-rotate, 0deg)); }
   to   { opacity: 1; filter: blur(0);   transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 
@@ -992,7 +1011,7 @@ body.tts-missing .tts-notice { display: block; }
   to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 @keyframes sk-enter-drift {
-  from { opacity: 0; transform: translate(-50%, calc(-50% + 18px)); }
+  from { opacity: 0; transform: translate(-50%, calc(-50% + var(--motion-enter-md))); }
   to   { opacity: 1; transform: translate(-50%, -50%); }
 }
 @keyframes sk-enter-bounce {
@@ -1003,6 +1022,61 @@ body.tts-missing .tts-notice { display: block; }
 @keyframes sk-enter-ink {
   from { opacity: 0; filter: blur(8px); transform: translate(-50%, -50%) scale(1.08); }
   to   { opacity: 1; filter: blur(0);   transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes sk-enter-slide-left {
+  from { opacity: 0; transform: translate(calc(-50% - var(--motion-enter-lg)), -50%); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@keyframes sk-enter-slide-right {
+  from { opacity: 0; transform: translate(calc(-50% + var(--motion-enter-lg)), -50%); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@keyframes sk-enter-slide-up {
+  from { opacity: 0; transform: translate(-50%, calc(-50% - var(--motion-enter-lg))); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@keyframes sk-enter-slide-down {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + var(--motion-enter-lg))); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@keyframes sk-enter-spin {
+  from { opacity: 0; transform: translate(-50%, -50%) rotate(-18deg) scale(.62); }
+  to   { opacity: 1; transform: translate(-50%, -50%) rotate(0deg) scale(1); }
+}
+@keyframes sk-enter-drop {
+  0%   { opacity: 0; transform: translate(-50%, calc(-50% - var(--motion-enter-xl))) scale(.92); }
+  72%  { opacity: 1; transform: translate(-50%, calc(-50% + var(--motion-shake))) scale(1.02); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes sk-enter-shake {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.92); }
+  45%  { opacity: 1; transform: translate(calc(-50% - var(--motion-shake)), -50%) scale(1); }
+  60%  { opacity: 1; transform: translate(calc(-50% + var(--motion-shake)), -50%) scale(1); }
+  75%  { opacity: 1; transform: translate(calc(-50% - var(--motion-shake-half)), -50%) scale(1); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes sk-enter-unfold {
+  from { opacity: 0; transform: translate(-50%, -50%) scaleX(.08); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scaleX(1); }
+}
+@keyframes sk-enter-elastic {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(.3); }
+  58%  { opacity: 1; transform: translate(-50%, -50%) scale(1.16); }
+  78%  { opacity: 1; transform: translate(-50%, -50%) scale(.94); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes sk-enter-tilt {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + var(--motion-enter-md))) rotate(-9deg); }
+  to   { opacity: 1; transform: translate(-50%, -50%) rotate(0deg); }
+}
+@keyframes sk-enter-blur {
+  from { opacity: 0; filter: blur(14px); transform: translate(-50%, -50%) scale(1.08); }
+  to   { opacity: 1; filter: blur(0);    transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes sk-enter-rise {
+  0%   { opacity: 0; filter: drop-shadow(0 0 0 transparent); transform: translate(-50%, calc(-50% + var(--motion-enter-md))) scale(.96); }
+  55%  { opacity: 1; filter: drop-shadow(0 18px 22px rgba(0, 0, 0, .20)); transform: translate(-50%, calc(-50% - var(--motion-shake-half))) scale(1.02); }
+  100% { opacity: 1; filter: drop-shadow(0 10px 14px rgba(0, 0, 0, .12)); transform: translate(-50%, -50%) scale(1); }
 }
 .scene.active .scene-sketch[class*="sk-enter-"] {
   animation-duration: var(--sk-dur, 600ms);
@@ -1015,6 +1089,18 @@ body.tts-missing .tts-notice { display: block; }
 .scene.active .scene-sketch.sk-enter-drift  { animation-name: sk-enter-drift;  animation-timing-function: ease-out; }
 .scene.active .scene-sketch.sk-enter-bounce { animation-name: sk-enter-bounce; }
 .scene.active .scene-sketch.sk-enter-ink    { animation-name: sk-enter-ink;    animation-timing-function: ease-out; }
+.scene.active .scene-sketch.sk-enter-slide-left  { animation-name: sk-enter-slide-left;  animation-timing-function: ease-out; }
+.scene.active .scene-sketch.sk-enter-slide-right { animation-name: sk-enter-slide-right; animation-timing-function: ease-out; }
+.scene.active .scene-sketch.sk-enter-slide-up    { animation-name: sk-enter-slide-up;    animation-timing-function: ease-out; }
+.scene.active .scene-sketch.sk-enter-slide-down  { animation-name: sk-enter-slide-down;  animation-timing-function: ease-out; }
+.scene.active .scene-sketch.sk-enter-spin        { animation-name: sk-enter-spin; }
+.scene.active .scene-sketch.sk-enter-drop        { animation-name: sk-enter-drop; }
+.scene.active .scene-sketch.sk-enter-shake       { animation-name: sk-enter-shake;       animation-timing-function: cubic-bezier(.36, .07, .19, .97); }
+.scene.active .scene-sketch.sk-enter-unfold      { animation-name: sk-enter-unfold;      animation-timing-function: cubic-bezier(.16, 1, .3, 1); }
+.scene.active .scene-sketch.sk-enter-elastic     { animation-name: sk-enter-elastic; }
+.scene.active .scene-sketch.sk-enter-tilt        { animation-name: sk-enter-tilt;        animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+.scene.active .scene-sketch.sk-enter-blur        { animation-name: sk-enter-blur;        animation-timing-function: ease-out; }
+.scene.active .scene-sketch.sk-enter-rise        { animation-name: sk-enter-rise;        animation-timing-function: cubic-bezier(.22, .85, .36, 1); }
 /* 未启用动效（录制守门 / 静态预览）：直接落到终态，不跑入场 */
 body:not(.motion-enabled) .scene.active .scene-sketch[class*="sk-enter-"] {
   animation: none;

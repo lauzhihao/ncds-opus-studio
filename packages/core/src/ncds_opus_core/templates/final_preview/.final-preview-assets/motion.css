@@ -131,7 +131,7 @@
 
 /* slide-clip：从下方滑出 + clip 揭示（标题感） */
 @keyframes mo-ov-slide-clip {
-  0%   { opacity: 0; clip-path: inset(100% 0 0 0); transform: translate(-50%, calc(-50% + 30px)) rotate(var(--os-rotate, 0deg)); }
+  0%   { opacity: 0; clip-path: inset(100% 0 0 0); transform: translate(-50%, calc(-50% + var(--motion-enter-md))) rotate(var(--os-rotate, 0deg)); }
   100% { opacity: 1; clip-path: inset(0);          transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 
@@ -151,15 +151,15 @@
 
 /* bounce：从上方弹下 + 弹性收尾 */
 @keyframes mo-ov-bounce {
-  0%   { opacity: 0; transform: translate(-50%, calc(-50% - 100px)) rotate(var(--os-rotate, 0deg)); }
-  60%  { opacity: 1; transform: translate(-50%, calc(-50% +  10px)) rotate(var(--os-rotate, 0deg)); }
-  80%  { transform:           translate(-50%, calc(-50% -   6px)) rotate(var(--os-rotate, 0deg)); }
+  0%   { opacity: 0; transform: translate(-50%, calc(-50% - var(--motion-enter-lg))) rotate(var(--os-rotate, 0deg)); }
+  60%  { opacity: 1; transform: translate(-50%, calc(-50% + var(--motion-shake))) rotate(var(--os-rotate, 0deg)); }
+  80%  { transform:           translate(-50%, calc(-50% - var(--motion-shake-half))) rotate(var(--os-rotate, 0deg)); }
   100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 
 /* drift-in：从对角飘入 + 旋转回正 */
 @keyframes mo-ov-drift-in {
-  0%   { opacity: 0; transform: translate(calc(-50% - 80px), calc(-50% + 80px)) rotate(calc(var(--os-rotate, 0deg) - 12deg)); }
+  0%   { opacity: 0; transform: translate(calc(-50% - var(--motion-enter-lg)), calc(-50% + var(--motion-enter-lg))) rotate(calc(var(--os-rotate, 0deg) - 12deg)); }
   100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 
@@ -171,10 +171,10 @@
 
 /* drop-in：从顶部重力下落 + 弹性落定 */
 @keyframes mo-ov-drop-in {
-  0%   { opacity: 0; transform: translate(-50%, calc(-50% - 200px)) rotate(var(--os-rotate, 0deg)); animation-timing-function: cubic-bezier(.55, .055, .675, .19); }
-  60%  { opacity: 1; transform: translate(-50%, calc(-50% + 18px)) rotate(var(--os-rotate, 0deg)); animation-timing-function: cubic-bezier(.215, .61, .355, 1); }
-  78%  { transform:            translate(-50%, calc(-50% - 8px)) rotate(var(--os-rotate, 0deg)); }
-  92%  { transform:            translate(-50%, calc(-50% + 3px)) rotate(var(--os-rotate, 0deg)); }
+  0%   { opacity: 0; transform: translate(-50%, calc(-50% - var(--motion-enter-xl))) rotate(var(--os-rotate, 0deg)); animation-timing-function: cubic-bezier(.55, .055, .675, .19); }
+  60%  { opacity: 1; transform: translate(-50%, calc(-50% + var(--motion-shake))) rotate(var(--os-rotate, 0deg)); animation-timing-function: cubic-bezier(.215, .61, .355, 1); }
+  78%  { transform:            translate(-50%, calc(-50% - var(--motion-shake-half))) rotate(var(--os-rotate, 0deg)); }
+  92%  { transform:            translate(-50%, calc(-50% + 6px)) rotate(var(--os-rotate, 0deg)); }
   100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); }
 }
 
@@ -324,8 +324,8 @@ body:not(.motion-enabled):not(.edit-mode) .scene.active[class*="mo-img-"] .image
 
 /* rise-glow：从下浮起 + 中段炽光闪烁（情绪点） */
 @keyframes mo-ov-rise-glow {
-  0%   { opacity: 0; transform: translate(-50%, calc(-50% + 26px)) rotate(var(--os-rotate, 0deg)); text-shadow: 0 0 0 transparent; }
-  55%  { opacity: 1; transform: translate(-50%, calc(-50% -  4px)) rotate(var(--os-rotate, 0deg)); text-shadow: 0 0 32px rgba(193,57,43,.7), 0 0 10px rgba(193,57,43,.55); }
+  0%   { opacity: 0; transform: translate(-50%, calc(-50% + var(--motion-enter-md))) rotate(var(--os-rotate, 0deg)); text-shadow: 0 0 0 transparent; }
+  55%  { opacity: 1; transform: translate(-50%, calc(-50% - var(--motion-shake-half))) rotate(var(--os-rotate, 0deg)); text-shadow: 0 0 32px rgba(193,57,43,.7), 0 0 10px rgba(193,57,43,.55); }
   100% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--os-rotate, 0deg)); text-shadow: 0 0 0 transparent; }
 }
 

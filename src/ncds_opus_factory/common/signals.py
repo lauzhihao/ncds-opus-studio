@@ -54,19 +54,22 @@ def emit_signals(
     ts: int,
     events_dir: str | Path,
     on_progress: Callable[[str], None] = _noop,
+    platform: str = "douyin",
 ) -> dict[str, int]:
     """检测本轮刷新的信号并落事件流。返回 {new_post, spike} 计数。"""
+    platform = (platform or "douyin").strip().lower() or "douyin"
     events_dir = Path(events_dir)
     events_dir.mkdir(parents=True, exist_ok=True)
     events: list[dict[str, Any]] = []
 
     for p in benchmark_store.new_posts(conn, sec_uid, ts):
-        key = f"new_post:{p['aweme_id']}"
+        key = f"new_post:{platform}:{p['aweme_id']}"
         if benchmark_store.dedup_get(conn, key) is not None:
             continue  # 同轮重试等场景,不重报
         benchmark_store.dedup_set(conn, key, ts)
         events.append({
             "type": "new_post",
+            "platform": platform,
             "aweme_id": str(p["aweme_id"]),
             "sec_uid": sec_uid,
             "ts": ts,
@@ -77,13 +80,14 @@ def emit_signals(
     for g in benchmark_store.latest_growth(conn, sec_uid, refresh_ts=ts):
         if g["digg_per_hour"] < SPIKE_DIGG_PER_HOUR or g["delta"] < SPIKE_MIN_DELTA:
             continue
-        key = f"spike:{g['aweme_id']}"
+        key = f"spike:{platform}:{g['aweme_id']}"
         last = benchmark_store.dedup_get(conn, key)
         if last is not None and ts - last < SPIKE_COOLDOWN_S:
             continue  # 同一作品持续上涨,冷却窗口内只报一次
         benchmark_store.dedup_set(conn, key, ts)
         events.append({
             "type": "spike",
+            "platform": platform,
             "aweme_id": str(g["aweme_id"]),
             "sec_uid": sec_uid,
             "ts": ts,

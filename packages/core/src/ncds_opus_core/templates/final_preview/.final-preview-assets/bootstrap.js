@@ -59,6 +59,24 @@
     return Number.isFinite(n) ? String(n) : fallback;
   }
 
+  function fontValue(value, fallbackStack) {
+    const text = String(value || '').trim();
+    if (!text) return fallbackStack;
+    if (/^(var\(|inherit|initial|unset|serif|sans-serif|monospace|system-ui|ui-)/.test(text)) return text;
+    return '"' + text.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '", ' + fallbackStack;
+  }
+
+  function decorationValue(value) {
+    const text = String(value || '').trim();
+    return text && text !== 'none' ? text : 'none';
+  }
+
+  function verticalShift(value) {
+    if (String(value) === 'super') return '-0.34em';
+    if (String(value) === 'sub') return '0.28em';
+    return '0';
+  }
+
   function setRootVar(name, value) {
     if (value != null && value !== '') document.documentElement.style.setProperty(name, String(value));
   }
@@ -96,19 +114,48 @@
 
     setRootVar('--brand-x', toPx(title.x, '0px'));
     setRootVar('--brand-y', toPx(title.y, '0px'));
+    setRootVar('--brand-title-font', fontValue(title.font, '"Noto Serif SC", "Source Han Serif SC", "Songti SC", serif'));
+    setRootVar('--brand-title-size', toPx(title.size, '44px'));
+    setRootVar('--brand-title-weight', title.weight || 700);
+    setRootVar('--brand-title-style', title.fontStyle || 'normal');
+    setRootVar('--brand-title-decoration', decorationValue(title.decoration));
+    setRootVar('--brand-title-baseline-shift', verticalShift(title.vertical));
     setRootVar('--logo-size', toPx(logo.size, '60px'));
     setRootVar('--disclaimer-x', toPx(disclaimer.x, '0px'));
     setRootVar('--disclaimer-y', toPx(disclaimer.y, '0px'));
+    setRootVar('--disclaimer-font', fontValue(disclaimer.font, '"Noto Serif SC", "Source Han Serif SC", "Songti SC", serif'));
+    setRootVar('--disclaimer-size', toPx(disclaimer.size, '30px'));
+    setRootVar('--disclaimer-weight', disclaimer.weight || 600);
+    setRootVar('--disclaimer-style', disclaimer.fontStyle || 'normal');
+    setRootVar('--disclaimer-decoration', decorationValue(disclaimer.decoration));
+    setRootVar('--disclaimer-baseline-shift', verticalShift(disclaimer.vertical));
     setRootVar('--asset-x', toPx(assets.x, '0px'));
     setRootVar('--asset-y', toPx(assets.y, '0px'));
     setRootVar('--asset-scale', toUnit(assets.scale, '1'));
     setRootVar('--text-x', toPx(text.x, '0px'));
     setRootVar('--text-y', toPx(text.y, '0px'));
     setRootVar('--text-scale', toUnit(text.scale, '1'));
+    setRootVar('--text-font', fontValue(text.font, '"Noto Sans SC", "PingFang SC", sans-serif'));
     setRootVar('--text-size', toPx(text.size, '48px'));
+    setRootVar('--text-weight', text.weight || 'normal');
+    setRootVar('--text-style', text.fontStyle || 'normal');
+    setRootVar('--text-decoration', decorationValue(text.decoration));
+    setRootVar('--text-baseline-shift', verticalShift(text.vertical));
     setRootVar('--text-color', text.color || 'var(--ink)');
     setRootVar('--band-h', toPx(subtitle.height, '220px'));
     setRootVar('--type-cap-zh', toPx(subtitle.size, '78px'));
+    setRootVar('--subtitle-zh-font', fontValue(subtitle.font, '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif'));
+    setRootVar('--subtitle-zh-size', toPx(subtitle.size, '78px'));
+    setRootVar('--subtitle-zh-weight', subtitle.weight || 700);
+    setRootVar('--subtitle-zh-style', subtitle.fontStyle || 'normal');
+    setRootVar('--subtitle-zh-decoration', decorationValue(subtitle.decoration));
+    setRootVar('--subtitle-zh-baseline-shift', verticalShift(subtitle.vertical));
+    setRootVar('--subtitle-en-font', fontValue(subtitle.subFont, '"Inter", "Helvetica Neue", system-ui, sans-serif'));
+    setRootVar('--subtitle-en-size', toPx(subtitle.subSize, '38px'));
+    setRootVar('--subtitle-en-weight', subtitle.subWeight || 500);
+    setRootVar('--subtitle-en-style', subtitle.subFontStyle || 'normal');
+    setRootVar('--subtitle-en-decoration', decorationValue(subtitle.subDecoration));
+    setRootVar('--subtitle-en-baseline-shift', verticalShift(subtitle.subVertical));
     setRootVar('--band', 'transparent');
     setRootVar('--band-text', subtitle.color || 'var(--ink)');
     setRootVar('--band-sub', subtitle.subColor || 'var(--ink-soft)');
@@ -133,7 +180,10 @@
     const css = fonts.map((f) => {
       if (!f || !f.family || !f.src) return '';
       // 字体也带 bust：woff2 改了名 / 内容变了 都能立刻生效（绝对 URL 不动）
-      const rawUrl = /^https?:|^\/|^data:/.test(f.src) ? f.src : (dirAbs + '/' + f.src);
+      const rawSrc = String(f.src);
+      const rawUrl = rawSrc.startsWith('/fonts/')
+        ? (dirAbs + rawSrc)
+        : (/^https?:|^\/|^data:/.test(rawSrc) ? rawSrc : (dirAbs + '/' + rawSrc));
       const url = /^https?:|^data:/.test(rawUrl) ? rawUrl : busted(rawUrl);
       const fmt = f.format || 'woff2';
       return [

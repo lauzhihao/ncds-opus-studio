@@ -18,7 +18,7 @@ def build_rw_draft(
     model_unavailable_cls: type[BaseException],
     on_progress: Callable[[str], None],
 ) -> dict[str, Any]:
-    """把单模型结果（成功文本 / 异常）转成 draft dict，成功时写盘。"""
+    """把单模型成功结果转成 draft dict 并写盘；异常/空结果由调用方静默跳过。"""
     mid, label = cand["id"], cand["label"]
     if isinstance(res, model_unavailable_cls):
         return {"model_id": mid, "label": label, "status": "failed",
@@ -103,20 +103,20 @@ class PipelineRwRun:
             res: Any = await self.invoke_rw_candidate(
                 cand, self.user_prompt, self.system_prompt, self.on_progress, self.push_status,
             )
-        except BaseException as exc:  # noqa: BLE001 — 运行时失败保留在列表
+        except BaseException as exc:  # noqa: BLE001 — 单模型失败静默跳过，不污染前端 drafts
             if isinstance(exc, self.model_unavailable_cls):
-                self.on_progress(f"  [{cand['id']}] 不可用，静默跳过")
-                return  # 不可用静默跳过，不加入 drafts，前端不显示
-            res = exc
+                return
+            return
         draft = self.make_draft(cand, res)
-        if draft.get("status") == "success":
-            # 柳永质检闸门：ai_taste 打回重写 + rubric 评分（同 liuyong.py）。同步 helper 放 to_thread。
-            try:
-                draft.update(await asyncio.to_thread(
-                    self.apply_rw_qc, self.rw_root / cand["id"], cand["id"], self.on_progress,
-                ))
-            except Exception as exc:  # noqa: BLE001 — 质检失败不拖垮出稿
-                self.on_progress(f"  [{cand['id']}] 质检异常（不影响稿件）: {exc}")
+        if draft.get("status") != "success":
+            return
+        # 柳永质检闸门：ai_taste 打回重写 + rubric 评分（同 liuyong.py）。同步 helper 放 to_thread。
+        try:
+            draft.update(await asyncio.to_thread(
+                self.apply_rw_qc, self.rw_root / cand["id"], cand["id"], self.on_progress,
+            ))
+        except Exception as exc:  # noqa: BLE001 — 质检失败不拖垮出稿
+            self.on_progress(f"  [{cand['id']}] 质检异常（不影响稿件）: {exc}")
         self.drafts_by_id[cand["id"]] = draft
         self.push_drafts()  # 这个模型一好就立即渲染到前端
 
@@ -135,8 +135,7 @@ class PipelineRwRun:
         drafts_out = self.ordered_drafts()
         success_count = sum(1 for d in drafts_out if d.get("status") == "success")
         if success_count == 0:
-            reasons = "; ".join(f"{d['model_id']}={d.get('reason')}" for d in drafts_out)
-            raise RuntimeError(f"{len(self.model_candidates)} 个模型全部失败：{reasons}")
+            raise RuntimeError("当前没有模型成功出稿，请稍后重试或检查模型配置")
 
         self.on_progress(f"完成：{success_count}/{len(self.model_candidates)} 成功")
         return {

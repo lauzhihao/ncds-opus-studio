@@ -9,6 +9,45 @@ from typing import Any, Awaitable, Callable
 from ncds_opus_core.common import cancel as _cancel
 
 
+TRANSCRIPT_ONLY_COLLECT_MODE = "transcript_only"
+
+
+def collect_entry_error(entry: dict[str, Any]) -> str | None:
+    """Return a user-facing ASR collect error if an entry cannot feed RW."""
+    if entry.get("error"):
+        return str(entry["error"])
+
+    status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+    download_status = status.get("download")
+    transcribe_status = str(status.get("transcribe") or "")
+    if download_status == "failed":
+        return "下载失败，未产出转写文案"
+    if transcribe_status == "failed" or transcribe_status.startswith("error:"):
+        return "转写失败，未产出文案"
+    if transcribe_status == "empty":
+        return None
+    if str(entry.get("text") or "").strip():
+        return None
+    return None
+
+
+def is_transcript_only_collect(inputs: dict[str, Any] | None) -> bool:
+    """是否使用沈括纯文案快采模式。
+
+    film domain 默认命中：影视解说测试阶段只需要下载/听写原稿和音轨，避免评论、
+    抠图等额外 API/本地重活。也允许显式 collect_mode=transcript_only，给未来非影视
+    任务复用这个轻量路径。
+    """
+    if not isinstance(inputs, dict):
+        return False
+    mode = str(inputs.get("collect_mode") or inputs.get("shenkuo_collect_mode") or "").strip().lower()
+    if mode in {TRANSCRIPT_ONLY_COLLECT_MODE, "text_only", "transcript-only", "text-only"}:
+        return True
+    if inputs.get("transcript_only") is True:
+        return True
+    return str(inputs.get("domain") or "").strip().lower() == "film"
+
+
 @dataclass
 class PipelineAsrCollectRun:
     """Fast Shenkuo collect pass used by the web pipeline ASR node."""
@@ -30,6 +69,10 @@ class PipelineAsrCollectRun:
 
         collect_dir = self.job_dir / "01_collect"
         collect_dir.mkdir(parents=True, exist_ok=True)
+        transcript_only = is_transcript_only_collect(self.inputs)
+        top_comments = 0 if transcript_only else 20
+        if transcript_only:
+            self._on_progress("沈括纯文案模式：跳过评论和抠图，保留音轨采集")
 
         collected_by_idx: dict[int, dict[str, Any]] = {}
 
@@ -40,27 +83,43 @@ class PipelineAsrCollectRun:
         for idx, url in enumerate(urls, start=1):
             self._on_progress(f"[{idx}/{len(urls)}] 解析作品链接")
             try:
-                aweme_id = tikhub_client.resolve_aweme_id(url)
-                if not aweme_id:
-                    raise RuntimeError(f"解析不出 aweme_id（仅支持抖音链接/口令）：{url}")
+                ref = tikhub_client.resolve_video_ref(url)
+                if not ref:
+                    raise RuntimeError(f"解析不出作品 id（支持抖音/TikTok/YouTube 单作品链接）：{url}")
+                aweme_id = ref.video_id
                 meta: dict[str, Any] = {}
-                try:
-                    meta = tikhub_client.extract_meta(
-                        tikhub_client.fetch_one_video_detail(aweme_id)
-                    )
-                except Exception as exc:  # noqa: BLE001 — 元数据失败不阻塞主链路
-                    self._on_progress(f"[{idx}/{len(urls)}] 元数据获取失败（不阻塞）：{exc}")
+                if ref.platform == "douyin":
+                    try:
+                        meta = tikhub_client.extract_meta(
+                            tikhub_client.fetch_one_video_detail(aweme_id)
+                        )
+                    except Exception as exc:  # noqa: BLE001 — 元数据失败不阻塞主链路
+                        self._on_progress(f"[{idx}/{len(urls)}] 元数据获取失败（不阻塞）：{exc}")
+                else:
+                    try:
+                        meta = tikhub_client.fetch_video_ref_meta(ref)
+                    except Exception as exc:  # noqa: BLE001 — 元数据失败不阻塞主链路
+                        self._on_progress(f"[{idx}/{len(urls)}] 元数据获取失败（不阻塞）：{exc}")
+                        meta = tikhub_client.video_ref_meta(ref)
                 entry = await self.run_in_thread_cancellable(
                     shenkuo.collect_one, self.flag_path,
                     aweme_id, collect_dir,
                     meta=meta, on_progress=self._on_progress,
-                    do_audio=False, do_frames=False,
+                    top_comments=top_comments,
+                    do_audio=True, do_frames=False,
+                    platform=ref.platform, source_url=ref.url,
                 )
                 entry["index"] = idx
                 entry["url"] = url
+                entry_error = collect_entry_error(entry)
+                if entry_error:
+                    entry["error"] = entry_error
                 collected_by_idx[idx] = entry
                 push_collected()
-                self._on_progress(f"[{idx}/{len(urls)}] 采集完成（文案/评论/数据）")
+                if entry_error:
+                    self._on_progress(f"[{idx}/{len(urls)}] 采集失败：{entry_error}")
+                else:
+                    self._on_progress(f"[{idx}/{len(urls)}] 采集完成（文案/评论/数据）")
             except _cancel.TaskCancelled:
                 # TaskCancelled 继承 RuntimeError，不能被下面的 except Exception 吞掉。
                 raise
@@ -75,7 +134,7 @@ class PipelineAsrCollectRun:
                 continue
 
         collected = [collected_by_idx[k] for k in sorted(collected_by_idx)]
-        succeeded = [e for e in collected if not e.get("error")]
+        succeeded = [e for e in collected if not collect_entry_error(e)]
         if not succeeded:
             raise RuntimeError(f"全部 {len(urls)} 个作品采集失败，详见各作品状态")
         return {"collected": collected, "collect_dir": str(collect_dir)}

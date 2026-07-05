@@ -35,6 +35,7 @@ def test_apply_rw_qc_pass(tmp_path, monkeypatch):
 
     out = rw_helpers._apply_rw_qc(md, "opus", lambda *_: None)
     assert out["qc"]["verdict"] == "pass"
+    assert out["needs_fix"] is False
     assert out["qc_rubric"]["total"] == 42 and out["qc_rubric"]["grade"] == "A"
     assert (md / "draft.qc.json").is_file()
 
@@ -57,6 +58,7 @@ def test_apply_rw_qc_fail_then_purge(tmp_path, monkeypatch):
     out = rw_helpers._apply_rw_qc(md, "gpt5", lambda *_: None)
     assert calls["scan"] == 2                       # 打回重写一轮后复检
     assert out["qc"]["verdict"] == "pass"           # 重写后通过
+    assert out["needs_fix"] is False
     assert purged.strip() in (md / "draft.md").read_text(encoding="utf-8")  # 回写重写稿
     assert out["qc_rubric"]["available"] is False   # 本机无 opus 跳过 rubric
 
@@ -71,4 +73,22 @@ def test_apply_rw_qc_fail_purge_empty_keeps_original(tmp_path, monkeypatch):
 
     out = rw_helpers._apply_rw_qc(md, "deepseek", lambda *_: None)
     assert out["qc"]["verdict"] == "fail"           # 仍 fail（重写无效，未死循环）
+    assert out["needs_fix"] is True
     assert original in (md / "draft.md").read_text(encoding="utf-8")
+
+
+def test_purge_ai_taste_rw_falls_back_to_refine(tmp_path, monkeypatch):
+    """opus 消 AI 味失败时，用可用 refine 模型兜底，且不把异常细节推给前端。"""
+    report = {"verdict": "fail", "summary": "AI 味", "density": [{"rule": "套路", "samples": ["然而"]}]}
+    progress: list[str] = []
+
+    def boom(*_a, **_k):
+        raise RuntimeError("secret stack")
+
+    monkeypatch.setattr(ai_taste, "purge_ai_taste", boom)
+    monkeypatch.setattr(quality_rubric, "refine", lambda *_a, **_k: "兜底优化后的正文" * 30)
+
+    out = rw_helpers._purge_ai_taste_rw("原稿正文" * 30, report, progress.append, model_id="deepseek")
+
+    assert out.startswith("兜底优化后的正文")
+    assert all("secret stack" not in line for line in progress)

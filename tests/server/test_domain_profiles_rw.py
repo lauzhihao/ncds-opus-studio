@@ -42,6 +42,32 @@ def test_get_profile_emotion_has_per_agent_fields():
         assert slot in p, f"emotion 缺 {slot}"
 
 
+def test_get_profile_film_has_per_agent_fields():
+    """film profile 必须包含 per-agent 槽位（guiguzi/liuyong/wudaozi/cover/boya）。"""
+    p = get_profile("film")
+    assert p is not None
+    for slot in _PER_AGENT_SLOTS:
+        assert slot in p, f"film 缺 {slot}"
+
+
+def test_get_profile_comedy_has_per_agent_fields():
+    """comedy profile 必须包含 per-agent 槽位（guiguzi/liuyong/wudaozi/cover/boya）。"""
+    p = get_profile("comedy")
+    assert p is not None
+    for slot in _PER_AGENT_SLOTS:
+        assert slot in p, f"comedy 缺 {slot}"
+
+
+def test_comedy_profile_contains_safety_and_punchline_constraints():
+    """comedy profile 写入搞笑赛道关键约束：包袱节奏、反差、禁止歧视攻击。"""
+    p = get_profile("comedy")
+    assert p is not None
+    all_text = "\n".join(str(p[slot] or "") for slot in _PER_AGENT_SLOTS)
+    assert "包袱" in all_text
+    assert "反差" in all_text
+    assert "歧视" in all_text
+
+
 def test_get_profile_finance_draft_prompt_not_none():
     """finance.draft_prompt 必须有实质内容（task-2.4 核心目标）。"""
     p = get_profile("finance")
@@ -268,8 +294,63 @@ def test_emotion_cover_not_none():
     assert p["cover"] is not None and len(p["cover"]) > 50
 
 
+def test_film_profile_contains_commentary_constraints():
+    """film profile 写入影视解说关键约束：本地素材溯源、脚本/配音优先、审核暂停。"""
+    p = get_profile("film")
+    assert p is not None
+    text = "\n".join(v or "" for v in p.values())
+    assert "影视解说" in text
+    assert "本地素材" in text
+    assert "素材来源" in text or "source_file" in text
+    assert "script.txt" in text
+    assert "voiceover.mp3" in text
+    assert "暂停" in text and "审核" in text
+    assert "2 美元" in text and "0.5 美元" in text
+
+
+def test_film_guiguzi_keeps_topic_stage_semantics():
+    """film.guiguzi 保持选题阶段语义，不把柳永的 10 个增量当出题数量。"""
+    p = get_profile("film")
+    assert p is not None
+    prompt = p["guiguzi"] or ""
+    assert "影视解说也必须先出选题" in prompt
+    assert "直接展开成 10 条增量" in prompt
+    assert "$听写稿" not in prompt
+
+
+def test_film_guiguzi_context_for_liuyong_uses_increment_instruction(tmp_path):
+    """选题交给柳永时，film 的鬼谷子上下文按影视解说增量指令词组织。"""
+    ctx = rw_helpers._rw_guiguzi_context(
+        {
+            "guiguzi": {
+                "chosen_topic": {
+                    "title": "地下室照片暴露女主身份",
+                    "angle": "从旧照片切入身份悬疑",
+                    "why": "道具能带出反转",
+                    "potential": 8,
+                },
+                "chosen_analysis": {
+                    "hook_reason": "身份悬念强",
+                    "audience": "悬疑剧观众",
+                    "hooks": ["旧物证 -> 身份反转"],
+                    "direction": "围绕关键道具推进",
+                },
+            }
+        },
+        tmp_path,
+        domain="film",
+    )
+    assert "我是一名抖音独家精选的影视解说博主" in ctx
+    assert "找到 10 个增量" in ctx
+    assert "心理描写" in ctx
+    assert "场景、细节、器具、环境" in ctx
+    assert "以下是剧情文案：$听写稿" in ctx
+    assert "地下室照片暴露女主身份" in ctx
+    assert "不是新的选题数量要求" in ctx
+
+
 def test_boya_slot_present_but_none():
-    """boya（配音）槽位已建、内容待填：两个 domain 均为 None（回退通用）。"""
+    """boya（配音）槽位已建、内容待填：finance/emotion 为 None（回退通用）。"""
     for domain in ("finance", "emotion"):
         p = get_profile(domain)
         assert p is not None

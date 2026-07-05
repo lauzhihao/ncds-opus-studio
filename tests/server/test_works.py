@@ -158,6 +158,203 @@ def test_resolve_work_returns_domain_field(client_env, monkeypatch):
     assert r2.json()["domain"] == "emotion"
 
 
+def test_resolve_work_tiktok_metadata_card_without_douyin_tikhub(client_env, monkeypatch):
+    """TikTok 单作品链接：不误走抖音详情接口，改用非抖音 metadata 填作品卡。"""
+    client, works_mod = client_env
+
+    monkeypatch.setattr(
+        works_mod.tikhub_client, "fetch_one_video_detail",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("TikTok 不该打抖音详情接口")),
+    )
+    monkeypatch.setattr(
+        works_mod.tikhub_client, "fetch_video_ref_meta",
+        lambda _ref: {
+            "desc": "TK title #tag",
+            "author": "kevinpoterfield",
+            "hashtags": ["tag"],
+            "digg": 12,
+            "comment": 3,
+            "share": 2,
+            "collect": 8,
+            "cover_url": "http://tk/cover.jpg",
+            "duration": 17,
+            "metadata_source": "yt_dlp",
+        },
+    )
+
+    url = "https://www.tiktok.com/@kevinpoterfield/video/7650894465690766623?is_from_webapp=1"
+    r = client.post("/works/resolve", json={"text": url})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["platform"] == "tiktok"
+    assert body["aweme_id"] == "7650894465690766623"
+    assert body["share_url"].startswith("https://www.tiktok.com/@kevinpoterfield/video/")
+    assert body["title"] == "TK title"
+    assert body["hashtags"] == ["tag"]
+    assert body["digg"] == 12
+    assert body["comment"] == 3
+    assert body["share"] == 2
+    assert body["collect"] == 8
+    assert body["cover_url"] == "http://tk/cover.jpg"
+    assert body["author"]["platform"] == "tiktok"
+    assert body["author"]["unique_id"] == "kevinpoterfield"
+    assert body["cached"] is False
+
+    from ncds_opus_factory.common import works_repo
+    assert works_repo.load_card("tiktok", "7650894465690766623")["platform"] == "tiktok"
+
+
+def test_resolve_work_refreshes_old_tiktok_lightweight_cache(client_env, monkeypatch):
+    """旧缓存 TK 轻量卡没有 metadata_source 时，resolve 会补一次 metadata 并覆盖 card。"""
+    client, works_mod = client_env
+    from ncds_opus_factory.common import works_repo
+
+    aid = "7650894465690766623"
+    old = {
+        "platform": "tiktok",
+        "aweme_id": aid,
+        "share_url": f"https://www.tiktok.com/@kevinpoterfield/video/{aid}",
+        "title": f"TikTok 作品 {aid}",
+        "hashtags": [],
+        "digg": 0,
+        "comment": 0,
+        "share": 0,
+        "collect": 0,
+        "cover_url": "",
+        "author": {
+            "platform": "tiktok",
+            "sec_uid": "",
+            "nickname": "kevinpoterfield",
+            "unique_id": "kevinpoterfield",
+            "avatar": "",
+        },
+    }
+    works_repo.save_card("tiktok", aid, old)
+    monkeypatch.setattr(
+        works_mod.tikhub_client, "fetch_video_ref_meta",
+        lambda _ref: {
+            "desc": "Fresh TK",
+            "author": "kevinpoterfield",
+            "hashtags": [],
+            "digg": 9,
+            "cover_url": "http://tk/new.jpg",
+            "metadata_source": "yt_dlp",
+        },
+    )
+
+    r = client.post("/works/resolve", json={"text": old["share_url"]})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cached"] is True
+    assert body["title"] == "Fresh TK"
+    assert body["cover_url"] == "http://tk/new.jpg"
+    assert works_repo.load_card("tiktok", aid)["metadata_source"] == "yt_dlp"
+
+
+def test_resolve_work_refreshes_tiktok_numeric_author_cache(client_env, monkeypatch):
+    """TikTok 旧缓存若把纯数字内部 id 当作者名，resolve 会补一次 metadata。"""
+    client, works_mod = client_env
+    from ncds_opus_factory.common import works_repo
+
+    aid = "7596952383146443789"
+    old = {
+        "platform": "tiktok",
+        "aweme_id": aid,
+        "share_url": f"https://www.tiktok.com/@freshfinds/video/{aid}",
+        "title": "Old TK",
+        "hashtags": [],
+        "cover_url": "http://tk/old.jpg",
+        "author": {
+            "platform": "tiktok",
+            "sec_uid": "",
+            "nickname": aid,
+            "unique_id": aid,
+            "avatar": "",
+        },
+        "metadata_source": "yt_dlp",
+    }
+    works_repo.save_card("tiktok", aid, old)
+    monkeypatch.setattr(
+        works_mod.tikhub_client, "fetch_video_ref_meta",
+        lambda _ref: {
+            "desc": "Fresh TK",
+            "author": "Fresh Finds",
+            "hashtags": [],
+            "cover_url": "http://tk/new.jpg",
+            "metadata_source": "yt_dlp",
+        },
+    )
+
+    r = client.post("/works/resolve", json={"text": old["share_url"]})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cached"] is True
+    assert body["author"]["nickname"] == "Fresh Finds"
+    assert works_repo.load_card("tiktok", aid)["author"]["nickname"] == "Fresh Finds"
+
+
+def test_resolve_work_youtube_lightweight_card_without_tikhub(client_env, monkeypatch):
+    """YouTube 单视频链接：识别并缓存，等待沈括采集阶段用 yt-dlp 下载听写。"""
+    client, works_mod = client_env
+
+    monkeypatch.setattr(
+        works_mod.tikhub_client, "fetch_one_video_detail",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("YouTube 不该打抖音详情接口")),
+    )
+    monkeypatch.setattr(
+        works_mod.tikhub_client, "fetch_video_ref_meta",
+        lambda _ref: {
+            "desc": "YT title",
+            "author": "yt_author",
+            "hashtags": [],
+            "cover_url": "http://yt/cover.jpg",
+            "metadata_source": "yt_dlp",
+        },
+    )
+
+    r = client.post("/works/resolve", json={"text": "https://youtu.be/dQw4w9WgXcQ?si=x"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["platform"] == "youtube"
+    assert body["aweme_id"] == "dQw4w9WgXcQ"
+    assert body["share_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert body["title"] == "YT title"
+    assert body["cover_url"] == "http://yt/cover.jpg"
+    assert body["author"]["platform"] == "youtube"
+    assert body["cached"] is False
+
+
+def test_resolve_work_youtube_shorts_falls_back_when_metadata_blocked(client_env, monkeypatch):
+    """YouTube Shorts URL：yt-dlp metadata 被反爬拦住时也返回轻量卡片，不让解析失败。"""
+    client, works_mod = client_env
+
+    monkeypatch.setattr(
+        works_mod.tikhub_client, "fetch_one_video_detail",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("YouTube 不该打抖音详情接口")),
+    )
+    monkeypatch.setattr(
+        works_mod.tikhub_client, "fetch_video_ref_meta",
+        lambda _ref: (_ for _ in ()).throw(RuntimeError("Sign in to confirm you’re not a bot")),
+    )
+
+    r = client.post(
+        "/works/resolve",
+        json={"text": "https://youtube.com/shorts/9fGlP0W09Fk?si=eRb5hoOiV8NN0zhX"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["platform"] == "youtube"
+    assert body["aweme_id"] == "9fGlP0W09Fk"
+    assert body["share_url"] == "https://www.youtube.com/watch?v=9fGlP0W09Fk"
+    assert body["title"] == "YouTube 作品 9fGlP0W09Fk"
+    assert body["cached"] is False
+
+
 def test_set_work_domain_unknown_key_422(client_env):
     """PATCH domain：传未知 key 返回 422，不落盘。"""
     client, _ = client_env
@@ -169,9 +366,9 @@ def test_set_work_domain_unknown_key_422(client_env):
 
 
 def test_set_work_domain_known_keys(client_env):
-    """PATCH domain：finance/emotion 两个合法 key 均可写入。"""
+    """PATCH domain：已注册的合法 key 均可写入。"""
     client, _ = client_env
-    for key in ("finance", "emotion"):
+    for key in ("finance", "emotion", "film", "comedy"):
         r = client.patch(f"/works/douyin/{AID}/domain", json={"domain": key})
         assert r.status_code == 200, f"key={key} 应 200, 实际 {r.status_code}: {r.text}"
         from ncds_opus_factory.common import works_repo

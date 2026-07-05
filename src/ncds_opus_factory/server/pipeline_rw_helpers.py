@@ -7,8 +7,9 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ncds_opus_factory.common.opus_cli import DEFAULT_OPUS_MODEL, call_opus, is_opus_available
 
@@ -23,7 +24,7 @@ MODEL_CANDIDATES: list[dict[str, str]] = [
 ]
 
 
-class _ModelUnavailable(Exception):
+class _ModelUnavailable(Exception):  # noqa: N818
     """专用 sentinel：模型在本机不可用（缺二进制 / 缺 API key 等）。"""
 
 
@@ -89,9 +90,8 @@ async def _invoke_rw_candidate(
         return text
     except _ModelUnavailable:
         raise
-    except Exception as exc:
-        on_progress(f"模型 {mid} 调用失败：{exc}")
-        status("failed")
+    except Exception:
+        status("unavailable")
         raise
 
 
@@ -117,7 +117,7 @@ def _call_scodex_for_rw(prompt: str, model_id: str) -> str:
         "--json",
         prompt,
     ]
-    proc = subprocess.run(
+    proc = subprocess.run(  # noqa: S603
         args,
         capture_output=True,
         text=True,
@@ -222,6 +222,153 @@ def _rw_domain_guidance(domain: str | None) -> str | None:
     return dp.get("liuyong") if dp else None
 
 
+def _as_nonempty_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, int | float):
+        return str(value)
+    return ""
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _read_guiguzi_doc(job_dir: Path) -> dict[str, Any]:
+    path = job_dir / "guiguzi.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — 鬼谷子上下文缺失不应阻塞柳永
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _find_topic_by_title(topics: Any, title: str) -> dict[str, Any]:
+    if not title or not isinstance(topics, list):
+        return {}
+    for item in topics:
+        topic = _as_dict(item)
+        if _as_nonempty_text(topic.get("title")) == title:
+            return topic
+    return {}
+
+
+def _format_guiguzi_topic(topic: dict[str, Any]) -> str:
+    fields = [
+        ("title", "选题标题"),
+        ("angle", "切入角度"),
+        ("why", "可能爆的原因"),
+        ("anchor_comment", "锚定评论"),
+        ("potential", "潜力分"),
+        ("source_model", "来源模型"),
+    ]
+    lines: list[str] = []
+    for key, label in fields:
+        text = _as_nonempty_text(topic.get(key))
+        if text:
+            lines.append(f"{label}: {text}")
+    return "\n".join(lines)
+
+
+def _format_guiguzi_analysis(analysis: dict[str, Any]) -> str:
+    lines: list[str] = []
+    hook_reason = _as_nonempty_text(analysis.get("hook_reason"))
+    if hook_reason:
+        lines.append(f"爆款原因: {hook_reason}")
+    audience = _as_nonempty_text(analysis.get("audience"))
+    if audience:
+        lines.append(f"目标受众: {audience}")
+    hooks = analysis.get("hooks")
+    if isinstance(hooks, list):
+        hook_lines = [_as_nonempty_text(x) for x in hooks]
+        hook_lines = [x for x in hook_lines if x]
+        if hook_lines:
+            lines.append("可复制钩子:")
+            lines.extend(f"- {x}" for x in hook_lines)
+    else:
+        hooks_text = _as_nonempty_text(hooks)
+        if hooks_text:
+            lines.append(f"可复制钩子: {hooks_text}")
+    direction = _as_nonempty_text(analysis.get("direction"))
+    if direction:
+        lines.append(f"衍生选题方向: {direction}")
+    return "\n".join(lines)
+
+
+def _rw_guiguzi_context(
+    rw_config: dict[str, Any] | None, job_dir: Path, domain: str | None = None,
+) -> str:
+    """把鬼谷子拆解/选题结果整理成柳永 prompt 输入。
+
+    新任务优先读取 rw node_config 中由前端传入的 chosen_topic/chosen_analysis；
+    旧任务或重跑时回退 per-job guiguzi.json 的 chosen_analysis。
+    """
+    cfg = _as_dict(rw_config)
+    guiguzi_cfg = _as_dict(cfg.get("guiguzi"))
+    guiguzi_doc = _read_guiguzi_doc(job_dir)
+
+    topic = _as_dict(
+        guiguzi_cfg.get("chosen_topic")
+        or guiguzi_cfg.get("topic")
+        or guiguzi_doc.get("chosen_topic")
+        or guiguzi_doc.get("selected_topic")
+    )
+    if not topic:
+        selected_title = _as_nonempty_text(
+            guiguzi_cfg.get("chosen_title")
+            or guiguzi_cfg.get("selected_title")
+            or guiguzi_doc.get("chosen_title")
+            or guiguzi_doc.get("selected_title")
+        )
+        topic = _find_topic_by_title(guiguzi_doc.get("topics"), selected_title)
+
+    analysis = _as_dict(
+        guiguzi_cfg.get("chosen_analysis")
+        or guiguzi_cfg.get("analysis")
+        or guiguzi_doc.get("chosen_analysis")
+    )
+
+    topic_text = _format_guiguzi_topic(topic)
+    analysis_text = _format_guiguzi_analysis(analysis)
+    if not topic_text and not analysis_text:
+        return ""
+
+    if (domain or "").strip().lower() == "film":
+        parts: list[str] = [
+            "我是一名抖音独家精选的影视解说博主。",
+            "请基于下方【选定选题】和后面的【源文档/听写稿】，帮我把这段剧情找到 10 个增量。",
+            "增量可以是心理描写，也可以是场景、细节、器具、环境的科普。",
+            "这些增量不是新的选题数量要求，而是柳永成稿时要围绕选定选题补强的写作抓手。",
+            "",
+            "【选定选题】",
+            topic_text or "(未选择具体选题，只参考爆款拆解)",
+        ]
+        if analysis_text:
+            parts += ["", "【爆款原因拆解】", analysis_text]
+        parts += [
+            "",
+            "【柳永落稿要求】",
+            "- 成稿必须围绕【选定选题】展开，不要把 10 个增量写成列表报告；",
+            "- 优先把增量自然揉进剧情推进、人物心理、镜头细节和道具/环境解释里；",
+            "- 以下是剧情文案：$听写稿。实际听写稿见后文【源文档】。",
+            "- 源文档仍是事实边界：不得编造源文档未出现的人物、情节、镜头或后续剧情。",
+        ]
+        return "\n".join(parts).strip()
+
+    parts: list[str] = []
+    if topic_text:
+        parts += ["【选定选题】", topic_text]
+    if analysis_text:
+        if parts:
+            parts.append("")
+        parts += ["【爆款原因拆解】", analysis_text]
+    return "\n".join(parts).strip()
+
+
 def _rw_source_text(asr_items: list[dict[str, Any]], job_dir: Path) -> str:
     """把 asr 产物拼成 rw 的源文本。"""
     sections: list[str] = []
@@ -241,15 +388,70 @@ def _rw_source_text(asr_items: list[dict[str, Any]], job_dir: Path) -> str:
     return "\n\n---\n\n".join(sections).strip()
 
 
-def _purge_ai_taste_rw(text: str, report: dict[str, Any], on_progress: Callable[[str], None]) -> str:
-    """把 ai_taste 命中的 AI 味甩回 opus 消除，返回改写后全文（common 单点实现）。"""
+def _ai_taste_issue_lines(report: dict[str, Any]) -> list[str]:
+    """把 ai_taste report 转成可给 refine 模型使用的问题清单。"""
+    if report.get("verdict") != "fail":
+        return []
+    issues: list[str] = []
+    summary = _as_nonempty_text(report.get("summary"))
+    if summary:
+        issues.append(f"AI 味未通过: {summary}")
+
+    for group_name in ("density", "hard"):
+        hits = report.get(group_name)
+        if not isinstance(hits, list):
+            continue
+        for hit in hits:
+            if isinstance(hit, dict):
+                rule = _as_nonempty_text(hit.get("rule")) or group_name
+                count = _as_nonempty_text(hit.get("count"))
+                samples_raw = hit.get("samples")
+                samples: list[str] = []
+                if isinstance(samples_raw, list):
+                    samples = [_as_nonempty_text(x) for x in samples_raw]
+                    samples = [x for x in samples if x]
+                sample_text = "；".join(samples[:3])
+                count_text = f" {count} 次" if count else ""
+                sample_suffix = f"，例：{sample_text}" if sample_text else ""
+                issues.append(f"{rule}{count_text}{sample_suffix}")
+            else:
+                text_hit = _as_nonempty_text(hit)
+                if text_hit:
+                    issues.append(text_hit)
+    return issues or ["AI 味句式未通过，请消除命中的模板表达和硬禁口癖"]
+
+
+def _purge_ai_taste_rw(
+    text: str,
+    report: dict[str, Any],
+    on_progress: Callable[[str], None],
+    *,
+    model_id: str | None = None,
+) -> str:
+    """消除 ai_taste 命中的 AI 味；opus 不可用时用现有 refine 模型兜底。"""
     from ncds_opus_factory.common import ai_taste
 
     try:
         return ai_taste.purge_ai_taste(text, report, timeout_seconds=RW_LLM_TIMEOUT_SEC)
-    except Exception as exc:  # noqa: BLE001 — 消 AI 味失败不致命，保留上一版
-        on_progress(f"  消 AI 味调用失败: {exc}")
-        return ""
+    except Exception:  # noqa: BLE001, S110 — 走下方兜底，不把异常细节推到前端
+        pass
+
+    try:
+        from ncds_opus_factory.common import quality_rubric
+
+        refined = quality_rubric.refine(
+            text,
+            _ai_taste_issue_lines(report),
+            avoid_models={model_id} if model_id else None,
+            timeout_seconds=RW_LLM_TIMEOUT_SEC,
+        )
+        if refined:
+            on_progress("  消 AI 味兜底模型已返回")
+            return refined
+    except Exception:  # noqa: BLE001, S110 — 消 AI 味失败不致命，保留上一版
+        pass
+    on_progress("  消 AI 味通道不可用，保留上一版")
+    return ""
 
 
 def _apply_rw_qc(model_dir: Path, model_id: str, on_progress: Callable[[str], None]) -> dict[str, Any]:
@@ -266,7 +468,7 @@ def _apply_rw_qc(model_dir: Path, model_id: str, on_progress: Callable[[str], No
     while report.get("verdict") == "fail" and rounds < 2:
         rounds += 1
         on_progress(f"  [{model_id}] AI 味超标，打回重写第 {rounds} 轮…")
-        new_text = _purge_ai_taste_rw(text, report, on_progress)
+        new_text = _purge_ai_taste_rw(text, report, on_progress, model_id=model_id)
         if not new_text or len(new_text) < 200:
             on_progress(f"  [{model_id}] 重写未返回有效稿，保留上一版")
             break
@@ -283,13 +485,14 @@ def _apply_rw_qc(model_dir: Path, model_id: str, on_progress: Callable[[str], No
     (model_dir / "draft.qc.json").write_text(
         json.dumps({"qc": report, "qc_rubric": rub}, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    return {"qc": report, "qc_rubric": rub}
+    return {"qc": report, "qc_rubric": rub, "needs_fix": report.get("verdict") == "fail"}
 
 
 def _build_rw_prompt(
     source_text: str,
     user_requirements: str = "",
     domain_guidance: str | None = None,
+    guiguzi_context: str | None = None,
 ) -> tuple[str, str]:
     """构造 RW 的 (system_prompt, user_prompt)。"""
     system_prompt = (
@@ -300,6 +503,17 @@ def _build_rw_prompt(
         parts: list[str] = ["【写作要求】", domain_guidance.strip()]
     else:
         parts = list(_GENERIC_RW_BODY)
+    if guiguzi_context and guiguzi_context.strip():
+        parts += [
+            "",
+            "【鬼谷子拆解 / 选题输入】",
+            guiguzi_context.strip(),
+            "",
+            "【柳永执行规则】",
+            "- 如有【选定选题】，本次稿件必须围绕该选题展开，选题标题/角度优先于源文档原有标题；",
+            "- 爆款原因拆解用于决定开头钩子、受众痛点、结构和语气，不要写成分析报告；",
+            "- 源文档仍是事实边界：不得编造源文档未出现的人物、平台、数据。",
+        ]
     parts += [
         "",
         "【通用约束】",
@@ -318,7 +532,7 @@ def _build_rw_prompt(
         brief = rubric_store.injection_brief()
         if brief:
             reqs = (reqs + "\n\n" if reqs else "") + brief
-    except Exception:  # noqa: BLE001 — 口味注入失败不阻塞改写
+    except Exception:  # noqa: BLE001, S110 — 口味注入失败不阻塞改写
         pass
     if reqs.strip():
         parts += [
