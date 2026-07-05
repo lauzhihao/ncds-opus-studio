@@ -125,7 +125,7 @@ def test_douk_failure_falls_back_to_ytdlp(tmp_path, monkeypatch):
 
 
 def test_douk_passes_platform_source_url_and_deployment_options(tmp_path, monkeypatch):
-    """TikTok 请求会把平台、原始链接、代理、token、device_id 传给 sidecar。"""
+    """TK 请求会把平台、原始链接、代理、token、device_id 传给 sidecar。"""
     out = tmp_path / "video.mp4"
     body = b"MP4"
     seen = {}
@@ -258,7 +258,7 @@ def test_prefers_ytdlp_skips_tikhub(tmp_path, monkeypatch):
 
 
 def test_fetch_and_download_passes_platform_and_source_url_to_ytdlp(tmp_path, monkeypatch):
-    """TikTok/YouTube 等外部平台要把原始链接传给 yt-dlp。"""
+    """TK/油管等外部平台要把原始链接传给 yt-dlp。"""
     out = tmp_path / "v.mp4"
     seen = {}
     monkeypatch.setattr(download, "_douk_http_download", lambda *a, **k: None)
@@ -298,7 +298,7 @@ def test_falls_back_to_tikhub_when_ytdlp_none(tmp_path, monkeypatch):
 
 
 def test_tiktok_falls_back_to_tikhub_when_douk_and_ytdlp_none(tmp_path, monkeypatch):
-    """TikTok 在 DouK/yt-dlp 都没出片时，走 TikHub App V3 付费兜底。"""
+    """TK 在 DouK/yt-dlp 都没出片时，走 TikHub App V3 付费兜底。"""
     out = tmp_path / "v.mp4"
     seen = {}
     monkeypatch.setattr(download, "_douk_http_download", lambda *a, **k: None)

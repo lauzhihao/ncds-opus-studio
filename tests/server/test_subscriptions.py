@@ -146,7 +146,7 @@ def test_tick_respects_per_account_interval(tmp_path: Path):
 
 
 def test_tick_dispatches_supported_platforms(tmp_path: Path):
-    """抖音/TikTok/YouTube 都派沈括刷新，platform 随任务参数下发。"""
+    """抖音/TK/油管都派沈括刷新，platform 随任务参数下发。"""
     p = tmp_path / "subs.json"
     save_subscriptions(p, {"authors": [
         {"sec_uid": "DY", "enabled": True, "platform": "douyin"},

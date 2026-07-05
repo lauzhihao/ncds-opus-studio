@@ -93,7 +93,7 @@
   gap: 4px;
 }
 
-/* 作品卡：标题下方话题 chips，自动换行不限数量 */
+/* 作品卡：标题下方话题 chips，自动换行；作品卡会在固定高度轨道内裁剪 */
 .tpl-card .body .name-tags {
   display: flex;
   flex-wrap: wrap;
@@ -266,27 +266,26 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  z-index: 1;            /* 盖住网格底纹 ::before */
+  z-index: 2;            /* 盖住 CSS 默认封面 */
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
 }
-/* 无封面时的灰色默认图：盖住网格底纹，居中放占位图标 + 小标记。
-   用中性灰（非主题暖色），明确呈现"默认占位图"的观感。 */
+.tpl-card .cover .cover-img.is-loaded {
+  opacity: 1;
+}
+/* 无封面时的 CSS 默认图：先显示，真实封面加载成功后由 .cover-img 覆盖。 */
 .tpl-card .cover .cover-fallback {
   position: absolute;
   inset: 0;
   z-index: 1;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  background: #e6e6ea;
-  color: #9a9aa2;
-}
-.tpl-card .cover .cover-fallback-mark {
+  background: transparent;
+  color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  letter-spacing: 0.08em;
-  color: #8a8a92;
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
 }
 .tpl-card .cover .marker {
   position: relative;
@@ -321,6 +320,18 @@
   flex: 1;                              /* 填满封面以下的剩余高度,使 footer 能 margin-top:auto 贴底 */
   min-height: 0;                        /* 允许内容区收缩,超出由各自 clamp/overflow 省略,不挤 footer */
 }
+.tpl-card.work-card {
+  --work-title-h: 72px;
+  --work-tags-h: 44px;
+  --work-meta-h: 22px;
+  --work-footer-h: 42px;
+}
+.tpl-card.work-card .body {
+  display: grid;
+  grid-template-rows: var(--work-title-h) var(--work-tags-h) var(--work-meta-h) var(--work-footer-h);
+  gap: var(--s-2);
+  flex: 0 0 auto;
+}
 /* 只作用作品卡标题(body 直接子)；账号卡的 .name 嵌在 .account-ident 里,用 > 排除,避免被三行固定挤乱 */
 .tpl-card .body > .name {
   font-family: var(--font-display);
@@ -335,6 +346,25 @@
   overflow: hidden;
   min-height: calc(1.4em * 3);
 }
+.tpl-card.work-card .body > .name {
+  height: var(--work-title-h);
+  min-height: 0;
+  line-height: 1.35;
+  align-self: start;
+}
+.tpl-card.work-card .body .name-tags {
+  height: var(--work-tags-h);
+  min-height: 0;
+  margin-top: 0;
+  align-content: flex-start;
+  overflow: hidden;
+}
+.tpl-card.work-card .body .name-tags .title-tag {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tpl-card .body .desc {
   font-size: var(--text-sm);
   color: var(--ink-2);
@@ -343,6 +373,16 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.tpl-card.work-card .body .desc {
+  height: var(--work-meta-h);
+  min-width: 0;
+  display: block;
+  line-height: var(--work-meta-h);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: unset;
+  -webkit-box-orient: initial;
 }
 .tpl-card .body .footer {
   display: flex;
@@ -353,10 +393,33 @@
   margin-top: auto;                     /* 钉在卡片底部:无论上方标题/标签几行,分割线与按钮位置一致 */
   flex-shrink: 0;                       /* footer 不被压缩 */
 }
+.tpl-card.work-card .body .footer {
+  height: var(--work-footer-h);
+  min-width: 0;
+  margin-top: 0;
+  overflow: hidden;
+}
+.tpl-card.work-card .body .footer .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 /* 播放数据(PostCard)紧贴分割线:弹性空白吸到「标签与数据之间」,数据跟分割线走、不跟标签走。
    数据吸走空白后,紧随的 footer 不再 auto(否则二者平分空白),靠 flex gap 与数据保持间距。 */
 .tpl-card .body .post-stats { margin-top: auto; }
 .tpl-card .body .post-stats + .footer { margin-top: 0; }
+.tpl-card.work-card .body .post-stats {
+  height: var(--work-meta-h);
+  min-width: 0;
+  margin: 0;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  align-items: center;
+}
+.tpl-card.work-card .body .post-stats span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.tpl-card.work-card .body .post-stats + .footer { margin-top: 0; }
 /* footer 里的 badge：原封面右上角标签移到这里（pipeline_id），静态 chip 样式 */
 .tpl-card .body .footer .badge {
   font-family: var(--font-mono);
@@ -381,6 +444,11 @@
   font-size: var(--text-2xs);
   color: var(--ink-2);
   white-space: nowrap;
+}
+.tpl-card.work-card .body .footer .progress-light {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tpl-card .body .footer .progress-light .dot {
   width: 8px;
@@ -554,4 +622,3 @@
 .apps-menu-item-label {
   font-weight: 500;
 }
-

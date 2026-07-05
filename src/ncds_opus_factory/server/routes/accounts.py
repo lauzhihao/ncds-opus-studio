@@ -33,7 +33,7 @@ class ResolveBody(BaseModel):
 
 
 def _resolve_identity(text: str) -> tuple[str | None, str | None]:
-    """从分享链接/口令解析 (platform, author_id)。先判 TikTok(handle),否则抖音(sec_uid)。
+    """从分享链接/口令解析 (platform, author_id)。先判 TK(handle),否则抖音(sec_uid)。
 
     阻塞 IO(可能跟随短链重定向),由调用方丢线程池。都解析不出返回 (None, None)。
     """
@@ -139,7 +139,7 @@ async def _dispatch_refresh(platform: str, author_id: str) -> None:
 
 @router.post("/accounts/resolve")
 async def resolve_account(body: ResolveBody) -> dict[str, Any]:
-    """抖音/TikTok 主页分享链接/口令/完整 user URL -> 账号档案(走作者库缓存)。
+    """抖音/TK 主页分享链接/口令/完整 user URL -> 账号档案(走作者库缓存)。
 
     先查作者库:命中且新鲜(<NOF_AUTHOR_CACHE_TTL_H,默认2h) -> 秒回,不打 TikHub;
     命中但过期 -> 先回旧档案 + 把刷新派给 worker(已关注的抖音号);
@@ -148,7 +148,7 @@ async def resolve_account(body: ResolveBody) -> dict[str, Any]:
     """
     platform, author_id = await asyncio.to_thread(_resolve_identity, body.text)
     if not author_id or not platform:
-        raise HTTPException(422, "无法从内容里解析出账号，请粘贴抖音/TikTok 主页分享链接或口令")
+        raise HTTPException(422, "无法从内容里解析出账号，请粘贴抖音/TK 主页分享链接或口令")
 
     cached = authors_repo.load_profile(platform, author_id)
     if authors_repo.is_fresh(cached):

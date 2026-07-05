@@ -133,10 +133,10 @@ def _resolve_tiktok_video_ref(text: str) -> VideoRef | None:
 
 
 def resolve_video_ref(text: str) -> VideoRef | None:
-    """解析单作品引用，区分 Douyin / TikTok / YouTube。
+    """解析单作品引用，区分抖音 / TK / 油管。
 
-    旧的 ``resolve_aweme_id`` 会从任意 URL 中抠 15-25 位数字，TikTok 作品链接因此会被误判
-    成抖音 aweme_id。新入口先按域名判平台，只有非 TikTok/YouTube 时才走抖音解析。
+    旧的 ``resolve_aweme_id`` 会从任意 URL 中抠 15-25 位数字，TK 作品链接因此会被误判
+    成抖音 aweme_id。新入口先按域名判平台，只有非 TK/油管时才走抖音解析。
     """
     s = (text or "").strip()
     if not s:
@@ -213,7 +213,7 @@ def video_ref_meta(ref: VideoRef) -> dict[str, Any]:
     author = ""
     if ref.platform == "tiktok":
         author = _video_ref_author(ref)
-    label = {"tiktok": "TikTok", "youtube": "YouTube"}.get(ref.platform, ref.platform)
+    label = {"tiktok": "TK", "youtube": "油管"}.get(ref.platform, ref.platform)
     desc = f"{label} 作品 {ref.video_id}"
     return {
         "desc": desc,
@@ -465,11 +465,11 @@ def _simplify_ytdlp_entry(
 
 
 def fetch_video_ref_meta(ref: VideoRef) -> dict[str, Any]:
-    """用 yt-dlp 取 TikTok/YouTube 单作品 metadata；不下载视频字节。"""
+    """用 yt-dlp 取 TK/油管 单作品 metadata；不下载视频字节。"""
     if ref.platform not in {"tiktok", "youtube"}:
         return video_ref_meta(ref)
     if importlib.util.find_spec("yt_dlp") is None:
-        raise RuntimeError("缺少 yt-dlp，无法采集 TikTok/YouTube 单作品元数据")
+        raise RuntimeError("缺少 yt-dlp，无法采集 TK/油管 单作品元数据")
     import yt_dlp  # type: ignore[import-not-found]
 
     opts = {
@@ -510,7 +510,7 @@ def fetch_ytdlp_author_posts(
     max_items: int = 60,
     on_progress: ProgressFn | None = None,
 ) -> list[dict[str, Any]]:
-    """Use yt-dlp to list recent TikTok/YouTube author videos.
+    """Use yt-dlp to list recent TK/油管 author videos.
 
     This is intentionally metadata-only. Actual video bytes are still downloaded later by
     ``capabilities.download`` so Shenkuo keeps a single download/transcribe path.
@@ -519,7 +519,7 @@ def fetch_ytdlp_author_posts(
     if platform not in {"tiktok", "youtube"}:
         raise ValueError(f"yt-dlp author listing only supports tiktok/youtube: {platform}")
     if importlib.util.find_spec("yt_dlp") is None:
-        raise RuntimeError("缺少 yt-dlp，无法采集 TikTok/YouTube 作者作品列表")
+        raise RuntimeError("缺少 yt-dlp，无法采集 TK/油管 作者作品列表")
     import yt_dlp  # type: ignore[import-not-found]
 
     url = _ytdlp_author_url(platform, author)
@@ -644,10 +644,10 @@ def fetch_user_nickname(sec_uid: str, token: str | None = None) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# 用户主页档案（跨平台：抖音 / TikTok）—— 新增对标号时展示昵称/头像/粉丝/获赞/作品数
+# 用户主页档案（跨平台：抖音 / TK）—— 新增对标号时展示昵称/头像/粉丝/获赞/作品数
 # --------------------------------------------------------------------------- #
 def _pick_avatar(user: dict, keys: list[str]) -> str:
-    """从 user 的若干头像字段里取一个 URL。兼容抖音(dict{url_list})与 TikTok(str)。"""
+    """从 user 的若干头像字段里取一个 URL。兼容抖音(dict{url_list})与 TK(str)。"""
     for k in keys:
         v = user.get(k)
         if isinstance(v, dict):
@@ -688,7 +688,7 @@ def fetch_douyin_profile(sec_uid: str, token: str | None = None) -> dict[str, An
 
 
 def fetch_tiktok_profile(unique_id: str, token: str | None = None) -> dict[str, Any] | None:
-    """TikTok 用户主页档案（按 uniqueId/handle）-> 归一化结构（同抖音字段名）。"""
+    """TK 用户主页档案（按 uniqueId/handle）-> 归一化结构（同抖音字段名）。"""
     token = get_token(token)
     resp = requests.get(f"{TIKTOK_PROFILE_URL}?uniqueId={unique_id}",
                         headers=_headers(token), timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
@@ -711,7 +711,7 @@ def fetch_tiktok_profile(unique_id: str, token: str | None = None) -> dict[str, 
 
 
 def resolve_tiktok_handle(text: str) -> str | None:
-    """从 TikTok 主页链接/短链解析出 @handle（uniqueId）。非 TikTok 返回 None。"""
+    """从 TK 主页链接/短链解析出 @handle（uniqueId）。非 TK 返回 None。"""
     s = (text or "").strip()
     m = re.search(r"tiktok\.com/@([A-Za-z0-9_.\-]+)", s)
     if m:
@@ -734,8 +734,8 @@ def resolve_tiktok_handle(text: str) -> str | None:
 def fetch_account_profile(text: str, token: str | None = None) -> dict[str, Any] | None:
     """统一入口：从分享链接/口令/handle 判平台并拉主页档案（归一化）。解析不出返回 None。
 
-    先判 TikTok（tiktok.com/@handle 或 vt/vm 短链），否则走抖音（resolve_sec_uid + handler_user_profile）。
-    注意 TikTok 的 secUid 也以 MS4w 开头但与抖音命名空间不同，必须靠 URL 域名区分，故先判 TikTok。
+    先判 TK（tiktok.com/@handle 或 vt/vm 短链），否则走抖音（resolve_sec_uid + handler_user_profile）。
+    注意 TK 的 secUid 也以 MS4w 开头但与抖音命名空间不同，必须靠 URL 域名区分，故先判 TK。
     """
     handle = resolve_tiktok_handle(text)
     if handle:
@@ -859,7 +859,7 @@ def fetch_tiktok_video_url(
     source_url: str | None = None,
     token: str | None = None,
 ) -> str | None:
-    """TikTok video_id/share_url -> 可下载播放地址。"""
+    """TK video_id/share_url -> 可下载播放地址。"""
     detail = fetch_tiktok_video_detail(video_id, source_url=source_url, token=token)
     return _extract_tiktok_video_url(detail)
 

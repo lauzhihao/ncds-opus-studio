@@ -71,7 +71,7 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* 平台标签：用主题色，不同平台不同颜色（抖音红 / TikTok 蓝，取自画布渐变色） */
+/* 平台标签：用主题色，不同平台不同颜色（抖音红 / TK 蓝 / 油管红） */
 .platform-badge {
   flex-shrink: 0;
   display: inline-flex; align-items: center;
@@ -81,6 +81,7 @@
 
   &.douyin { color: #ea4335; background: rgba(234, 67, 53, 0.09); }
   &.tiktok { color: #4285f4; background: rgba(66, 133, 244, 0.09); }
+  &.youtube { color: #c4302b; background: rgba(196, 48, 43, 0.09); }
 }
 
 /* 领域徽标（账号卡片）：与 .platform-badge 同规格，两领域两色（财经琥珀/情感玫红） */

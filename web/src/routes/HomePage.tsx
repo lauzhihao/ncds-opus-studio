@@ -2,9 +2,9 @@
 // 每区最多 2 行卡片，超出折起（展开/收起）。每区一个虚线"+"新增框点击弹窗：
 // 长期任务的新增框在末位，临时任务的新增框始终在首位。
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, Check, Image as ImageIcon, Link2, Loader2, Menu, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
+import { AlertCircle, Check, Link2, Loader2, Menu, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { api } from '../api/client';
@@ -17,6 +17,7 @@ import { AccountCard, JobCard } from '../components/WorkCards';
 import { useToast } from '../components/Toast';
 import { DEFAULT_DOMAIN, DOMAINS, domainByKey, type DomainKey } from '../config/domains';
 import { formatCount } from '../utils/format';
+import { platformBadgeClass, platformDisplayName } from '../utils/platform';
 
 // 测量 .tpl-grid 当前列数（auto-fill 响应式），随容器尺寸变化重算。
 function useGridColumns(ref: React.RefObject<HTMLElement>): number {
@@ -79,7 +80,6 @@ function CardSection({
   cards,
   addLabel,
   onAdd,
-  loading,
   rows = 2,
   filters,
 }: {
@@ -89,7 +89,6 @@ function CardSection({
   cards: ReactNode[];
   addLabel: string;
   onAdd: () => void;
-  loading?: boolean;
   rows?: number;
   filters?: ReactNode;
 }) {
@@ -123,16 +122,48 @@ function CardSection({
         <span className="line" />
       </div>
       <div ref={gridRef} className="tpl-grid">
-        {loading
-          ? Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="tpl-card" style={{ pointerEvents: 'none', opacity: 0.5 }}>
-                <div className="cover" />
-                <div className="body"><div className="name">加载中…</div></div>
-              </div>
-            ))
-          : visible}
+        {visible}
       </div>
     </section>
+  );
+}
+
+const homeLoadingOverlayStyle: CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 90,
+  display: 'grid',
+  placeItems: 'center',
+  background: 'color-mix(in srgb, var(--bg-canvas) 78%, rgba(255,255,255,0.18))',
+  backdropFilter: 'blur(8px)',
+  WebkitBackdropFilter: 'blur(8px)',
+};
+
+const homeLoadingRingStyle: CSSProperties = {
+  position: 'relative',
+  width: 72,
+  height: 72,
+  borderRadius: '50%',
+  background: 'conic-gradient(from 0deg, #4285f4, #db4437, #f4b400, #0f9d58, #7c3aed, #4285f4)',
+  animation: 'spin 900ms linear infinite',
+  boxShadow: '0 0 32px rgba(66, 133, 244, 0.36), 0 0 56px rgba(219, 68, 55, 0.18)',
+};
+
+const homeLoadingRingCoreStyle: CSSProperties = {
+  position: 'absolute',
+  inset: 12,
+  borderRadius: '50%',
+  background: 'var(--bg-canvas)',
+  boxShadow: 'inset 0 0 0 1px var(--border)',
+};
+
+function HomeLoadingOverlay() {
+  return (
+    <div style={homeLoadingOverlayStyle} role="status" aria-label="加载中">
+      <div style={homeLoadingRingStyle} aria-hidden="true">
+        <div style={homeLoadingRingCoreStyle} />
+      </div>
+    </div>
   );
 }
 
@@ -278,9 +309,12 @@ export function HomePage() {
   const jobCards = jobs.map((j) => (
     <JobCard key={j.job_id} job={j} onOpen={() => nav(`/jobs/${j.job_id}`)} onDelete={() => setPendingDelete(j)} />
   ));
+  const loadingHomeData = loadingAcc || loadingJobs;
 
   return (
     <div className="page">
+      {loadingHomeData && <HomeLoadingOverlay />}
+
       <div className="topbar">
         <div className="brand">
           <span className="mark">NCDS Opus Studio</span>
@@ -338,7 +372,6 @@ export function HomePage() {
           cards={accountCards}
           addLabel="优质作者"
           onAdd={() => setShowAddAccount(true)}
-          loading={loadingAcc}
           filters={<DomainFilter selected={selectedDomain} onSelect={setSelectedDomain} />}
         />
       </div>
@@ -350,7 +383,6 @@ export function HomePage() {
         cards={jobCards}
         addLabel="优质作品"
         onAdd={() => setShowAddTemp(true)}
-        loading={loadingJobs}
       />
 
       {showAddAccount && (
@@ -444,7 +476,7 @@ function AddAccountModal({
     } catch (e: unknown) {
       console.error('[AddAccountModal] resolveAccount 失败', e);
       setStaged((prev) => prev.filter((s) => s.id !== id)); // 失败移除该 loading 行
-      setErr('解析失败：请确认是抖音/TikTok 主页链接');
+      setErr('解析失败：请确认是抖音/TK 主页链接');
     }
   }
 
@@ -542,7 +574,7 @@ function AddAccountModal({
             );
           }
           const p = s.profile!;
-          const label = p.platform === 'tiktok' ? 'TikTok' : '抖音';
+          const label = platformDisplayName(p.platform);
           return (
             <div key={s.id} className="resolved-account">
               <div className="resolved-row">
@@ -556,7 +588,7 @@ function AddAccountModal({
                 )}
                 <div className="resolved-meta">
                   <div className="resolved-name">
-                    <span className={`platform-badge ${p.platform === 'tiktok' ? 'tiktok' : 'douyin'}`}>{label}</span>
+                    <span className={`platform-badge ${platformBadgeClass(p.platform)}`}>{label}</span>
                     <span className="resolved-nick">{p.nickname || '已解析账号'}</span>
                   </div>
                   <div className="resolved-uid mono">{p.unique_id ? `@${p.unique_id}` : p.sec_uid}</div>
@@ -811,9 +843,7 @@ function AddTempTaskModal({
                   onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }}
                 />
               ) : (
-                <div className="resolved-work-cover resolved-work-cover-empty">
-                  <ImageIcon size={20} strokeWidth={1.5} />
-                </div>
+                <div className="resolved-work-cover resolved-work-cover-empty">暂无封面</div>
               )}
               <div className="resolved-work-meta">
                 <div className="resolved-work-title">{w.title || '无标题作品'}</div>

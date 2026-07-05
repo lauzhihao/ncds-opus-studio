@@ -215,7 +215,7 @@ def test_resolve_work_refreshes_old_tiktok_lightweight_cache(client_env, monkeyp
         "platform": "tiktok",
         "aweme_id": aid,
         "share_url": f"https://www.tiktok.com/@kevinpoterfield/video/{aid}",
-        "title": f"TikTok 作品 {aid}",
+        "title": f"TK 作品 {aid}",
         "hashtags": [],
         "digg": 0,
         "comment": 0,
@@ -351,7 +351,7 @@ def test_resolve_work_youtube_shorts_falls_back_when_metadata_blocked(client_env
     assert body["platform"] == "youtube"
     assert body["aweme_id"] == "9fGlP0W09Fk"
     assert body["share_url"] == "https://www.youtube.com/watch?v=9fGlP0W09Fk"
-    assert body["title"] == "YouTube 作品 9fGlP0W09Fk"
+    assert body["title"] == "油管 作品 9fGlP0W09Fk"
     assert body["cached"] is False
 
 

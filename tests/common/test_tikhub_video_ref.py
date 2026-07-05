@@ -63,6 +63,22 @@ def test_resolve_video_ref_douyin_pure_id_and_ignores_unknown_host(monkeypatch):
     assert tikhub_client.resolve_video_ref("https://example.com/video/7650894465690766623") is None
 
 
+def test_video_ref_meta_uses_display_platform_names():
+    tk = tikhub_client.VideoRef(
+        "tiktok",
+        "7650894465690766623",
+        "https://www.tiktok.com/@creator/video/7650894465690766623",
+    )
+    yt = tikhub_client.VideoRef(
+        "youtube",
+        "9fGlP0W09Fk",
+        "https://www.youtube.com/watch?v=9fGlP0W09Fk",
+    )
+
+    assert tikhub_client.video_ref_meta(tk)["desc"] == "TK 作品 7650894465690766623"
+    assert tikhub_client.video_ref_meta(yt)["desc"] == "油管 作品 9fGlP0W09Fk"
+
+
 def test_simplify_ytdlp_entry_builds_platform_share_url():
     item = tikhub_client._simplify_ytdlp_entry(
         "tiktok",

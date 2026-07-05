@@ -652,7 +652,7 @@ def run(
         on_progress(f"沈括: 单条采集 {aweme}")
         ref = _video_ref_from_input(aweme, platform, source_url=source_url)
         if not ref:
-            raise ValueError(f"解析不出作品 id: {aweme}(支持抖音/TikTok/YouTube 单作品链接)")
+            raise ValueError(f"解析不出作品 id: {aweme}(支持抖音/TK/油管 单作品链接)")
         aweme_id = ref.video_id
         platform = ref.platform
         if aweme_id != aweme.strip():

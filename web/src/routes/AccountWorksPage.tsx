@@ -12,6 +12,7 @@ import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useToast } from '../components/Toast';
 import { CoverImage } from '../components/WorkCards';
 import { formatCount, formatDuration, timeAgo } from '../utils/format';
+import { platformBadgeClass, platformDisplayName } from '../utils/platform';
 import { parseTitleTags } from '../utils/title';
 
 // 作品很多时一次性挂载所有卡片会卡(几百张封面图同时进懒加载视窗)。
@@ -23,7 +24,7 @@ import { parseTitleTags } from '../utils/title';
 const CARD_MIN = 300; // .tpl-grid minmax 下限
 const GRID_GAP = 16; // --s-4
 const GRID_PAD = 48; // 容器左右 --s-6 各 24
-const CARD_H = 300; // 卡片估高(封面+信息),只用于估行数
+const CARD_H = 408; // 卡片估高(封面+固定信息区),只用于估行数
 
 function computePageSize(): number {
   const w = typeof window !== 'undefined' ? window.innerWidth : 1280;
@@ -126,7 +127,7 @@ export function AccountWorksPage() {
     }
   }
 
-  const platformLabel = headerAuthor?.platform === 'tiktok' ? 'TikTok' : '抖音';
+  const platformLabel = platformDisplayName(headerAuthor?.platform);
 
   return (
     <div className="page">
@@ -153,7 +154,7 @@ export function AccountWorksPage() {
           <div className="wah-info">
             <div className="wah-tags">
               <span className="wah-name">{authorName}</span>
-              <span className={`platform-badge ${headerAuthor.platform === 'tiktok' ? 'tiktok' : 'douyin'}`}>{platformLabel}</span>
+              <span className={`platform-badge ${platformBadgeClass(headerAuthor.platform)}`}>{platformLabel}</span>
             </div>
             <div className="wah-uid-row">
               <span className="wah-uid mono">{headerAuthor.unique_id ? `@${headerAuthor.unique_id}` : secUid}</span>
@@ -237,27 +238,18 @@ function PostCard({ post, creating, onDerive }: { post: AccountPost; creating: b
   // 「标题 + 话题标签」：AccountPost 无结构化 hashtags，话题从 desc 正则提取
   const { title, tags } = parseTitleTags(post.desc);
   return (
-    <article className="tpl-card" onClick={onDerive}>
+    <article className="tpl-card work-card" onClick={onDerive}>
       <div className="cover">
-        {post.cover_url ? (
-          <CoverImage src={post.cover_url} marker={marker} />
-        ) : (
-          <div className="cover-fallback" aria-hidden>
-            <Sparkles size={26} strokeWidth={1.4} />
-            <span className="cover-fallback-mark">{marker}</span>
-          </div>
-        )}
+        <CoverImage src={post.cover_url || null} marker={marker} />
         {post.collected && <span className="run-pill" style={{ background: 'var(--accent)' }}>已采集</span>}
       </div>
       <div className="body">
         <div className="name">{title || `作品 ${post.aweme_id.slice(-6)}`}</div>
-        {tags.length > 0 && (
-          <div className="name-tags">
-            {tags.map((t) => (
-              <span key={t} className="title-tag">#{t}</span>
-            ))}
-          </div>
-        )}
+        <div className="name-tags">
+          {tags.map((t) => (
+            <span key={t} className="title-tag">#{t}</span>
+          ))}
+        </div>
         <div className="post-stats">
           <span><Heart size={12} strokeWidth={1.7} />{formatCount(post.digg)}</span>
           <span><MessageCircle size={12} strokeWidth={1.7} />{formatCount(post.comment)}</span>

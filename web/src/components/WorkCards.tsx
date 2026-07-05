@@ -1,13 +1,14 @@
-// 共享卡片：封面图（404 回退 marker）+ 作品卡（JobCard）。
+// 共享卡片：封面图（先显示 CSS 占位，图片成功加载后覆盖）+ 作品卡（JobCard）。
 // 从旧 TemplatesPage 抽出，供临时任务/作品列表复用，沿用 .tpl-card 样式。
 
-import { useState } from 'react';
-import { ChevronRight, Clock, Image as ImageIcon, Loader2, PenBox, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ChevronRight, Clock, Loader2, PenBox, Plus, Trash2 } from 'lucide-react';
 
 import type { JobSummary, SubscriptionAuthor } from '../api/types';
 import { jobProgress } from '../config/agents';
 import { domainByKey } from '../config/domains';
 import { formatCount, formatDuration, timeAgo } from '../utils/format';
+import { platformBadgeClass, platformDisplayName } from '../utils/platform';
 import { parseTitleTags } from '../utils/title';
 
 // 虚线"+"新增框：与作品卡同尺寸（grid stretch 对齐行高），点击触发弹窗。
@@ -25,7 +26,7 @@ export function AccountCard({ author, onOpen }: { author: SubscriptionAuthor; on
   const name = author.nickname || author.note || '未命名对标号';
   const marker = author.sec_uid.replace(/[^a-zA-Z0-9]/g, '').slice(-2).toUpperCase() || 'AC';
   const hasStats = author.follower_count != null;
-  const platformLabel = author.platform === 'tiktok' ? 'TikTok' : '抖音';
+  const platformLabel = platformDisplayName(author.platform);
   const domain = domainByKey(author.domain); // 领域 profile：徽标显示在平台徽标右侧
   return (
     <article className="tpl-card account-card" onClick={onOpen}>
@@ -53,7 +54,7 @@ export function AccountCard({ author, onOpen }: { author: SubscriptionAuthor; on
           </div>
         )}
         <div className="footer">
-          <span className={`platform-badge ${author.platform === 'tiktok' ? 'tiktok' : 'douyin'}`}>{platformLabel}</span>
+          <span className={`platform-badge ${platformBadgeClass(author.platform)}`}>{platformLabel}</span>
           {domain && <span className={`domain-badge ${domain.colorClass}`}>{domain.label}</span>}
           <div style={{ flex: 1 }} />
           <button className="btn sm icon-only accent" aria-label="查看作品" onClick={(e) => { e.stopPropagation(); onOpen(); }}>
@@ -85,16 +86,32 @@ function AvatarCircle({ src, marker }: { src?: string | null; marker: string }) 
   );
 }
 
-// 封面图：加载失败（404 / 尚未生成）时回退到数字 marker。
-export function CoverImage({ src, marker }: { src: string; marker: string }) {
-  const [ok, setOk] = useState(true);
-  return ok ? (
-    <img className="cover-img" src={src} alt="" loading="lazy" draggable={false} onError={() => setOk(false)} />
-  ) : (
-    <div className="cover-fallback" aria-label="暂无封面">
-      <ImageIcon size={26} strokeWidth={1.4} />
-      <span className="cover-fallback-mark">{marker}</span>
-    </div>
+// 封面图：默认先给 CSS 占位，真实封面成功加载后再覆盖，避免 404 / 慢响应期间空白。
+export function CoverImage({ src }: { src?: string | null; marker?: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+    setFailed(false);
+  }, [src]);
+
+  const shouldLoad = !!src && !failed;
+  return (
+    <>
+      <div className="cover-fallback" aria-label="暂无封面">暂无封面</div>
+      {shouldLoad && (
+        <img
+          className={`cover-img${loaded ? ' is-loaded' : ''}`}
+          src={src}
+          alt=""
+          loading="lazy"
+          draggable={false}
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
+      )}
+    </>
   );
 }
 
@@ -121,10 +138,11 @@ export function JobCard({
   const progress = jobProgress(job.node_status);
   // 「作品 + 话题标签」：JobSummary 只有 title 字符串，话题从中正则提取（60 字后被截断的标签提取不到）
   const { title, tags } = parseTitleTags(job.title);
+  const coverSrc = `/jobs/${job.job_id}/cover?v=${encodeURIComponent(String(job.updated_at || 0))}`;
   return (
-    <article className={`tpl-card${job.running ? ' is-running' : ''}`} onClick={onOpen}>
+    <article className={`tpl-card work-card${job.running ? ' is-running' : ''}`} onClick={onOpen}>
       <div className="cover">
-        <CoverImage src={`/jobs/${job.job_id}/cover`} marker={marker} />
+        <CoverImage src={coverSrc} marker={marker} />
         {job.running && (
           <>
             <span className="run-pill"><span className="run-dot" />执行中</span>
@@ -136,13 +154,11 @@ export function JobCard({
       </div>
       <div className="body">
         <div className="name">{title || '未命名作品'}</div>
-        {tags.length > 0 && (
-          <div className="name-tags">
-            {tags.map((t) => (
-              <span key={t} className="title-tag">#{t}</span>
-            ))}
-          </div>
-        )}
+        <div className="name-tags">
+          {tags.map((t) => (
+            <span key={t} className="title-tag">#{t}</span>
+          ))}
+        </div>
         <div className="desc">
           <Clock size={11} strokeWidth={1.6} style={{ verticalAlign: '-2px', marginRight: 4 }} />
           上次更新 {updated}

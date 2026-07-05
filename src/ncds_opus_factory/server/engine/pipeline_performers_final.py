@@ -141,7 +141,7 @@ def run_asr_step(
             else:
                 aweme_id = _resolve_aweme_id(url)
                 if not aweme_id:
-                    raise RuntimeError(f"解析不出作品 id（支持抖音/TikTok/YouTube 单作品链接）：{url}")
+                    raise RuntimeError(f"解析不出作品 id（支持抖音/TK/油管 单作品链接）：{url}")
                 platform = "douyin"
                 source_url = None
 

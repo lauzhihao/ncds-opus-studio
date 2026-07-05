@@ -76,10 +76,10 @@ AGENT_SCHEMAS: dict[str, dict[str, Any]] = {
         "group": "agent",
         "summary": "按作者拉对标作品 + 转写 + 截帧 + 抠图（最上游供料）",
         "fields": [
-            _f("author", "作者 ID", "string", help="按作者批量拉（抖音 sec_uid / TikTok handle / YouTube channel；与单条 aweme 二选一）"),
-            _f("aweme", "单条作品 ID/链接", "string", help="只采单条（支持抖音/TikTok/YouTube）"),
+            _f("author", "作者 ID", "string", help="按作者批量拉（抖音 sec_uid / TK handle / 油管 channel；与单条 aweme 二选一）"),
+            _f("aweme", "单条作品 ID/链接", "string", help="只采单条（支持抖音/TK/油管）"),
             _f("platform", "平台", "enum", default="douyin", enum=["douyin", "tiktok", "youtube"]),
-            _f("source_url", "原始作品 URL", "string", help="单条模式可选；TikTok 建议带原始链接"),
+            _f("source_url", "原始作品 URL", "string", help="单条模式可选；TK 建议带原始链接"),
             _f("top", "拉取作品数", "int", default=10),
             _f("max_frames", "每条截帧数", "int", default=8),
             _f("engine", "抠图引擎", "enum", default="threshold",

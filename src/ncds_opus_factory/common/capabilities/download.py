@@ -4,8 +4,8 @@ TikHub 是按调用量计费的商业 API；拿无水印播放地址(``fetch_vid
 优先走自部署 DouK sidecar(``NOF_DOUK_ENDPOINT``)，调用方只依赖 HTTP，便于独立机器部署；
 sidecar 不可用时再用 yt-dlp 匿名下载。
 
-所以 ``fetch_and_download``：**DouK HTTP 优先，yt-dlp 第二，抖音/TikTok 最后回退 TikHub**。
-DouK/yt-dlp 没装 / 平台改版 / 网络抖动都安全降级，不致命。YouTube 当前没有项目内 TikHub 兜底，
+所以 ``fetch_and_download``：**DouK HTTP 优先，yt-dlp 第二，抖音/TK 最后回退 TikHub**。
+DouK/yt-dlp 没装 / 平台改版 / 网络抖动都安全降级，不致命。油管当前没有项目内 TikHub 兜底，
 必须由 DouK 或 yt-dlp 成功下载。
 
 ``fetch_video_url`` / ``download_video`` / ``download_cover`` 真身仍在 ``common/tikhub_client``，
@@ -215,7 +215,7 @@ def _ytdlp_download(
 ) -> str | None:
     """yt-dlp 匿名下载单作品(无 TikHub、无登录态)。
 
-    抖音默认喂 ``douyin.com/video/{aweme_id}``；TikTok/YouTube 优先使用原始分享链接。
+    抖音默认喂 ``douyin.com/video/{aweme_id}``；TK/油管优先使用原始分享链接。
     成功返回落盘路径；yt-dlp 不可用 / rc!=0 / 没出片 -> 返回 None(交给 TikHub 兜底)。
     取消：子进程按秒轮询 check()，取消则 SIGTERM(线程杀不掉，子进程随便杀)。
     """
@@ -264,7 +264,7 @@ def fetch_and_download(
     check: cancel.CheckFn = lambda: False, token: str | None = None,
     platform: str = "douyin", source_url: str | None = None,
 ) -> str:
-    """下载作品视频：DouK sidecar 优先；yt-dlp 次之；抖音/TikTok 最后回退 TikHub。
+    """下载作品视频：DouK sidecar 优先；yt-dlp 次之；抖音/TK 最后回退 TikHub。
 
     沈括 ``branch_download`` 走这里。所有下载链路都拿不到视频才抛 RuntimeError(由调用方降级处理)。
     """

@@ -337,12 +337,12 @@ export interface SubscriptionsConfig {
   authors: SubscriptionAuthor[];
 }
 
-// POST /accounts/resolve 的结果：从抖音/TikTok 分享链接解析出的账号档案。
+// POST /accounts/resolve 的结果：从抖音/TK 分享链接解析出的账号档案。
 export interface AccountResolveResult {
   platform: string; // 'douyin' | 'tiktok'
   sec_uid: string;
   nickname: string;
-  unique_id: string; // 抖音号 / TikTok handle
+  unique_id: string; // 抖音号 / TK handle
   avatar: string;
   follower_count: number;
   like_count: number;

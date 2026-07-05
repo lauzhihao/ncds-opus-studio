@@ -1,8 +1,8 @@
 """单作品解析（临时任务"智能解析"）。
 
-POST /works/resolve：粘贴抖音/TikTok/YouTube 单作品分享链接/口令 →
+POST /works/resolve：粘贴抖音/TK/油管 单作品分享链接/口令 →
 解析出 platform+aweme_id → 先查本地缓存 → 没查过的用 `platform_aweme_id` 做锁。
-抖音走 TikHub 取完整作品详情；TikTok/YouTube 用 yt-dlp 取单作品 metadata（失败降级轻量卡片）。
+抖音走 TikHub 取完整作品详情；TK/油管 用 yt-dlp 取单作品 metadata（失败降级轻量卡片）。
 
 只读 + 缓存写：作品卡落作品仓库 state/works/{platform}/{aweme_id}/manifest.json 的
 card 分区（与沈括采集的 products/status 分区共存于同一 manifest），不碰订阅/任务系统。
@@ -40,7 +40,7 @@ def _key_lock(key: str) -> threading.Lock:
 
 
 def _needs_non_douyin_metadata_refresh(platform: str, card: dict[str, Any]) -> bool:
-    """旧缓存里的 TikTok/YouTube 轻量卡没有封面/互动数据，允许重新补 metadata。"""
+    """旧缓存里的 TK/油管 轻量卡没有封面/互动数据，允许重新补 metadata。"""
     if platform == "douyin":
         return False
     if card.get("metadata_source") != "yt_dlp":
@@ -93,7 +93,7 @@ def resolve_work(body: ResolveWorkBody) -> dict[str, Any]:
     """
     ref = tikhub_client.resolve_video_ref(body.text)
     if not ref:
-        raise HTTPException(422, "无法从内容里解析出作品，请粘贴抖音/TikTok/YouTube 单作品链接")
+        raise HTTPException(422, "无法从内容里解析出作品，请粘贴抖音/TK/油管 单作品链接")
     platform = ref.platform
     aweme_id = ref.video_id
     key = f"{platform}_{aweme_id}"

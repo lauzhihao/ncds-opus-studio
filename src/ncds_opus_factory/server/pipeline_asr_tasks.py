@@ -85,7 +85,7 @@ class PipelineAsrCollectRun:
             try:
                 ref = tikhub_client.resolve_video_ref(url)
                 if not ref:
-                    raise RuntimeError(f"解析不出作品 id（支持抖音/TikTok/YouTube 单作品链接）：{url}")
+                    raise RuntimeError(f"解析不出作品 id（支持抖音/TK/油管 单作品链接）：{url}")
                 aweme_id = ref.video_id
                 meta: dict[str, Any] = {}
                 if ref.platform == "douyin":
