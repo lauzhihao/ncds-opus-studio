@@ -21,7 +21,7 @@ import shutil
 import subprocess
 from typing import Any
 
-from ncds_opus_factory.common.agy_cli import call_agy
+from ncds_opus_factory.common.agy_cli import call_agy, is_agy_available
 from ncds_opus_factory.common.deepseek_cli import call_deepseek
 from ncds_opus_factory.common.opus_cli import call_opus, is_opus_available
 
@@ -68,7 +68,7 @@ def _check_judge_available(model_id: str) -> bool:
     elif model_id == "codex":
         return shutil.which("scodex") is not None
     elif model_id == "agy":
-        return shutil.which("agy") is not None
+        return is_agy_available()
     elif model_id == "deepseek":
         return bool(os.environ.get("DEEPSEEK_API_KEY"))
     return False

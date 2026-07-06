@@ -17,9 +17,33 @@ import shutil
 import subprocess
 import threading
 
+_DISABLED_VALUES = {"0", "false", "off", "no", "disabled"}
+
+
+def is_agy_enabled() -> bool:
+    """NOF_AGY=0 时彻底禁用 agy，避免 worker 触发 Google 登录流。"""
+    return os.environ.get("NOF_AGY", "1").strip().lower() not in _DISABLED_VALUES
+
+
+def agy_unavailable_reason() -> str:
+    """返回 agy 不可用原因；空串表示可用。"""
+    if not is_agy_enabled():
+        return "NOF_AGY=0 已禁用 agy"
+    if shutil.which("agy") is None:
+        return "本机未安装 agy 启动器"
+    return ""
+
+
+def is_agy_available() -> bool:
+    """本机是否允许并可执行 agy。"""
+    return not agy_unavailable_reason()
+
 
 def _resolve_agy() -> str:
     """解析 agy 可执行文件的绝对路径。"""
+    reason = agy_unavailable_reason()
+    if reason:
+        raise RuntimeError(reason)
     found = shutil.which("agy")
     if found:
         return found

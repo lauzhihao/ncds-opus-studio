@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ncds_opus_factory.common import topic_store
-from ncds_opus_factory.common.agy_cli import call_agy
+from ncds_opus_factory.common.agy_cli import call_agy, is_agy_available
 from ncds_opus_factory.common.deepseek_cli import call_deepseek
 from ncds_opus_factory.common.opus_cli import call_opus
 
@@ -43,11 +43,13 @@ def _noop(_text: str) -> None:
 
 def _callers(timeout_seconds: int) -> dict[str, CallerFn]:
     env = os.environ.copy()
-    return {
+    callers: dict[str, CallerFn] = {
         "opus": lambda p: call_opus(p, timeout_seconds=timeout_seconds, env=env),
         "deepseek": lambda p: call_deepseek(p, timeout_seconds=timeout_seconds),
-        "agy": lambda p: call_agy(p, timeout_seconds=timeout_seconds),
     }
+    if is_agy_available():
+        callers["agy"] = lambda p: call_agy(p, timeout_seconds=timeout_seconds)
+    return callers
 
 
 def _normalize_items(items: Any, *, require_comment: bool = True) -> list[dict[str, str]]:
@@ -235,8 +237,8 @@ def analyze(
         dp = _get_domain_profile(domain)
         if dp is not None:
             domain_guidance = dp.get("guiguzi")
-    on_progress(f"鬼谷子: {len(norm)} 条素材 -> opus/deepseek 双模型并行分析爆款原因...")
     callers = _callers(timeout_seconds)
+    on_progress(f"鬼谷子: {len(norm)} 条素材 -> {'/'.join(callers)} 并行分析爆款原因...")
     out: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=len(callers)) as ex:
         futs = {m: ex.submit(_analyze_for_model, m, fn, norm, on_progress, domain_guidance)
@@ -434,8 +436,8 @@ def generate_topics(
         )
     exec_prompt = _render_topic_prompt(template, norm)
     label = f"{len(norm)} 条评论" if has_comments else f"{len(norm)} 篇原文(无评论)"
-    on_progress(f"鬼谷子: {label} -> opus/deepseek 双模型并行,各出 {n} 个选题...")
     callers = _callers(timeout_seconds)
+    on_progress(f"鬼谷子: {label} -> {'/'.join(callers)} 并行,各出 {n} 个选题...")
     candidates: dict[str, dict[str, Any]] = {}
     n_topics = None if has_comments else n
     with ThreadPoolExecutor(max_workers=len(callers)) as ex:

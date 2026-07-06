@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ncds_opus_factory.common.agy_cli import agy_unavailable_reason
 from ncds_opus_factory.common.opus_cli import DEFAULT_OPUS_MODEL, call_opus, is_opus_available
 
 DEFAULT_OPUS_MODEL_ID = DEFAULT_OPUS_MODEL
@@ -39,7 +40,8 @@ def _check_model_available(cand: dict[str, str]) -> tuple[bool, str]:
         p = Path.home() / ".gemini" / "g.sh"
         return (p.is_file(), "~/.gemini/g.sh 未安装")
     if runner == "agy":
-        return (shutil.which("agy") is not None, "本机未安装 agy 启动器")
+        reason = agy_unavailable_reason()
+        return (not reason, reason)
     if runner == "deepseek":
         return (bool(os.environ.get("DEEPSEEK_API_KEY")), "DEEPSEEK_API_KEY 未设置")
     return (False, f"unknown runner: {runner}")
