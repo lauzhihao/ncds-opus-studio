@@ -1,17 +1,17 @@
 // 通用节点详情：节点描述 + 状态 table + outputs JSON。
 
-import { CheckCircle2, CircleAlert, CircleDashed, Clock, FileJson, Loader2 } from 'lucide-react';
+import { CheckCircle2, CircleAlert, CircleDashed, Clock, FileJson } from 'lucide-react';
 import type { NodeState, PipelineNodeDef } from '../../api/types';
+import { GlobalLoading } from '../GlobalLoading';
 
 interface Props {
   nodeDef: PipelineNodeDef;
   nodeState: NodeState;
 }
 
-const STATUS_ICON: Record<NodeState['status'], typeof CircleDashed> = {
+const STATUS_ICON: Record<Exclude<NodeState['status'], 'running'>, typeof CircleDashed> = {
   idle: CircleDashed,
   queued: Clock,
-  running: Loader2,
   done: CheckCircle2,
   failed: CircleAlert,
 };
@@ -25,7 +25,7 @@ const STATUS_COLOR: Record<NodeState['status'], string> = {
 };
 
 export function GenericNodePanel({ nodeDef, nodeState }: Props) {
-  const StatusIcon = STATUS_ICON[nodeState.status];
+  const StatusIcon = nodeState.status === 'running' ? null : STATUS_ICON[nodeState.status];
   const statusColor = STATUS_COLOR[nodeState.status];
   return (
     <div>
@@ -43,7 +43,9 @@ export function GenericNodePanel({ nodeDef, nodeState }: Props) {
       }}>
         <div className="dim-mono">status</div>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: statusColor, fontWeight: 500 }}>
-          <StatusIcon size={14} strokeWidth={1.8} className={nodeState.status === 'running' ? 'spin' : ''} />
+          {nodeState.status === 'running'
+            ? <GlobalLoading size={22} coreColor="var(--bg-surface)" />
+            : StatusIcon && <StatusIcon size={14} strokeWidth={1.8} />}
           {nodeState.status}
         </div>
         {nodeState.progress && (
@@ -86,11 +88,6 @@ export function GenericNodePanel({ nodeDef, nodeState }: Props) {
 {JSON.stringify(nodeState.outputs, null, 2)}
         </pre>
       )}
-
-      <style>{`
-        .spin { animation: spin-loader 0.9s linear infinite; }
-        @keyframes spin-loader { to { transform: rotate(360deg); } }
-      `}</style>
     </div>
   );
 }

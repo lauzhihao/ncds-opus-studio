@@ -268,13 +268,13 @@ class PipelineSchedulerMixin:
         n = state.nodes[node_name]
         n.status = "running"
         n.started_at = time.time()
-        n.progress = "mock 执行中..."
+        n.progress = "执行中..."
         n.error = None
         n.outputs = {}
         self._save(state)
         self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
-        await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
+        await asyncio.sleep(mock_mod.mock_delay_seconds(node_name))
         job_dir = self.video_jobs_dir / job_id
         outputs = await asyncio.to_thread(mock_mod.run_mock_node, job_dir, node_name)
 
@@ -373,6 +373,8 @@ class PipelineSchedulerMixin:
             outputs = await self._execute_lines(job_id)
         elif node_name == "storyboard":
             outputs = await self._execute_storyboard(job_id)
+        elif node_name == "preview":
+            outputs = {}
         elif node_name == "render":
             outputs = await self._execute_render(job_id)
         else:

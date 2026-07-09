@@ -3,11 +3,12 @@
 // 注意：本组件消费 SSE 状态，只展示长任务进度，不做前端超时取消。
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Copy, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy } from 'lucide-react';
 
 import type { NodeState, NodeStatus } from '../api/types';
 import { formatElapsed } from '../utils/format';
 import { friendlyProgressText } from '../utils/progress';
+import { GlobalLoading } from './GlobalLoading';
 
 const STATUS_ZH: Record<NodeStatus, string> = {
   idle: '待机',
@@ -98,7 +99,7 @@ export function NodeStatusBar({ nodeState }: { nodeState: NodeState }) {
   return (
     <div className={`node-status-bar status-${status}`} role="status" aria-live="polite">
       <div className="nsb-main">
-        {active && <Loader2 className="nsb-icon spin" size={15} strokeWidth={2} />}
+        {active && <GlobalLoading className="nsb-icon nsb-loading" size={22} coreColor="var(--bg-surface-2)" />}
         {status === 'done' && <CheckCircle2 className="nsb-icon" size={15} strokeWidth={1.9} />}
         {status === 'failed' && <AlertTriangle className="nsb-icon" size={15} strokeWidth={1.9} />}
         <span className="nsb-status">{STATUS_ZH[status]}</span>

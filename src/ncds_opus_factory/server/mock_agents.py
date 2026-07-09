@@ -24,23 +24,33 @@ def _noop(_text: str) -> None:
     return None
 
 
+def _mock_delay_seconds(kind: str | None = None) -> float:
+    from ncds_opus_factory.server import mock as mock_mod
+    return mock_mod.mock_delay_seconds(kind)
+
+
+def _sleep_mock_request(kind: str | None = None) -> None:
+    time.sleep(_mock_delay_seconds(kind))
+
+
 def mock_liuyong(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
     """逼真 mock：双模型各一稿 + 两道质检，进度逐条吐（带小停顿,SSE 看得到推进）。"""
     topic = (params.get("topic") or "").strip() or "未命名选题"
     reqs = (params.get("user_requirements") or "").strip()
 
-    on_progress(f"柳永启动(MOCK) 选题: {topic[:40]}")
-    time.sleep(0.6)
-    on_progress("质检[gpt-5.5]: pass - 密度超阈 0 类 / 硬禁命中 0 类")
-    time.sleep(0.6)
-    on_progress("质检[gemini]: fail - 密度超阈 1 类 / 硬禁命中 0 类")
-    time.sleep(0.5)
-    on_progress("  AI 味超标,打回重写第 1 轮...")
-    time.sleep(0.5)
-    on_progress("  第 1 轮后: pass - 密度超阈 0 类 / 硬禁命中 0 类")
-    time.sleep(0.4)
-    on_progress("质检2[rubric/opus]: 41/50 良好")
-    on_progress("柳永完成(MOCK): 2 稿成功")
+    on_progress(f"柳永启动 选题: {topic[:40]}")
+    progress_steps = [
+        "质检[gpt-5.5]: pass - 密度超阈 0 类 / 硬禁命中 0 类",
+        "质检[gemini]: fail - 密度超阈 1 类 / 硬禁命中 0 类",
+        "  AI 味超标,打回重写第 1 轮...",
+        "  第 1 轮后: pass - 密度超阈 0 类 / 硬禁命中 0 类",
+        "质检2[rubric/opus]: 41/50 良好",
+    ]
+    step_delay = _mock_delay_seconds("rw") / len(progress_steps)
+    for text in progress_steps:
+        time.sleep(step_delay)
+        on_progress(text)
+    on_progress("柳永完成: 2 稿成功")
 
     s1 = (f"【钩子】关于「{topic}」，多数人第一反应就做错了。\n\n"
           "真正的高手会先停顿一秒，再反问一句，把模糊的恶意逼成具体的指控。\n\n"
@@ -52,12 +62,12 @@ def mock_liuyong(on_progress: Callable[[str], None] = _noop, **params: Any) -> d
         s1 += f"\n\n（已按附加要求：{reqs}）"
 
     return {
-        "job_id": f"MOCK_{int(time.time() * 1000)}",
-        "deliverables_dir": "mock",
+        "job_id": f"RUN_{int(time.time() * 1000)}",
+        "deliverables_dir": "runs",
         "raw_status": "success",
         "drafts": [
             {
-                "model": "gpt-5.5", "path": "mock", "text": s1,
+                "model": "gpt-5.5", "path": "runs", "text": s1,
                 "qc": {"verdict": "pass", "summary": "密度超阈 0 类 / 硬禁命中 0 类",
                        "density": [], "hard": []},
                 "qc_rubric": {"available": True,
@@ -65,7 +75,7 @@ def mock_liuyong(on_progress: Callable[[str], None] = _noop, **params: Any) -> d
                               "total": 41, "grade": "良好", "issues": ["开头钩子可以再狠一点"]},
             },
             {
-                "model": "gemini", "path": "mock", "text": s2,
+                "model": "gemini", "path": "runs", "text": s2,
                 "qc": {"verdict": "pass", "summary": "密度超阈 0 类 / 硬禁命中 0 类",
                        "density": [], "hard": []},
                 "qc_rubric": {"available": True,
@@ -79,10 +89,10 @@ def mock_liuyong(on_progress: Callable[[str], None] = _noop, **params: Any) -> d
 def _generic_mock(cmd: str) -> RunFn:
     """非 liuyong 命令的通用 mock：发两条进度,返回最小成功 dict。"""
     def run(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
-        on_progress(f"{cmd} 启动(MOCK)")
-        time.sleep(0.5)
-        on_progress(f"{cmd} 完成(MOCK)")
-        return {"ok": True, "mock": True, "cmd": cmd, "params": params}
+        on_progress(f"{cmd} 启动")
+        _sleep_mock_request(cmd)
+        on_progress(f"{cmd} 完成")
+        return {"ok": True, "cmd": cmd, "params": params}
     return run
 
 
@@ -91,12 +101,12 @@ _MOCK_KWS = ["钱越省越穷", "老板都爱画饼", "副业先亏后赚", "存
 
 def mock_guiguzi_analyze(on_progress: Callable[[str], None] = _noop, **params: Any) -> dict[str, Any]:
     """第一步 mock：双模型各产一份罐头爆款原因分析（结构化）。"""
-    on_progress("鬼谷子启动(MOCK): 双模型分析爆款原因")
-    time.sleep(0.3)
+    on_progress("鬼谷子启动: 双模型分析爆款原因")
+    _sleep_mock_request("guiguzi_analysis")
 
     def _analysis(model: str) -> dict[str, Any]:
         return {
-            "hook_reason": f"({model} MOCK) 用反差+具体场景戳中打工人的钱焦虑",
+            "hook_reason": f"({model}) 用反差+具体场景戳中打工人的钱焦虑",
             "audience": "20-35 岁一二线打工人",
             "hooks": ["开头一句反常识断言", "给可照搬的具体话术", "结尾留钩子"],
             "direction": "顺着'省钱反而穷'的反差,做认知反转型短口播",
@@ -111,8 +121,8 @@ def mock_guiguzi_topics(on_progress: Callable[[str], None] = _noop, **params: An
     与真 generate_topics 一样经 topic_store.merge 落库、out 指向真实库文件——卧龙永远真跑
     round 逻辑,续跑段从**库**里挑题(P5),mock 不落库 E2E 就测不到这条链。
     """
-    on_progress("鬼谷子(MOCK): 多模型并行出题")
-    time.sleep(0.4)
+    on_progress("鬼谷子: 多模型并行出题")
+    _sleep_mock_request("guiguzi_topics")
 
     def _topic(kw: str, i: int, model: str) -> dict[str, Any]:
         return {"title": f"为什么{kw},多数人都想反了", "angle": "反直觉",
@@ -130,7 +140,7 @@ def mock_guiguzi_topics(on_progress: Callable[[str], None] = _noop, **params: An
     # 溯源如实记 mock(条目自带 source=mock,相等则不挪 bench_source):
     # 谎报 guiguzi 会让误开 mock 混入生产库的罐头题事后无法按 source 清理
     merged = topic_store.merge(flat, source="mock")
-    on_progress(f"鬼谷子完成(MOCK): 三模型各 {len(_MOCK_KWS)} 个(入库 {merged['added']} 新/{merged['skipped']} 重复)")
+    on_progress(f"鬼谷子完成: 三模型各 {len(_MOCK_KWS)} 个(入库 {merged['added']} 新/{merged['skipped']} 重复)")
     return {"candidates": candidates, "topics": flat,
             "out": str(topic_store.default_topics_path()), "added": merged["added"]}
 

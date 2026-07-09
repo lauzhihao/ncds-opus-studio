@@ -8,7 +8,7 @@
 // 不可用的模型（如 opus 订阅过期）自动隐藏，不展示也不显示错误。
 
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
-import { FileText, Heart, Lightbulb, Loader2, MessageCircle, PenLine, Search, Sparkles } from 'lucide-react';
+import { FileText, Heart, Lightbulb, MessageCircle, PenLine, Search, Sparkles } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type {
@@ -21,6 +21,7 @@ import type {
   JobState,
 } from '../../api/types';
 import { guiguziChosenStorageKey, guiguziItemsStorageKey } from '../../config/agents';
+import { GlobalLoading } from '../GlobalLoading';
 import { useToast } from '../Toast';
 
 interface Props {
@@ -299,7 +300,7 @@ export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) 
       {running && (
         <div className="panel-section">
           <div className="gg-loading">
-            <Loader2 size={30} strokeWidth={1.8} className="spin" />
+            <GlobalLoading size={48} coreColor="var(--bg-surface)" />
             <div className="dim-mono">
               {result?.progress ||
                 (stage === 'analyzing' ? '多模型并行分析爆款原因中…' : '多模型并行出题中…')}

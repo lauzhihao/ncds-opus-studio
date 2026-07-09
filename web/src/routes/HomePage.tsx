@@ -3,7 +3,7 @@
 // 长期任务的新增框在末位，临时任务的新增框始终在首位。
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertCircle, Check, Link2, Loader2, Menu, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -14,9 +14,11 @@ import { Modal } from '../components/Modal';
 import { AppsMenu } from '../components/AppsMenu';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { AccountCard, JobCard } from '../components/WorkCards';
+import { GlobalLoading } from '../components/GlobalLoading';
 import { useToast } from '../components/Toast';
 import { DEFAULT_DOMAIN, DOMAINS, domainByKey, type DomainKey } from '../config/domains';
 import { formatCount } from '../utils/format';
+import { clearMockJobClientState, isStudioMockMode, withMockQuery } from '../utils/mockMode';
 import { platformBadgeClass, platformDisplayName } from '../utils/platform';
 
 // 测量 .tpl-grid 当前列数（auto-fill 响应式），随容器尺寸变化重算。
@@ -139,37 +141,19 @@ const homeLoadingOverlayStyle: CSSProperties = {
   WebkitBackdropFilter: 'blur(8px)',
 };
 
-const homeLoadingRingStyle: CSSProperties = {
-  position: 'relative',
-  width: 72,
-  height: 72,
-  borderRadius: '50%',
-  background: 'conic-gradient(from 0deg, #4285f4, #db4437, #f4b400, #0f9d58, #7c3aed, #4285f4)',
-  animation: 'spin 900ms linear infinite',
-  boxShadow: '0 0 32px rgba(66, 133, 244, 0.36), 0 0 56px rgba(219, 68, 55, 0.18)',
-};
-
-const homeLoadingRingCoreStyle: CSSProperties = {
-  position: 'absolute',
-  inset: 12,
-  borderRadius: '50%',
-  background: 'var(--bg-canvas)',
-  boxShadow: 'inset 0 0 0 1px var(--border)',
-};
-
 function HomeLoadingOverlay() {
   return (
     <div style={homeLoadingOverlayStyle} role="status" aria-label="加载中">
-      <div style={homeLoadingRingStyle} aria-hidden="true">
-        <div style={homeLoadingRingCoreStyle} />
-      </div>
+      <GlobalLoading size={72} thickness={12} coreColor="var(--bg-canvas)" />
     </div>
   );
 }
 
 export function HomePage() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const { showToast } = useToast();
+  const mockMode = isStudioMockMode(searchParams);
   const [authors, setAuthors] = useState<SubscriptionAuthor[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [loadingAcc, setLoadingAcc] = useState(true);
@@ -299,15 +283,34 @@ export function HomePage() {
     }
   }
 
+  async function openDemoJob() {
+    try {
+      const demo = await api.ensureMock();
+      clearMockJobClientState(demo.job_id);
+      nav(withMockQuery(`/jobs/${demo.job_id}`, true));
+    } catch (e: unknown) {
+      showToast('初始化演示作品失败，请稍后再试');
+      console.error('[HomePage] ensureMock 失败', e);
+    }
+  }
+
+  function openJob(jobId: string) {
+    if (mockMode) {
+      void openDemoJob();
+      return;
+    }
+    nav(`/jobs/${jobId}`);
+  }
+
   const accountCards = authors.map((a) => (
     <AccountCard
       key={a.sec_uid}
       author={a}
-      onOpen={() => nav(`/accounts/${encodeURIComponent(a.sec_uid)}`, { state: { author: a } })}
+      onOpen={() => nav(withMockQuery(`/accounts/${encodeURIComponent(a.sec_uid)}`, mockMode), { state: { author: a } })}
     />
   ));
   const jobCards = jobs.map((j) => (
-    <JobCard key={j.job_id} job={j} onOpen={() => nav(`/jobs/${j.job_id}`)} onDelete={() => setPendingDelete(j)} />
+    <JobCard key={j.job_id} job={j} onOpen={() => openJob(j.job_id)} onDelete={() => setPendingDelete(j)} />
   ));
   const loadingHomeData = loadingAcc || loadingJobs;
 
@@ -393,7 +396,10 @@ export function HomePage() {
         />
       )}
       {showAddTemp && (
-        <AddTempTaskModal onClose={() => setShowAddTemp(false)} onCreated={(jobId) => nav(`/jobs/${jobId}`)} />
+        <AddTempTaskModal
+          onClose={() => setShowAddTemp(false)}
+          onCreated={(jobId) => { if (mockMode) void openDemoJob(); else nav(`/jobs/${jobId}`); }}
+        />
       )}
 
       <ConfirmDialog

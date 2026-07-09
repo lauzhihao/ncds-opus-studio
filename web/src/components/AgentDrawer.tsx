@@ -5,8 +5,9 @@
 // 它们内部的 runNode 仍打到底层 engine 节点——"agent 调现成 performer"。
 
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { X } from 'lucide-react';
+import { Clapperboard, Scissors, X } from 'lucide-react';
 
+import { api } from '../api/client';
 import type { JobState, NodeState, NodeStatus, PipelineDef, PipelineNodeDef } from '../api/types';
 import {
   AGENT_BY_NODE,
@@ -27,6 +28,7 @@ import { LiuyongPanel } from './panels/LiuyongPanel';
 import { StepRunPanel } from './panels/StepRunPanel';
 import { StoryboardPanel } from './panels/StoryboardPanel';
 import { TtsResultPanel } from './panels/TtsResultPanel';
+import { useToast } from './Toast';
 
 interface Props {
   jobId: string;
@@ -85,12 +87,14 @@ function maxDrawerWidth(): number {
 }
 
 export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClose, onAdvanceAgent, onTopicConfirmed, onReconnectSSE }: Props) {
+  const { showToast } = useToast();
   const { members } = agent;
   const Icon = agent.icon;
 
   const memberStatuses = agentMemberStatuses(agent, job.nodes, { angleConfirmed });
   const renderNodeState = job.nodes.render ?? defaultIdleState('render');
-  const [renderGateOpen, setRenderGateOpen] = useState(() => renderNodeState.status !== 'idle');
+  const previewNodeState = job.nodes.preview ?? defaultIdleState('preview');
+  const [renderGateOpen, setRenderGateOpen] = useState(() => previewNodeState.status === 'done' || renderNodeState.status !== 'idle');
   const canAccessRenderStep = agent.id !== 'render' || renderGateOpen || renderNodeState.status !== 'idle';
 
   // 当前展示的成员：默认聚焦首个 running，否则首个未完成，否则末位。用户点 chip 后停止自动聚焦。
@@ -104,6 +108,8 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
   const manualRef = useRef(false);
   const [drawerWidth, setDrawerWidth] = useState(() => initialDrawerWidth(agent.id));
   const [previewEditing, setPreviewEditing] = useState(false);
+  const [previewApproving, setPreviewApproving] = useState(false);
+  const [jianyingExporting, setJianyingExporting] = useState(false);
 
   // SSE 推新状态时，未手动切过 tab 则跟随聚焦。
   useEffect(() => {
@@ -203,6 +209,64 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
     }
   }
 
+  async function waitForNodeDone(node: string, timeoutMs = 20000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const latest = await api.getJob(jobId);
+      const state = latest.nodes[node];
+      if (state?.status === 'done') return;
+      if (state?.status === 'failed') throw new Error(state.error || `${node} failed`);
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
+    throw new Error(`${node} confirmation timed out`);
+  }
+
+  async function approvePreviewAndOpenRender() {
+    if (previewApproving) return;
+    if ((job.nodes.tts?.status ?? 'idle') !== 'done') {
+      showToast('请先完成伯牙配音');
+      return;
+    }
+    setPreviewApproving(true);
+    try {
+      if ((job.nodes.preview?.status ?? 'idle') !== 'done') {
+        await api.runNode(jobId, 'preview');
+        await waitForNodeDone('preview');
+      }
+      setRenderGateOpen(true);
+      advance('preview');
+    } catch (e: unknown) {
+      showToast('成片检查确认失败，请稍后再试');
+      console.error('[AgentDrawer] preview approve failed', e);
+    } finally {
+      setPreviewApproving(false);
+    }
+  }
+
+  async function exportJianyingDraft() {
+    if (jianyingExporting) return;
+    if ((job.nodes.tts?.status ?? 'idle') !== 'done') {
+      showToast('请先完成伯牙配音');
+      return;
+    }
+    setJianyingExporting(true);
+    try {
+      const res = await api.createJianyingDraft(jobId);
+      const a = document.createElement('a');
+      a.href = res.download_url;
+      a.download = `${res.draft_name}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast('剪映草稿已生成');
+    } catch (e: unknown) {
+      showToast('剪映草稿生成失败，请稍后再试');
+      console.error('[AgentDrawer] jianying draft export failed', e);
+    } finally {
+      setJianyingExporting(false);
+    }
+  }
+
   const activeMember = members[active] ?? members[0];
   const activeNode = activeMember.node;
   const nodeDef: PipelineNodeDef | undefined = pipeline.nodes.find((n) => n.name === activeNode);
@@ -282,13 +346,20 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
             <PreviewIframePanel jobId={jobId} onEditModeChange={setPreviewEditing} />
             <div className="preview-action-bar">
               <button
-                className="btn primary"
-                onClick={() => {
-                  setRenderGateOpen(true);
-                  advance('preview');
-                }}
+                className="btn jianying-draft-cta"
+                disabled={jianyingExporting || previewApproving}
+                onClick={() => { void exportJianyingDraft(); }}
               >
-                去渲染
+                <Scissors size={18} strokeWidth={1.8} />
+                {jianyingExporting ? '生成中…' : '剪映草稿'}
+              </button>
+              <button
+                className="btn primary render-cta"
+                disabled={previewApproving}
+                onClick={() => { void approvePreviewAndOpenRender(); }}
+              >
+                <Clapperboard size={20} strokeWidth={1.8} />
+                {previewApproving ? '确认中…' : '去渲染'}
               </button>
             </div>
           </div>

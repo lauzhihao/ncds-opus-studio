@@ -26,6 +26,7 @@ PUT    /jobs/{job_id}/inputs                     更新 input 节点（urls/raw_
 PUT    /jobs/{job_id}/title                      改作品标题
 GET    /jobs/{job_id}/episode                    读 rw 节点产物 episode.json
 PUT    /jobs/{job_id}/episode                    写 episode.json（用户微调）
+POST   /jobs/{job_id}/jianying-draft             生成剪映草稿 zip
 GET    /jobs/{job_id}/events                     SSE 事件流（节点状态变更）
 """
 
@@ -47,6 +48,7 @@ from ncds_opus_core.templates import template_dir as _core_template_dir
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from ncds_opus_factory.server.jianying_draft import build_jianying_draft
 from ncds_opus_factory.server.state import PIPELINE_RUNNER
 
 logger = logging.getLogger(__name__)
@@ -432,6 +434,25 @@ async def put_episode(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str
         raise HTTPException(404, f"job not found: {job_id}")
     PIPELINE_RUNNER.write_episode(job_id, body)
     return {"ok": True, "beats": len(body.get("beats", [])), "scenes": len(body.get("scenes", {}))}
+
+
+@router.post("/jobs/{job_id}/jianying-draft")
+async def create_jianying_draft(job_id: str) -> dict[str, Any]:
+    """生成剪映草稿包：draft JSON + 素材副本 + SRT + timeline manifest，返回 zip 下载 URL。"""
+    try:
+        state = PIPELINE_RUNNER.get_job(job_id)
+    except KeyError:
+        raise HTTPException(404, f"job not found: {job_id}")
+    try:
+        return build_jianying_draft(
+            PIPELINE_RUNNER.video_jobs_dir / job_id,
+            job_id=job_id,
+            title=state.title,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except (ValueError, OSError, json.JSONDecodeError) as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------------------------------------------------------------------------

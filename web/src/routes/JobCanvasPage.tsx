@@ -5,7 +5,7 @@
 // agent 节点是纯前端分组，操作仍打到底层 engine 节点（见 components/AgentDrawer）。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -18,7 +18,7 @@ import ReactFlow, {
   type NodeMouseHandler,
   type ReactFlowInstance,
 } from 'reactflow';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 import { api } from '../api/client';
 import { useToast } from '../components/Toast';
@@ -29,6 +29,7 @@ import { AgentDrawer } from '../components/AgentDrawer';
 import { PulseEdge } from '../components/PulseEdge';
 import { AppsMenu } from '../components/AppsMenu';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
+import { GlobalLoading } from '../components/GlobalLoading';
 import {
   AGENTS,
   agentIndex,
@@ -37,11 +38,18 @@ import {
   guiguziChosenStorageKey,
   type AgentId,
 } from '../config/agents';
+import {
+  STUDIO_MOCK_JOB_ID,
+  clearMockJobClientState,
+  isStudioMockMode,
+  withMockQuery,
+} from '../utils/mockMode';
 import { parseTitleTags } from '../utils/title';
 
-// 6 个 agent 的 zigzag 两列错开布局（沿用旧画布的 ROW/COL）。
-const ROW = 200;
-const COL_OFFSET = 160;
+// 6 个 agent 的 zigzag 两列错开布局。
+const ROW = 400;
+const COL_OFFSET = 240;
+const AGENT_LAYOUT_VERSION = 3;
 function computeAgentLayout(): Record<string, { x: number; y: number }> {
   const result: Record<string, { x: number; y: number }> = {};
   AGENTS.forEach((a, i) => {
@@ -51,12 +59,15 @@ function computeAgentLayout(): Record<string, { x: number; y: number }> {
 }
 
 function agentPosKey(jobId: string): string {
-  return `nof:agentpos:${jobId}`;
+  return `nof:agentpos:v${AGENT_LAYOUT_VERSION}:${jobId}`;
 }
 
 export function JobCanvasPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
+  const mockMode = isStudioMockMode(searchParams);
+  const homePath = withMockQuery('/', mockMode);
   const [pipeline, setPipeline] = useState<PipelineDef | null>(null);
   const [openAgent, setOpenAgent] = useState<AgentId | null>(null);
   // 选题确认的本地脉冲：解耦后选定选题不再触发 rw 的 SSE，靠它让 angleConfirmed 立即重算翻鬼谷子 DONE。
@@ -69,6 +80,22 @@ export function JobCanvasPage() {
   const rfRef = useRef<ReactFlowInstance | null>(null);
   const nodeTypesRef = useRef({ card: AgentCard });
   const edgeTypesRef = useRef({ pulse: PulseEdge });
+  const mockRedirecting = useRef(false);
+
+  useEffect(() => {
+    if (!mockMode || !jobId || jobId === STUDIO_MOCK_JOB_ID || mockRedirecting.current) return;
+    mockRedirecting.current = true;
+    api
+      .ensureMock()
+      .then((demo) => {
+        clearMockJobClientState(demo.job_id);
+        nav(withMockQuery(`/jobs/${demo.job_id}`, true), { replace: true });
+      })
+      .catch((e) => {
+        mockRedirecting.current = false;
+        console.error('[JobCanvasPage] ensureMock 失败', e);
+      });
+  }, [mockMode, jobId, nav]);
 
   useEffect(() => {
     if (!job) return;
@@ -99,12 +126,13 @@ export function JobCanvasPage() {
   // 作品 1 小时内只采一次（Redis 节流锁）省 API 成本，没采过 / 正在采则后端自动 no-op。
   const refreshFired = useRef(false);
   useEffect(() => {
+    if (mockMode) return;
     if (!job || !jobId || refreshFired.current) return;
     refreshFired.current = true;
     api.refreshShenkuo(jobId).catch((e) => {
       console.error('[JobCanvasPage] 沈括数据/评论刷新触发失败', e);
     });
-  }, [job, jobId]);
+  }, [job, jobId, mockMode]);
 
   // 鬼谷子的"已确认"= 最终选题已选定（持久化于 localStorage，chooseTopic 写入），与柳永(rw) 是否
   // 起步**解耦**：选定即标 DONE，即便柳永随后被取消/重置/失败/根本没起步，鬼谷子仍保持 DONE
@@ -215,7 +243,7 @@ export function JobCanvasPage() {
     return (
       <div className="page" style={{ display: 'grid', placeItems: 'center', minHeight: '60vh', gap: 'var(--s-3)' }}>
         <span className="dim-mono">缺少作品 ID</span>
-        <button className="btn ghost sm" onClick={() => nav('/')}>
+        <button className="btn ghost sm" onClick={() => nav(homePath)}>
           <ArrowLeft size={14} strokeWidth={1.6} /> 返回任务列表
         </button>
       </div>
@@ -225,7 +253,7 @@ export function JobCanvasPage() {
   return (
     <div className="canvas-page">
       <div className="topbar">
-        <button className="btn ghost sm" onClick={() => nav('/')}>
+        <button className="btn ghost sm" onClick={() => nav(homePath)}>
           <ArrowLeft size={14} strokeWidth={1.6} /> 任务列表
         </button>
         <div className="brand">
@@ -243,7 +271,7 @@ export function JobCanvasPage() {
       <div className="canvas-frame">
         {(!job || nodes.length === 0) && (
           <div className="canvas-loading" role="status" aria-live="polite">
-            <Loader2 size={20} strokeWidth={2} className="spin" />
+            <GlobalLoading size={34} coreColor="var(--bg-canvas)" />
             <span className="dim-mono">{!job ? '连接中…' : '加载 agent 图…'}</span>
           </div>
         )}

@@ -218,6 +218,7 @@
       window.__overlays.renderSketches(stageEl, assets, {
         srcFor: (n) => picAssetSrcFor(shot, assets[n - 1], n, i + 1),
         edit,
+        beat: beats[i],
       });
     }
     if (window.__overlays && window.__overlays.renderInto) {

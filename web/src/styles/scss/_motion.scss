@@ -34,7 +34,11 @@
     animation-duration: 2s !important;
     animation-iteration-count: infinite !important;
   }
-  .node-status-bar .nsb-icon.spin {
+  .node-status-bar .global-loading__ring,
+  .gg-loading .global-loading__ring,
+  .canvas-loading .global-loading__ring,
+  .image-loading-sweep::before,
+  .image-status-sweep::before {
     animation-duration: 1.4s !important;
     animation-iteration-count: infinite !important;
   }

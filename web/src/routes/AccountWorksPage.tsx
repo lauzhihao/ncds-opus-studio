@@ -2,7 +2,7 @@
 // 数据接 GET /accounts/{sec_uid}/posts（沈括已采集的 all_posts.json）。
 
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Clock, Heart, Loader2, MessageCircle, Play, RotateCw, Share2, Sparkles, Star, UserMinus } from 'lucide-react';
 
 import { api } from '../api/client';
@@ -12,6 +12,7 @@ import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useToast } from '../components/Toast';
 import { CoverImage } from '../components/WorkCards';
 import { formatCount, formatDuration, timeAgo } from '../utils/format';
+import { clearMockJobClientState, isStudioMockMode, withMockQuery } from '../utils/mockMode';
 import { platformBadgeClass, platformDisplayName } from '../utils/platform';
 import { parseTitleTags } from '../utils/title';
 
@@ -38,6 +39,9 @@ export function AccountWorksPage() {
   const { secUid } = useParams<{ secUid: string }>();
   const nav = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const mockMode = isStudioMockMode(searchParams);
+  const homePath = withMockQuery('/', mockMode);
   // 作者信息从上一页（账号卡）带过来，免再拉一次
   const headerAuthor = (location.state as { author?: SubscriptionAuthor } | null)?.author;
   const authorName = headerAuthor?.nickname || headerAuthor?.note || '账号';
@@ -91,6 +95,12 @@ export function AccountWorksPage() {
   async function deriveFrom(post: AccountPost) {
     setCreating(post.aweme_id);
     try {
+      if (mockMode) {
+        const demo = await api.ensureMock();
+        clearMockJobClientState(demo.job_id);
+        nav(withMockQuery(`/jobs/${demo.job_id}`, true));
+        return;
+      }
       const state = await api.createJob({
         pipeline_id: 'final_preview',
         title: post.desc ? post.desc.slice(0, 60) : `衍生作品 ${post.aweme_id.slice(-6)}`,
@@ -118,7 +128,7 @@ export function AccountWorksPage() {
       const cfg = await api.getSubscriptions();
       await api.putSubscriptions({ ...cfg, authors: cfg.authors.filter((a) => a.sec_uid !== secUid) });
       showToast(`已取消关注 ${authorName}`);
-      nav('/');
+      nav(homePath);
     } catch (e: unknown) {
       console.error('[AccountWorksPage] unfollow 失败', e);
       showToast('取消关注失败，请稍后再试');
@@ -132,7 +142,7 @@ export function AccountWorksPage() {
   return (
     <div className="page">
       <div className="topbar">
-        <button className="btn ghost sm" onClick={() => nav('/')} title="返回" aria-label="返回">
+        <button className="btn ghost sm" onClick={() => nav(homePath)} title="返回" aria-label="返回">
           <ArrowLeft size={14} strokeWidth={1.6} /> 返回
         </button>
         <div className="spacer" />

@@ -31,7 +31,7 @@ def _noop(_text: str) -> None:
 def run(
     prompt: str,
     size: str = "3:4",
-    n: int = 4,
+    n: int = 2,
     timeout_seconds: int = DEFAULT_TIMEOUT,
     on_progress: ProgressFn = _noop,
     extra_args: list[str] | None = None,
@@ -43,9 +43,10 @@ def run(
     if not IMAGE_GATEWAY.exists():
         raise RuntimeError(f"gpt-image 网关脚本未就绪: {IMAGE_GATEWAY}")
 
+    image_count = max(1, min(int(n), 2))
     on_progress("正在执行文生图")
     command = [sys.executable, str(IMAGE_GATEWAY), "--prompt", prompt, "--size", size,
-               "--n", str(n), "--timeout", str(timeout_seconds), *(extra_args or [])]
+               "--n", str(image_count), "--timeout", str(timeout_seconds), *(extra_args or [])]
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
     if result.returncode != 0:
         _err = (result.stderr or result.stdout or "文生图失败").strip()

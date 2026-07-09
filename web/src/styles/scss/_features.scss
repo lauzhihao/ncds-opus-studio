@@ -470,6 +470,59 @@
   inset: 0;
   background: rgba(255, 255, 255, 0.55);
 }
+.image-card-busy.image-loading-sweep {
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.28);
+}
+.image-sketch-busy.image-loading-sweep {
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.46);
+}
+.image-loading-sweep::before,
+.image-status-sweep::before {
+  content: '';
+  position: absolute;
+  inset: -45%;
+  background: linear-gradient(
+    135deg,
+    transparent 38%,
+    rgba(255, 255, 255, 0.08) 44%,
+    rgba(255, 255, 255, 0.72) 50%,
+    rgba(255, 255, 255, 0.08) 56%,
+    transparent 62%
+  );
+  transform: translate(-32%, -32%);
+  animation: image-loading-sweep 0.62s ease-out infinite;
+}
+.image-status-sweep {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-overlay));
+  vertical-align: middle;
+}
+.image-status-sweep::before {
+  inset: -120% -50%;
+  background: linear-gradient(
+    135deg,
+    transparent 36%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 45%,
+    color-mix(in srgb, var(--accent) 78%, #fff) 50%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 55%,
+    transparent 64%
+  );
+}
+.image-status-done {
+  display: inline-block;
+  color: var(--status-done);
+  vertical-align: -2px;
+}
+@keyframes image-loading-sweep {
+  to { transform: translate(32%, 32%); }
+}
 
 /* ─── 作品卡：执行中状态（首页作品列表）──────────────────────────── */
 .tpl-card .cover .run-pill {
@@ -623,10 +676,6 @@
   pointer-events: none;   /* 只做视觉遮罩，不拦点击；删除按钮由 disabled 控制 */
   color: #fff;
 }
-.tpl-card .cover .tpl-running-mask .spin {
-  animation: spin 0.9s linear infinite;
-}
-
 /* ─── 节点抽屉锁定（DONE 且下游已消费其产物）────────────────────────
    fieldset.drawer-lock 包住抽屉 body 内容：display:contents 不产生盒子、不影响布局；
    disabled 时浏览器把内部原生控件灰显（:disabled），配合 JS 设的 inert 彻底拦交互。 */

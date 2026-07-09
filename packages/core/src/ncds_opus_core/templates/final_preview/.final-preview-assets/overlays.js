@@ -403,6 +403,7 @@
   function renderSketches(sceneEl, sketches, opts) {
     const edit = !!(opts && opts.edit);
     const srcFor = (opts && opts.srcFor) || null;
+    const beatText = String(((opts && opts.beat) || {}).zh || '');
     const assetCfg = (((window.EPISODE || {}).visual || {}).finalPreview || {}).assets || {};
     sceneEl.querySelectorAll(':scope > .sketch-layer').forEach((e) => e.remove());
     if (!Array.isArray(sketches) || sketches.length === 0) return;
@@ -419,11 +420,10 @@
       img.draggable = false;
       const src = srcFor ? srcFor(i + 1) : (sk.src || '');
       if (src) {
-        img.style.visibility = 'hidden';
+        img.src = src;
         transparentizeWhite(src).then((cleanSrc) => {
           if (!img.isConnected) return;
-          img.src = cleanSrc || src;
-          img.style.visibility = '';
+          if (cleanSrc && cleanSrc !== src) img.src = cleanSrc;
         });
       }
       const x = (sk.pos && sk.pos.x != null) ? sk.pos.x : 50;
@@ -443,8 +443,9 @@
 
       // at.match：跟台词关键词飞入（同 overlay）。先藏起来、摘掉 motion class，
       // onBeat 命中 beat.zh 含 match 时还原 display + 加 motion class 触发动效。
-      if (!edit && sk.at && sk.at.match) {
-        img.dataset.atMatch = String(sk.at.match);
+      const atMatch = sk.at && sk.at.match ? String(sk.at.match) : '';
+      if (!edit && atMatch && beatText.includes(atMatch)) {
+        img.dataset.atMatch = atMatch;
         img.dataset.atDelay = String(sk.at.delay || 0);
         img.dataset.pendingMotion = enterClass;
         img.style.display = 'none';

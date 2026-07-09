@@ -181,7 +181,7 @@ class PipelineRegenOperationsMixin:
     async def _mock_regen_delay(self) -> None:
         """mock 下 regen 类操作的统一模拟耗时。"""
         from ncds_opus_factory.server import mock as mock_mod
-        await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
+        await asyncio.sleep(mock_mod.mock_delay_seconds("regen_model"))
 
     async def regen_scene_image_from_preview(self, job_id: str, scene_id: str) -> str:
         """preview 抽屉里点「生成图片」时调用，不要求 image 节点 done。"""
@@ -527,7 +527,7 @@ class PipelineRegenOperationsMixin:
     async def _mock_regen_image(self, job_id: str, scene_id: str) -> str:
         """mock：从 final_preview 素材拷背景图或旧 scene 图到 03_image/{scene_id}.webp。"""
         from ncds_opus_factory.server import mock as mock_mod
-        await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
+        await asyncio.sleep(mock_mod.mock_delay_seconds("regen_image"))
         rel = f"03_image/{scene_id}.webp"
         target = self.video_jobs_dir / job_id / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -556,7 +556,7 @@ class PipelineRegenOperationsMixin:
     async def _mock_regen_sketch(self, job_id: str, scene_id: str, n: int) -> str:
         """mock：源素材一般无前景素材文件，有则拷、没有用背景图占位。"""
         from ncds_opus_factory.server import mock as mock_mod
-        await asyncio.sleep(mock_mod.MOCK_NODE_DELAY_SEC)
+        await asyncio.sleep(mock_mod.mock_delay_seconds("regen_sketch"))
         ep = self.get_episode(job_id) or {}
         shot = next(
             (
@@ -589,7 +589,8 @@ class PipelineRegenOperationsMixin:
 
     async def _mock_regen_tts(self, job_id: str, scene_id: str) -> None:
         """mock：scene 音频已由 tts mock 落盘，静态复用；sleep 后重建 items 收尾。"""
-        await self._mock_regen_delay()
+        from ncds_opus_factory.server import mock as mock_mod
+        await asyncio.sleep(mock_mod.mock_delay_seconds("regen_tts"))
         state = self._load(job_id)
         n = state.nodes.get("tts")
         if n is None:

@@ -4,7 +4,7 @@
 //   - items[].assets：跟随字幕入场的前景素材
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Database, Download, ImageOff, Play, Plus, RefreshCw, Search, Square, Tags } from 'lucide-react';
+import { CheckCircle2, Database, Download, ImageOff, Play, Plus, RefreshCw, Search, Square, Tags } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type {
@@ -396,7 +396,6 @@ function BackgroundCard({
       <div className="image-bg-head">
         <div>
           <div className="section-h" style={{ margin: 0 }}>背景图</div>
-          <div className="dim-mono">全片共用，像 PPT 背景一样承载所有字幕和前景素材</div>
         </div>
         {background?.image_relpath && (
           <a
@@ -416,10 +415,10 @@ function BackgroundCard({
         ) : (
           <div className="image-card-placeholder">
             <ImageOff size={20} strokeWidth={1.5} />
-            <span>{running ? '生成中…' : '未生成'}</span>
+            {!running && <span>未生成</span>}
           </div>
         )}
-        {running && <div className="image-card-busy">生成中…</div>}
+        {running && <div className="image-card-busy image-loading-sweep" role="status" aria-label="背景图生成中" />}
       </div>
 
       {variants.length > 1 && (
@@ -449,7 +448,7 @@ function BackgroundCard({
         value={prompt}
         onChange={(e) => onPromptChange(e.target.value)}
         placeholder="背景图提示词…"
-        rows={3}
+        rows={5}
         spellCheck={false}
       />
       <div className="image-card-footer">
@@ -457,9 +456,10 @@ function BackgroundCard({
           type="button"
           className="btn sm ghost"
           disabled={disabled || running}
+          title={running ? '背景图生成中' : '重生背景'}
           onClick={onRegen}
         >
-          <RefreshCw size={12} strokeWidth={1.7} /> {running ? '生成中…' : '重生背景'}
+          <RefreshCw size={12} strokeWidth={1.7} /> 重生背景
         </button>
       </div>
       {background?.error && <div className="panel-hint panel-hint-error">{background.error}</div>}
@@ -700,11 +700,23 @@ function ForegroundAsset({
             <ImageOff size={14} strokeWidth={1.5} />
           </div>
         )}
-        {running && <div className="image-sketch-busy" />}
+        {running && (
+          <div
+            className="image-sketch-busy image-loading-sweep"
+            role="status"
+            aria-label={`${asset.asset_id ?? `a${asset.index}`} 生成中`}
+          />
+        )}
       </div>
       <div className="image-foreground-meta">
         <span className="mono">{asset.asset_id ?? `a${asset.index}`}</span>
-        <span className="dim-mono">{asset.error ? '失败' : running ? '生成中' : asset.image_relpath ? '完成' : '等待'}</span>
+        <span className="dim-mono">
+          {asset.error ? '失败' : running ? (
+            <span className="image-status-sweep" aria-label="生成中" />
+          ) : asset.image_relpath ? (
+            <CheckCircle2 className="image-status-done" size={13} strokeWidth={2} aria-label="完成" />
+          ) : '等待'}
+        </span>
       </div>
       <div className="image-foreground-prompt">{asset.prompt || '未填写 prompt'}</div>
       <div className="image-foreground-actions">
@@ -721,7 +733,7 @@ function ForegroundAsset({
         <button
           type="button"
           className="btn sm icon-only ghost"
-          title={running ? '生成中…' : '重生前景素材'}
+          title={running ? '前景素材生成中' : '重生前景素材'}
           disabled={disabled || running}
           onClick={onRegen}
         >

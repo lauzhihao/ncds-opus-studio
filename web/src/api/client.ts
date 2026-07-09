@@ -77,7 +77,7 @@ export const api = {
       if (!r.ok) throw new Error(`PATCH domain -> ${r.status}: ${await r.text()}`);
       return r.json() as Promise<{ ok: boolean; platform: string; aweme_id: string; domain: string }>;
     }),
-  // mock 开关：URL 带 ?mock=1 时种一个 final_preview 素材的 mock 作品（开发预览用）
+  // mock 开关：URL 带 ?m=1 / ?mock=1 时种一个基于 36aacfec847d 产物的演示作品
   ensureMock: () => post<{ job_id: string; pipeline_id: string }>('/mock/ensure'),
   getJob: (id: string) => get<JobState>(`/jobs/${id}`),
   createJob: (body: { pipeline_id: string; title?: string; inputs: Record<string, unknown> }) =>
@@ -185,6 +185,19 @@ export const api = {
   getEpisode: (jobId: string) => get<Episode>(`/jobs/${jobId}/episode`),
   putEpisode: (jobId: string, ep: Episode) =>
     put<{ ok: boolean }>(`/jobs/${jobId}/episode`, ep),
+  createJianyingDraft: (jobId: string) =>
+    post<{
+      ok: boolean;
+      job_id: string;
+      draft_name: string;
+      draft_dir_relpath: string;
+      zip_relpath: string;
+      download_url: string;
+      duration_us: number;
+      scene_count: number;
+      subtitle_count: number;
+      asset_count: number;
+    }>(`/jobs/${jobId}/jianying-draft`),
   submitTask: (cmd: string, params: Record<string, unknown>) =>
     post<TaskCreateResponse>('/tasks', { cmd, params }),
   getTask: (taskId: string) => get<TaskDetailResponse>(`/tasks/${taskId}`),

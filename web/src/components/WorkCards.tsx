@@ -2,9 +2,10 @@
 // 从旧 TemplatesPage 抽出，供临时任务/作品列表复用，沿用 .tpl-card 样式。
 
 import { useEffect, useState } from 'react';
-import { ChevronRight, Clock, Loader2, PenBox, Plus, Trash2 } from 'lucide-react';
+import { ChevronRight, Clock, PenBox, Plus, Trash2 } from 'lucide-react';
 
 import type { JobSummary, SubscriptionAuthor } from '../api/types';
+import { GlobalLoading } from './GlobalLoading';
 import { jobProgress } from '../config/agents';
 import { domainByKey } from '../config/domains';
 import { formatCount, formatDuration, timeAgo } from '../utils/format';
@@ -147,7 +148,7 @@ export function JobCard({
           <>
             <span className="run-pill"><span className="run-dot" />执行中</span>
             <div className="tpl-running-mask" aria-label="执行中">
-              <Loader2 size={22} strokeWidth={2} className="spin" />
+              <GlobalLoading size={24} coreColor="rgba(0, 0, 0, 0.28)" />
             </div>
           </>
         )}

@@ -290,7 +290,11 @@ class PipelineAgentTasksMixin:
         on_progress = self._guiguzi_progress(job_id)
         try:
             if mock:
-                analyses = await asyncio.to_thread(lambda: mock_guiguzi_analyze(on_progress))
+                from ncds_opus_factory.server import mock as mock_mod
+                analyses = await asyncio.to_thread(
+                    lambda: mock_mod.reference_guiguzi_analysis(self.video_jobs_dir, on_progress)
+                    or mock_guiguzi_analyze(on_progress)
+                )
             else:
                 analyses = await asyncio.to_thread(
                     guiguzi.analyze, items, on_progress=on_progress,
@@ -391,7 +395,11 @@ class PipelineAgentTasksMixin:
             out = None
             if gen_items:
                 if mock:
-                    result = await asyncio.to_thread(lambda: mock_guiguzi_topics(on_progress))
+                    from ncds_opus_factory.server import mock as mock_mod
+                    result = await asyncio.to_thread(
+                        lambda: mock_mod.reference_guiguzi_topics(self.video_jobs_dir, on_progress)
+                        or mock_guiguzi_topics(on_progress)
+                    )
                 else:
                     result = await asyncio.to_thread(
                         guiguzi.generate_topics, gen_items, analysis, prompt,

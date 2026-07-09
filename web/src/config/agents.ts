@@ -188,9 +188,10 @@ export function agentMemberStatuses(
   ctx: { angleConfirmed?: boolean } = {},
 ): NodeStatus[] {
   if (agent.id === 'render') {
+    const previewStatus = jobNodes?.preview?.status ?? 'idle';
     const renderStatus = jobNodes?.render?.status ?? 'idle';
     return agent.members.map((m) => {
-      if (m.node === 'preview') return renderStatus === 'idle' ? 'idle' : 'done';
+      if (m.node === 'preview') return previewStatus === 'done' || renderStatus !== 'idle' ? 'done' : previewStatus;
       if (m.node === 'render') return renderStatus;
       return jobNodes?.[m.node]?.status ?? 'idle';
     });
@@ -218,7 +219,10 @@ export function agentStatus(
     return wudaoziStatus(jobNodes);
   }
   if (agent.id === 'render') {
+    const preview = jobNodes?.preview?.status ?? 'idle';
     const render = jobNodes?.render?.status ?? 'idle';
+    if (preview === 'failed') return 'failed';
+    if (preview === 'running' || preview === 'queued') return 'running';
     if (render === 'failed') return 'failed';
     if (render === 'running' || render === 'queued') return 'running';
     if (render === 'done') return 'done';

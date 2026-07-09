@@ -32,7 +32,7 @@ class PipelineRwOperationsMixin:
     async def _rw_mock_short_circuit(self, state: Any, job_id: str, model_id: str) -> bool:
         """mock 作品的 RW 单模型操作短路。
 
-        rewrite/refine 在 mock_final 下都不真调 LLM，只模拟耗时并重发 rw 节点状态。
+        rewrite/refine 在演示作品下都不真调 LLM，只模拟耗时并重发 rw 节点状态。
         非 mock 返回 False，让调用方继续真实路径。
         """
         if not state.mock:
