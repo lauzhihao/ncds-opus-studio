@@ -165,9 +165,16 @@ elif _STUDIO_DIST.exists():
     async def studio_root() -> FileResponse:
         return FileResponse(_STUDIO_DIST / "index.html")
 
-    # SPA fallback：所有 /studio/<深层路径> 都返回 index.html，由前端路由解析
+    # SPA fallback：真实静态文件（如 public/neng.png）优先，否则 index.html
     @app.get("/studio/{full_path:path}")
-    async def studio_spa(full_path: str) -> FileResponse:  # noqa: ARG001
+    async def studio_spa(full_path: str) -> FileResponse:
+        candidate = (_STUDIO_DIST / full_path).resolve()
+        try:
+            candidate.relative_to(_STUDIO_DIST.resolve())
+        except ValueError:
+            return FileResponse(_STUDIO_DIST / "index.html")
+        if candidate.is_file():
+            return FileResponse(candidate)
         return FileResponse(_STUDIO_DIST / "index.html")
 else:
     logger.info("[nof-server] web/dist not built; /studio not mounted")

@@ -88,7 +88,10 @@ function TypewriterBlock({ lines, onReady }: { lines: string[]; onReady: () => v
   const [charIdx, setCharIdx] = useState(0);
   const [done, setDone] = useState(false);
   const readyFired = useRef(false);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
+  // 打字推进
   useEffect(() => {
     if (done) return;
     const current = lines[lineIdx] ?? '';
@@ -96,7 +99,7 @@ function TypewriterBlock({ lines, onReady }: { lines: string[]; onReady: () => v
       const t = window.setTimeout(() => setCharIdx((c) => c + 1), 48 + Math.random() * 36);
       return () => window.clearTimeout(t);
     }
-    // 本行打完
+    // 本行打完 → 下一行
     if (lineIdx < lines.length - 1) {
       const t = window.setTimeout(() => {
         setLineIdx((i) => i + 1);
@@ -104,14 +107,17 @@ function TypewriterBlock({ lines, onReady }: { lines: string[]; onReady: () => v
       }, lineIdx === 0 ? 520 : 380);
       return () => window.clearTimeout(t);
     }
+    // 最后一行打完
     setDone(true);
-    if (!readyFired.current) {
-      readyFired.current = true;
-      // 「成大事」打完后再稍顿，再渐显登录按钮
-      const t = window.setTimeout(onReady, 420);
-      return () => window.clearTimeout(t);
-    }
-  }, [charIdx, lineIdx, lines, done, onReady]);
+  }, [charIdx, lineIdx, lines, done]);
+
+  // 「成大事」完成后单独触发登录按钮（避免 setDone 重跑 effect 清掉 setTimeout）
+  useEffect(() => {
+    if (!done || readyFired.current) return;
+    readyFired.current = true;
+    const t = window.setTimeout(() => onReadyRef.current(), 420);
+    return () => window.clearTimeout(t);
+  }, [done]);
 
   return (
     <div className="landing-type" lang="ja">
