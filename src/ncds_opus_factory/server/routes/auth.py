@@ -20,6 +20,7 @@ from ncds_opus_factory.server.auth import (
     handle_apple_callback,
     handle_google_callback,
     handle_mobile_id_token,
+    oauth_state_cookie_kwargs,
     session_cookie_kwargs,
     user_to_dict,
 )
@@ -40,13 +41,13 @@ def auth_me(request: Request) -> dict[str, Any]:
 
 @router.get("/google/login", include_in_schema=False)
 def google_login() -> RedirectResponse:
-    auth_url, state_cookie = build_google_login(AUTH_CONFIG)
+    auth_url, state_cookie = build_google_login(AUTH_STORE, AUTH_CONFIG)
     response = RedirectResponse(auth_url)
     response.set_cookie(
         STATE_COOKIE,
         state_cookie,
         max_age=600,
-        **session_cookie_kwargs(AUTH_CONFIG),
+        **oauth_state_cookie_kwargs(AUTH_CONFIG),
     )
     return response
 
@@ -72,13 +73,13 @@ def google_callback(
 
 @router.get("/apple/login", include_in_schema=False)
 def apple_login() -> RedirectResponse:
-    auth_url, state_cookie = build_apple_login(AUTH_CONFIG)
+    auth_url, state_cookie = build_apple_login(AUTH_STORE, AUTH_CONFIG)
     response = RedirectResponse(auth_url)
     response.set_cookie(
         STATE_COOKIE,
         state_cookie,
         max_age=600,
-        **session_cookie_kwargs(AUTH_CONFIG),
+        **oauth_state_cookie_kwargs(AUTH_CONFIG),
     )
     return response
 

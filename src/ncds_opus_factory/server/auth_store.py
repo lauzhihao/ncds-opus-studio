@@ -68,6 +68,13 @@ class AuthStore:
 
                 CREATE INDEX IF NOT EXISTS idx_auth_sessions_hash_expires
                   ON auth_sessions(session_hash, expires_at);
+
+                -- OAuth CSRF state（Apple form_post 跨站 POST 可能不带 cookie，必须服务端存）
+                CREATE TABLE IF NOT EXISTS oauth_states (
+                  state TEXT PRIMARY KEY,
+                  expires_at TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                );
                 """
             )
             self._migrate_from_google_only(conn)
@@ -192,6 +199,34 @@ class AuthStore:
         with self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS c FROM auth_users").fetchone()
         return int(row["c"] if row is not None else 0)
+
+    def save_oauth_state(self, state: str, *, expires_at: str) -> None:
+        now = now_utc_text()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM oauth_states WHERE expires_at <= ?", (now,))
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO oauth_states (state, expires_at, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (state, expires_at, now),
+            )
+
+    def consume_oauth_state(self, state: str) -> bool:
+        """一次性消费 state；存在且未过期返回 True。"""
+        if not state:
+            return False
+        now = now_utc_text()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM oauth_states WHERE expires_at <= ?", (now,))
+            row = conn.execute(
+                "SELECT state FROM oauth_states WHERE state = ? AND expires_at > ?",
+                (state, now),
+            ).fetchone()
+            if row is None:
+                return False
+            conn.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
+            return True
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)

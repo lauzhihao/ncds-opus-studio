@@ -163,10 +163,10 @@ def auth_status(store: AuthStore, config: AuthConfig, request: Request) -> dict[
     }
 
 
-def build_google_login(config: AuthConfig) -> tuple[str, str]:
+def build_google_login(store: AuthStore, config: AuthConfig) -> tuple[str, str]:
     if not config.google_enabled:
         raise HTTPException(status_code=500, detail="Google OAuth is not configured")
-    state = secrets.token_urlsafe(32)
+    state = issue_oauth_state(store, config)
     query = urllib.parse.urlencode(
         {
             "client_id": config.client_id,
@@ -180,10 +180,10 @@ def build_google_login(config: AuthConfig) -> tuple[str, str]:
     return f"{GOOGLE_AUTH_URL}?{query}", make_state_cookie(state, config)
 
 
-def build_apple_login(config: AuthConfig) -> tuple[str, str]:
+def build_apple_login(store: AuthStore, config: AuthConfig) -> tuple[str, str]:
     if not config.apple_enabled or not config.apple_services_id:
         raise HTTPException(status_code=500, detail="Apple Sign In is not configured")
-    state = secrets.token_urlsafe(32)
+    state = issue_oauth_state(store, config)
     query = urllib.parse.urlencode(
         {
             "client_id": config.apple_services_id,
@@ -195,6 +195,30 @@ def build_apple_login(config: AuthConfig) -> tuple[str, str]:
         }
     )
     return f"{APPLE_AUTH_URL}?{query}", make_state_cookie(state, config)
+
+
+def issue_oauth_state(store: AuthStore, config: AuthConfig) -> str:
+    """签发一次性 CSRF state（落库 + cookie 双轨；Apple form_post 可能不带 cookie）。"""
+    state = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=STATE_TTL_SECONDS)
+    store.save_oauth_state(state, expires_at=format_utc_datetime(expires_at))
+    return state
+
+
+def verify_oauth_state(
+    store: AuthStore,
+    config: AuthConfig,
+    *,
+    state: str | None,
+    state_cookie: str | None,
+) -> bool:
+    """优先消费服务端 state；cookie HMAC 作同站 GET 回调兜底。"""
+    if not state:
+        return False
+    if store.consume_oauth_state(state):
+        return True
+    # cookie 兜底（Google 顶层 GET 回跳时常可用）
+    return verify_state_cookie(state_cookie, state, config)
 
 
 def handle_google_callback(
@@ -209,7 +233,7 @@ def handle_google_callback(
         raise HTTPException(status_code=500, detail="Google OAuth is not configured")
     if not code:
         raise HTTPException(status_code=400, detail="Google OAuth callback is missing code")
-    if not verify_state_cookie(state_cookie, state, config):
+    if not verify_oauth_state(store, config, state=state, state_cookie=state_cookie):
         raise HTTPException(status_code=400, detail="Google OAuth state is invalid or expired")
 
     token_response = exchange_google_code(config, code)
@@ -234,7 +258,7 @@ def handle_apple_callback(
         raise HTTPException(status_code=500, detail="Apple Sign In is not configured")
     if not code:
         raise HTTPException(status_code=400, detail="Apple callback is missing code")
-    if not verify_state_cookie(state_cookie, state, config):
+    if not verify_oauth_state(store, config, state=state, state_cookie=state_cookie):
         raise HTTPException(status_code=400, detail="Apple OAuth state is invalid or expired")
 
     token_response = exchange_apple_code(config, code)
@@ -386,6 +410,22 @@ def session_cookie_kwargs(config: AuthConfig) -> dict[str, Any]:
         "samesite": "lax",
         "path": "/",
     }
+
+
+def oauth_state_cookie_kwargs(config: AuthConfig) -> dict[str, Any]:
+    """OAuth state cookie。
+
+    Apple 用 form_post 从 appleid.apple.com 跨站 POST 回回调，SameSite=Lax 不会带 cookie。
+    HTTPS 下用 None+Secure，使跨站 POST 也能带上（与服务端 state 双保险）。
+    """
+    if config.secure_cookie:
+        return {
+            "httponly": True,
+            "secure": True,
+            "samesite": "none",
+            "path": "/",
+        }
+    return session_cookie_kwargs(config)
 
 
 def user_to_dict(user: AuthUserRecord) -> dict[str, Any]:

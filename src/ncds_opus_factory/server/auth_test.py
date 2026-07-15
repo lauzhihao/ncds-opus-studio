@@ -118,3 +118,12 @@ def test_auth_store_multi_provider(tmp_path: Path) -> None:
     assert found is not None
     assert found.provider == "apple"
     assert found.email == "a@example.com"
+
+
+def test_oauth_state_server_side_consume(tmp_path: Path) -> None:
+    store = AuthStore(tmp_path / "auth.db")
+    store.save_oauth_state("s1", expires_at="2099-01-01 00:00:00")
+    assert store.consume_oauth_state("s1") is True
+    assert store.consume_oauth_state("s1") is False  # 一次性
+    store.save_oauth_state("s2", expires_at="2000-01-01 00:00:00")
+    assert store.consume_oauth_state("s2") is False  # 过期
