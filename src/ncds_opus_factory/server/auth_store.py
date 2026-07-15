@@ -82,7 +82,9 @@ class AuthStore:
     def _migrate_from_google_only(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(auth_users)").fetchall()}
         if "google_sub" in cols and "provider" not in cols:
-            # 极旧结构：仅 google_sub → 重建
+            # SQLite RENAME 会把 auth_sessions 外键改写成 auth_users_legacy，
+            # 必须 FK 关闭后连 sessions 一起重建，否则 create_session 会炸。
+            conn.execute("PRAGMA foreign_keys=OFF")
             conn.executescript(
                 """
                 ALTER TABLE auth_users RENAME TO auth_users_legacy;
@@ -105,13 +107,63 @@ class AuthStore:
                 SELECT id, 'google', google_sub, email, name, picture_url,
                        created_at, updated_at, last_login_at
                 FROM auth_users_legacy;
+
+                CREATE TABLE auth_sessions_new (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+                  session_hash TEXT NOT NULL UNIQUE,
+                  expires_at TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  last_seen_at TEXT NOT NULL
+                );
+                INSERT INTO auth_sessions_new (
+                  id, user_id, session_hash, expires_at, created_at, last_seen_at
+                )
+                SELECT id, user_id, session_hash, expires_at, created_at, last_seen_at
+                FROM auth_sessions;
+                DROP TABLE auth_sessions;
+                ALTER TABLE auth_sessions_new RENAME TO auth_sessions;
+                CREATE INDEX IF NOT EXISTS idx_auth_sessions_hash_expires
+                  ON auth_sessions(session_hash, expires_at);
+
                 DROP TABLE auth_users_legacy;
                 """
             )
+            conn.execute("PRAGMA foreign_keys=ON")
             return
-        if "provider" not in cols:
+        # 半迁移修复：sessions 仍引用 auth_users_legacy
+        self._repair_sessions_fk(conn)
+
+    def _repair_sessions_fk(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='auth_sessions'"
+        ).fetchone()
+        sql = (row[0] if row else "") or ""
+        if "auth_users_legacy" not in sql:
             return
-        # 若仍有 google_sub 列并存（半迁移），忽略
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.executescript(
+            """
+            CREATE TABLE auth_sessions_new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+              session_hash TEXT NOT NULL UNIQUE,
+              expires_at TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              last_seen_at TEXT NOT NULL
+            );
+            INSERT INTO auth_sessions_new (
+              id, user_id, session_hash, expires_at, created_at, last_seen_at
+            )
+            SELECT id, user_id, session_hash, expires_at, created_at, last_seen_at
+            FROM auth_sessions;
+            DROP TABLE auth_sessions;
+            ALTER TABLE auth_sessions_new RENAME TO auth_sessions;
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_hash_expires
+              ON auth_sessions(session_hash, expires_at);
+            """
+        )
+        conn.execute("PRAGMA foreign_keys=ON")
 
     def upsert_auth_user(
         self,
