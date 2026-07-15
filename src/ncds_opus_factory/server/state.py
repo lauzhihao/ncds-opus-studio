@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 
 from ncds_opus_factory.commands import build_full_registry
+from ncds_opus_factory.server.auth import AuthConfig, load_auth_config
+from ncds_opus_factory.server.auth_store import AuthStore
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
 from ncds_opus_factory.server.engine.pipeline_performers_final import PERFORMERS_FINAL
@@ -26,14 +28,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_STATE_DIR = _REPO_ROOT / "state" / "tasks"
 _DEFAULT_VIDEO_JOBS_DIR = _REPO_ROOT / "video-jobs"
 _DEFAULT_INSTANCES_DIR = _REPO_ROOT / "state" / "instances"
+_DEFAULT_AUTH_DB = _REPO_ROOT / "state" / "auth.db"
 
 STATE_DIR: Path = Path(os.environ.get("NOF_STATE_DIR", _DEFAULT_STATE_DIR))
 # 案卷库与任务目录解耦（清扫删任务,案卷永存）。默认 state/wolong/labels,可 NOF_LABELS_DIR 覆盖。
 LABELS_DIR: Path = Path(os.environ.get("NOF_LABELS_DIR", STATE_DIR.parent / "wolong" / "labels"))
 VIDEO_JOBS_DIR: Path = Path(os.environ.get("NOF_VIDEO_JOBS_DIR", _DEFAULT_VIDEO_JOBS_DIR))
 INSTANCES_DIR: Path = Path(os.environ.get("NOF_INSTANCES_DIR", _DEFAULT_INSTANCES_DIR))
+AUTH_DB_PATH: Path = Path(os.environ.get("NOF_AUTH_DB", _DEFAULT_AUTH_DB))
 
 STORE: TaskStore = TaskStore(STATE_DIR)
+# Google OAuth 用户/session；未配 GOOGLE_* 时 AUTH_CONFIG.enabled=False，不拦请求。
+AUTH_STORE: AuthStore = AuthStore(AUTH_DB_PATH)
+AUTH_CONFIG: AuthConfig = load_auth_config()
 LABELS: LabelStore = LabelStore(LABELS_DIR)
 # NOF_MOCK_AGENTS 控制哪些命令走 mock（测试期不真调 codex/opus）
 # labels 注入:cron 任务完成自动归档时由 runner 直接落案卷

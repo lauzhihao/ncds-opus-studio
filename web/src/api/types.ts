@@ -1,6 +1,20 @@
 // 后端 server/routes/pipelines.py 的响应类型镜像。
 // 改后端 schema 时同步改这里。
 
+export interface AuthUser {
+  id: number;
+  email: string;
+  name: string | null;
+  pictureUrl: string | null;
+  lastLoginAt: string;
+}
+
+export interface AuthMeResponse {
+  authRequired: boolean;
+  authenticated: boolean;
+  user: AuthUser | null;
+}
+
 export interface TaskCreateResponse {
   task_id: string;
   status: string;

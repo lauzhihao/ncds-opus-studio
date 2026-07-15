@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowUp, Copy, Download, Pencil, Plus, RotateCcw, Square, Tr
 import { api } from '../api/client';
 import type { TaskDetailResponse } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { AuthUserMenu } from '../components/AuthGate';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useToast } from '../components/Toast';
 
@@ -762,6 +763,7 @@ export function CanvasPage() {
         <div className="brand"><span className="mark">{label}</span></div>
         <div className="spacer" />
         <ThemeSwitcher />
+        <AuthUserMenu />
       </div>
       <div
         className={`canvas-blank${dragOver ? ' is-dragover' : ''}`}

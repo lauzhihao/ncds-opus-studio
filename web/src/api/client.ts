@@ -1,7 +1,9 @@
 // 极简 fetch 封装：所有路径相对 /，由 Vite 在 dev 时 proxy，prod 走同源 FastAPI。
+// credentials: 携带 nof_session cookie（Google OAuth 登录后）。
 import type {
   AccountPost,
   AccountResolveResult,
+  AuthMeResponse,
   Episode,
   GuiguziAnalysis,
   GuiguziItem,
@@ -18,14 +20,17 @@ import type {
   WorkResolveResult,
 } from './types';
 
+const fetchOpts: RequestInit = { credentials: 'same-origin' };
+
 async function get<T>(path: string): Promise<T> {
-  const r = await fetch(path);
+  const r = await fetch(path, fetchOpts);
   if (!r.ok) throw new Error(`GET ${path} -> ${r.status}: ${await r.text()}`);
   return r.json() as Promise<T>;
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
   const r = await fetch(path, {
+    ...fetchOpts,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -36,6 +41,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 
 async function put<T>(path: string, body: unknown): Promise<T> {
   const r = await fetch(path, {
+    ...fetchOpts,
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -45,12 +51,14 @@ async function put<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function del<T>(path: string): Promise<T> {
-  const r = await fetch(path, { method: 'DELETE' });
+  const r = await fetch(path, { ...fetchOpts, method: 'DELETE' });
   if (!r.ok) throw new Error(`DELETE ${path} -> ${r.status}: ${await r.text()}`);
   return r.json() as Promise<T>;
 }
 
 export const api = {
+  getAuthStatus: () => get<AuthMeResponse>('/api/auth/me'),
+  logout: () => post<{ ok: boolean }>('/api/auth/logout'),
   listPipelines: () => get<{ pipelines: PipelineDef[] }>('/pipelines'),
   getPipeline: (id: string) => get<PipelineDef>(`/pipelines/${id}`),
   listJobs: () => get<{ jobs: JobSummary[] }>('/jobs'),
@@ -70,6 +78,7 @@ export const api = {
   // 把用户手选的赛道 key 写回作品 manifest（task-2.3 临时作品选赛道）
   saveWorkDomain: (platform: string, awemeId: string, domain: string) =>
     fetch(`/works/${encodeURIComponent(platform)}/${encodeURIComponent(awemeId)}/domain`, {
+      ...fetchOpts,
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain }),
@@ -203,7 +212,7 @@ export const api = {
   getTask: (taskId: string) => get<TaskDetailResponse>(`/tasks/${taskId}`),
   cancelTask: (taskId: string) => post<{ ok: boolean; status: string }>(`/tasks/${taskId}/cancel`),
   regenSceneImage: (jobId: string, sceneId: string) =>
-    fetch(`/jobs/${jobId}/scenes/${sceneId}/regen-image`, { method: 'POST' })
+    fetch(`/jobs/${jobId}/scenes/${sceneId}/regen-image`, { ...fetchOpts, method: 'POST' })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return (await r.json()) as { image_relpath: string };

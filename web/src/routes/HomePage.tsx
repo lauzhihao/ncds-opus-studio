@@ -12,6 +12,7 @@ import type { AccountResolveResult, JobSummary, SubscriptionAuthor, WorkResolveR
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { AppsMenu } from '../components/AppsMenu';
+import { AuthUserMenu } from '../components/AuthGate';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { AccountCard, JobCard } from '../components/WorkCards';
 import { GlobalLoading } from '../components/GlobalLoading';
@@ -325,6 +326,7 @@ export function HomePage() {
         <div className="spacer" />
         <AppsMenu />
         <ThemeSwitcher />
+        <AuthUserMenu />
         {/* 移动端：赛道筛选收进右上角汉堡菜单（桌面端 CSS 隐藏，筛选仍内联在分区标题行） */}
         <div className="topbar-filter-menu">
           <button

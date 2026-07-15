@@ -64,7 +64,7 @@ export function LinesPanel({ jobId, nodeDef, nodeState, onAdvanced }: Props) {
     }
     setLoaded(false);
     setLoadErr(null);
-    fetch(`/jobs/${jobId}/files/${EPISODE_RELPATH}`)
+    fetch(`/jobs/${jobId}/files/${EPISODE_RELPATH}`, { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((text) => {
         let parsed: Record<string, unknown>;

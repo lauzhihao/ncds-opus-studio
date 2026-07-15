@@ -8,6 +8,7 @@ import { AlertCircle, ArrowLeft, Clock, Heart, Loader2, MessageCircle, Play, Rot
 import { api } from '../api/client';
 import type { AccountPost, SubscriptionAuthor } from '../api/types';
 import { AppsMenu } from '../components/AppsMenu';
+import { AuthUserMenu } from '../components/AuthGate';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useToast } from '../components/Toast';
 import { CoverImage } from '../components/WorkCards';
@@ -148,6 +149,7 @@ export function AccountWorksPage() {
         <div className="spacer" />
         <AppsMenu />
         <ThemeSwitcher />
+        <AuthUserMenu />
       </div>
 
       {/* 作者信息条：头像 + 平台/监控状态/更新时间 + 数据 + 取消关注（从上一页带过来） */}

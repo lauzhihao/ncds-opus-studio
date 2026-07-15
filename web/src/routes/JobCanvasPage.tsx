@@ -28,6 +28,7 @@ import { AgentCard, type AgentCardData } from '../components/AgentCard';
 import { AgentDrawer } from '../components/AgentDrawer';
 import { PulseEdge } from '../components/PulseEdge';
 import { AppsMenu } from '../components/AppsMenu';
+import { AuthUserMenu } from '../components/AuthGate';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { GlobalLoading } from '../components/GlobalLoading';
 import {
@@ -266,6 +267,7 @@ export function JobCanvasPage() {
         </span>
         <AppsMenu />
         <ThemeSwitcher />
+        <AuthUserMenu />
       </div>
 
       <div className="canvas-frame">

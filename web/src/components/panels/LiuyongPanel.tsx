@@ -234,7 +234,7 @@ export function LiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced, onReconnec
       return;
     }
     setLoadingTab(tab);
-    fetch(`/jobs/${jobId}/files/${d.draft_relpath}`)
+    fetch(`/jobs/${jobId}/files/${d.draft_relpath}`, { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((text) => setCache((c) => ({ ...c, [tab]: text })))
       .catch((e) =>

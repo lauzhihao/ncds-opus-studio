@@ -6,6 +6,7 @@ import { HomePage } from './routes/HomePage';
 import { AccountWorksPage } from './routes/AccountWorksPage';
 import { CanvasPage } from './routes/CanvasPage';
 import { JobCanvasPage } from './routes/JobCanvasPage';
+import { AuthGate } from './components/AuthGate';
 import { ToastProvider } from './components/Toast';
 import { applyThemeFromStorage } from './hooks/useTheme';
 import './styles/themes.css';
@@ -18,17 +19,19 @@ applyThemeFromStorage();
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ToastProvider>
-      <BrowserRouter
-        basename="/studio"
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/accounts/:secUid" element={<AccountWorksPage />} />
-          <Route path="/canvas/:mode" element={<CanvasPage />} />
-          <Route path="/jobs/:jobId" element={<JobCanvasPage />} />
-        </Routes>
-      </BrowserRouter>
+      <AuthGate>
+        <BrowserRouter
+          basename="/studio"
+          future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+        >
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/accounts/:secUid" element={<AccountWorksPage />} />
+            <Route path="/canvas/:mode" element={<CanvasPage />} />
+            <Route path="/jobs/:jobId" element={<JobCanvasPage />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthGate>
     </ToastProvider>
   </React.StrictMode>,
 );

@@ -16,6 +16,7 @@
     materials: GET /materials（素材索引占位；未来接数据库/向量库 + 对象存储）
     artifacts: GET /artifacts/{dir,files}/{relpath}（白名单产物服务，移动端审看）
     mock     : POST /mock/ensure
+    auth     : GET /api/auth/me, GET /api/auth/google/login|callback, POST /api/auth/logout
     studio   : /studio SPA（prod 静态 web/dist；NOF_DEV=1 反代 vite）
 """
 
@@ -38,13 +39,15 @@ except ImportError:
     # 没装 python-dotenv 也别炸 —— shell env 已经 export 的话同样工作
     pass
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from ncds_opus_factory.server.auth import current_user, should_require_auth
 from ncds_opus_factory.server.routes import accounts as accounts_routes
 from ncds_opus_factory.server.routes import artifacts as artifacts_routes
+from ncds_opus_factory.server.routes import auth as auth_routes
 from ncds_opus_factory.server.routes import commands as commands_routes
 from ncds_opus_factory.server.routes import instances as instances_routes
 from ncds_opus_factory.server.routes import jobs as jobs_routes
@@ -62,7 +65,7 @@ from ncds_opus_factory.server.maintenance import (
     sweep_cron_once,       # re-export: 同上
     sweep_discarded_once,  # re-export: 同上
 )
-from ncds_opus_factory.server.state import LABELS, RUNNER, STATE_DIR, STORE
+from ncds_opus_factory.server.state import AUTH_CONFIG, AUTH_STORE, LABELS, RUNNER, STATE_DIR, STORE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,9 +81,10 @@ async def _startup_log() -> None:
     # 所有 worker 职责（任务执行、订阅/retro/planner/discard loop）已移入 nof-worker 进程。
     # 8810 只负责：HTTP 路由 / SSE 文件 tail / POST 入队（lpush）/ GET serve 状态。
     logger.info(
-        "[nof-server] ready. state_dir=%s commands=%s",
+        "[nof-server] ready. state_dir=%s commands=%s auth_enabled=%s",
         STATE_DIR,
         RUNNER.list_commands(),
+        AUTH_CONFIG.enabled,
     )
 
 
@@ -105,6 +109,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """配置 Google OAuth 后拦截业务 API；未配置时全站放行（本地开发默认）。"""
+    user = current_user(AUTH_STORE, request) if AUTH_CONFIG.enabled else None
+    request.state.auth_user = user
+    if should_require_auth(request.url.path, request.method, AUTH_CONFIG):
+        if user is None:
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+    return await call_next(request)
+
+
+app.include_router(auth_routes.router)
 app.include_router(commands_routes.router)
 app.include_router(accounts_routes.router)
 app.include_router(tasks_routes.router)

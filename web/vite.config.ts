@@ -51,6 +51,7 @@ export default defineConfig(({ mode }) => {
         '/artifacts': BACKEND,
         '/templates': BACKEND,
         '/health': BACKEND,
+        '/api': BACKEND,
         // preview 节点 iframe 走这个：HTML 模板 + episode.json + audio/picture 资产
         '/preview': BACKEND,
       },

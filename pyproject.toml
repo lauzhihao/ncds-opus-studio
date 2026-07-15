@@ -30,6 +30,8 @@ dependencies = [
     "websockets>=12",
     # Worker 拆分 S3：跨进程任务队列(nof-worker 消费 / 8810 入队)+ 配额原子计数
     "redis>=5",
+    # Google OAuth（web /studio 登录；未配 GOOGLE_* 时 auth 关闭）
+    "google-auth>=2.35.0",
 ]
 
 [project.scripts]
