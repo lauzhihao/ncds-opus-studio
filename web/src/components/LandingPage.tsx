@@ -268,13 +268,13 @@ function JoinModal({
           {providers.google && (
             <button type="button" className="landing-btn landing-btn-google" onClick={onGoogle}>
               <GoogleLogo />
-              <span>Continue with Google</span>
+              <span>Google</span>
             </button>
           )}
           {providers.apple && (
             <button type="button" className="landing-btn landing-btn-apple" onClick={onApple}>
               <AppleLogo />
-              <span>Continue with Apple</span>
+              <span>Apple</span>
             </button>
           )}
         </div>
