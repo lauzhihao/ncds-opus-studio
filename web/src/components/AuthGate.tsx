@@ -18,8 +18,10 @@ import type { AuthUser } from '../api/types';
 type AuthContextValue = {
   authRequired: boolean;
   user: AuthUser | null;
+  providers: { google: boolean; apple: boolean };
   logout: () => Promise<void>;
   startGoogleLogin: () => void;
+  startAppleLogin: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -41,6 +43,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [authRequired, setAuthRequired] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [providers, setProviders] = useState({ google: true, apple: false });
 
   useEffect(() => {
     let cancelled = false;
@@ -51,6 +54,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setAuthRequired(data.authRequired);
         setUser(data.authenticated ? data.user : null);
+        if (data.providers) {
+          setProviders({
+            google: Boolean(data.providers.google),
+            apple: Boolean(data.providers.apple),
+          });
+        }
       } catch {
         // /api/auth/me 失败时保守处理：若后端其实开了 auth，业务 API 会 401；本地未开则多数接口仍可用。
         if (!cancelled) {
@@ -70,6 +79,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
     window.location.href = '/api/auth/google/login';
   }, []);
 
+  const startAppleLogin = useCallback(() => {
+    window.location.href = '/api/auth/apple/login';
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await api.logout();
@@ -83,8 +96,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [authRequired]);
 
   const value = useMemo(
-    () => ({ authRequired, user, logout, startGoogleLogin }),
-    [authRequired, user, logout, startGoogleLogin],
+    () => ({ authRequired, user, providers, logout, startGoogleLogin, startAppleLogin }),
+    [authRequired, user, providers, logout, startGoogleLogin, startAppleLogin],
   );
 
   if (loading) {
@@ -94,7 +107,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (authRequired && !user) {
     return (
       <AuthContext.Provider value={value}>
-        <AuthLoginScreen onLogin={startGoogleLogin} />
+        <AuthLoginScreen
+          providers={providers}
+          onGoogle={startGoogleLogin}
+          onApple={startAppleLogin}
+        />
       </AuthContext.Provider>
     );
   }
@@ -125,17 +142,44 @@ function GoogleLogo({ className = '' }: { className?: string }) {
   );
 }
 
-function AuthLoginScreen({ onLogin }: { onLogin: () => void }) {
+function AppleLogo({ className = '' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M16.37 12.63c.03 3.23 2.83 4.31 2.86 4.32-.02.08-.45 1.53-1.47 3.03-.89 1.3-1.81 2.59-3.26 2.62-1.43.03-1.89-.85-3.53-.85-1.64 0-2.15.82-3.5.87-1.4.05-2.47-1.4-3.37-2.69C2.3 17.3.96 13.3 2.72 10.3c.88-1.49 2.45-2.43 4.15-2.46 1.3-.02 2.52.87 3.53.87 1 0 2.56-1.08 4.32-.92.74.03 2.81.3 4.14 2.25-.11.07-2.47 1.44-2.49 4.59zM13.9 5.67c.7-.85 1.17-2.03 1.04-3.21-1.01.04-2.23.67-2.95 1.52-.65.75-1.22 1.95-1.07 3.1 1.13.09 2.28-.57 2.98-1.41z"
+      />
+    </svg>
+  );
+}
+
+function AuthLoginScreen({
+  providers,
+  onGoogle,
+  onApple,
+}: {
+  providers: { google: boolean; apple: boolean };
+  onGoogle: () => void;
+  onApple: () => void;
+}) {
   return (
     <div className="auth-screen">
       <div className="auth-panel">
         <div className="auth-brand">NCDS Opus Studio</div>
-        <h1>用 Google 登录</h1>
-        <p className="auth-status">登录后使用内容生产工作台</p>
-        <button className="auth-google-button" type="button" onClick={onLogin}>
-          <GoogleLogo className="auth-google-button-logo" />
-          <span>Continue with Google</span>
-        </button>
+        <h1>登录工作台</h1>
+        <p className="auth-status">使用 Google 或 Apple 账号继续</p>
+        {providers.google && (
+          <button className="auth-google-button" type="button" onClick={onGoogle}>
+            <GoogleLogo className="auth-google-button-logo" />
+            <span>Continue with Google</span>
+          </button>
+        )}
+        {providers.apple && (
+          <button className="auth-apple-button" type="button" onClick={onApple}>
+            <AppleLogo className="auth-apple-button-logo" />
+            <span>Continue with Apple</span>
+          </button>
+        )}
       </div>
     </div>
   );

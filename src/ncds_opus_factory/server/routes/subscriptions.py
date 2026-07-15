@@ -10,12 +10,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ncds_opus_factory.common import authors_repo
+from ncds_opus_factory.server.access import current_owner_id
 from ncds_opus_factory.server.state import RUNNER, STATE_DIR, STORE
 from ncds_opus_factory.server.subscriptions import (
+    ensure_user_subscriptions,
+    iter_subscription_paths,
     load_subscriptions,
     run_subscription_tick,
     save_subscriptions,
@@ -97,16 +100,26 @@ def _upsert_author_snapshot(a: SubscriptionAuthor) -> None:
     authors_repo.save_profile(a.platform, key, display, refreshed_at=a.refreshed_at)
 
 
+def _subs_path_for_request(request: Request):
+    from pathlib import Path
+
+    owner_id = current_owner_id(request)
+    if owner_id is not None:
+        return ensure_user_subscriptions(STATE_DIR, owner_id)
+    return subscriptions_path(STATE_DIR)
+
+
 @router.get("/subscriptions", response_model=SubscriptionsConfig)
-async def get_subscriptions(domain: str | None = None) -> dict[str, Any]:
-    cfg = _hydrate(load_subscriptions(subscriptions_path(STATE_DIR)))
+async def get_subscriptions(request: Request, domain: str | None = None) -> dict[str, Any]:
+    cfg = _hydrate(load_subscriptions(_subs_path_for_request(request)))
     if domain:
         cfg["authors"] = [a for a in cfg["authors"] if a.get("domain") == domain]
     return cfg
 
 
 @router.put("/subscriptions", response_model=SubscriptionsConfig)
-async def put_subscriptions(body: SubscriptionsConfig) -> dict[str, Any]:
+async def put_subscriptions(body: SubscriptionsConfig, request: Request) -> dict[str, Any]:
+    path = _subs_path_for_request(request)
     seen: set[str] = set()
     refs: list[dict[str, Any]] = []
     for a in body.authors:
@@ -133,12 +146,18 @@ async def put_subscriptions(body: SubscriptionsConfig) -> dict[str, Any]:
             ref["unique_id"] = a.unique_id
         refs.append(ref)
     cfg = {"interval_hours": body.interval_hours, "authors": refs}
-    save_subscriptions(subscriptions_path(STATE_DIR), cfg)
-    logger.info("[subscriptions] 配置更新: %d 个作者", len(refs))
-    return _hydrate(load_subscriptions(subscriptions_path(STATE_DIR)))
+    save_subscriptions(path, cfg)
+    logger.info("[subscriptions] 配置更新: %d 个作者 path=%s", len(refs), path)
+    return _hydrate(load_subscriptions(path))
 
 
 @router.post("/subscriptions/tick")
-async def trigger_tick() -> dict[str, int]:
-    n = await run_subscription_tick(RUNNER, STORE, subscriptions_path(STATE_DIR))
+async def trigger_tick(request: Request) -> dict[str, int]:
+    """手动触发：只 tick 当前用户的订阅（auth 关则 tick legacy 全局文件）。"""
+    owner_id = current_owner_id(request)
+    if owner_id is not None:
+        path = ensure_user_subscriptions(STATE_DIR, owner_id)
+        n = await run_subscription_tick(RUNNER, STORE, path, owner_id=owner_id)
+        return {"submitted": n}
+    n = await run_subscription_tick(RUNNER, STORE, subscriptions_path(STATE_DIR), owner_id=None)
     return {"submitted": n}

@@ -686,7 +686,7 @@ def run_mock_node(job_dir: Path, node_name: str) -> dict[str, Any]:
     return builder(job_dir, _load_episode())
 
 
-def ensure_mock_job(runner: Any) -> str:
+def ensure_mock_job(runner: Any, *, owner_id: str | None = None) -> str:
     """（重新）种一个 mock 作品，返回 job_id。
 
     幂等：每次调用重置成「只有 START done、其余 idle、mock=True」的初始态，并清掉历史
@@ -727,6 +727,7 @@ def ensure_mock_job(runner: Any) -> str:
         created_at=now, updated_at=now, inputs=inputs, nodes=nodes,
         node_configs=dict((source_state or {}).get("node_configs") or {}),
         mock=True,
+        owner_id=owner_id,
     )
     runner._save(state)
     return MOCK_JOB_ID

@@ -41,12 +41,14 @@ from collections.abc import AsyncGenerator
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import FileResponse
 from ncds_opus_core.pipelines import PIPELINE_REGISTRY
 from ncds_opus_core.templates import template_dir as _core_template_dir
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
+
+from ncds_opus_factory.server.access import current_owner_id, maybe_claim_legacy, require_job
 
 from ncds_opus_factory.server.jianying_draft import build_jianying_draft
 from ncds_opus_factory.server.state import PIPELINE_RUNNER
@@ -161,12 +163,9 @@ async def pipeline_cover(pipeline_id: str) -> FileResponse:
 
 
 @router.get("/jobs/{job_id}/cover")
-async def job_cover(job_id: str) -> FileResponse:
+async def job_cover(job_id: str, request: Request) -> FileResponse:
     """作品封面：成片首帧优先，回退全片背景/首场景图；都没有 404（前端回退 marker）。"""
-    try:
-        PIPELINE_RUNNER.get_job(job_id)
-    except KeyError:
-        raise HTTPException(404, f"job not found: {job_id}")
+    require_job(job_id, request)
     path = await PIPELINE_RUNNER.job_cover_path(job_id)
     if path is None:
         raise HTTPException(404, "no cover yet")
@@ -178,33 +177,33 @@ async def job_cover(job_id: str) -> FileResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/jobs")
-async def create_job(body: CreateJobRequest) -> dict[str, Any]:
+async def create_job(body: CreateJobRequest, request: Request) -> dict[str, Any]:
     if body.pipeline_id not in PIPELINE_REGISTRY:
         raise HTTPException(404, f"pipeline not found: {body.pipeline_id}")
-    state = PIPELINE_RUNNER.create_job(body.pipeline_id, body.title, body.inputs)
+    state = PIPELINE_RUNNER.create_job(
+        body.pipeline_id,
+        body.title,
+        body.inputs,
+        owner_id=current_owner_id(request),
+    )
     return _serialize_job(state)
 
 
 @router.get("/jobs")
-async def list_jobs() -> dict[str, Any]:
-    return {"jobs": PIPELINE_RUNNER.list_jobs()}
+async def list_jobs(request: Request) -> dict[str, Any]:
+    owner_id = maybe_claim_legacy(request)
+    return {"jobs": PIPELINE_RUNNER.list_jobs(owner_id=owner_id)}
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str) -> dict[str, Any]:
-    try:
-        state = PIPELINE_RUNNER.get_job(job_id)
-    except KeyError:
-        raise HTTPException(404, f"job not found: {job_id}")
+async def get_job(job_id: str, request: Request) -> dict[str, Any]:
+    state = require_job(job_id, request)
     return _serialize_job(state)
 
 
 @router.delete("/jobs/{job_id}")
-async def delete_job(job_id: str) -> dict[str, Any]:
-    try:
-        PIPELINE_RUNNER.get_job(job_id)
-    except KeyError:
-        raise HTTPException(404, f"job not found: {job_id}")
+async def delete_job(job_id: str, request: Request) -> dict[str, Any]:
+    require_job(job_id, request)
     job_dir = PIPELINE_RUNNER.video_jobs_dir / job_id
     shutil.rmtree(job_dir, ignore_errors=True)
     return {"deleted": job_id}
@@ -214,8 +213,10 @@ async def delete_job(job_id: str) -> dict[str, Any]:
 async def run_node(
     job_id: str,
     node: str,
+    request: Request,
     body: dict[str, Any] | None = Body(default=None),
 ) -> dict[str, Any]:
+    require_job(job_id, request)
     params = (body or {}).get("params") if isinstance(body, dict) else None
     force = bool((body or {}).get("force")) if isinstance(body, dict) else False
     try:
@@ -240,7 +241,8 @@ async def run_node(
 
 
 @router.post("/jobs/{job_id}/nodes/{node}/cancel")
-async def cancel_node(job_id: str, node: str) -> dict[str, Any]:
+async def cancel_node(job_id: str, node: str, request: Request) -> dict[str, Any]:
+    require_job(job_id, request)
     # 先校验 job 存在：cancel_node 只查内存 _running_nodes、从不 raise KeyError，
     # 不显式校验的话不存在的 job 会静默返回 200 {"cancelled": false}，与同组其它端点不一致。
     try:
@@ -261,7 +263,8 @@ class SelectImageVariantBody(BaseModel):
 
 
 @router.post("/jobs/{job_id}/nodes/rw/rewrite/{model_id}")
-async def rewrite_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
+async def rewrite_rw_model(job_id: str, model_id: str, request: Request) -> dict[str, Any]:
+    require_job(job_id, request)
     try:
         await PIPELINE_RUNNER.rewrite_rw_model(job_id, model_id)
     except KeyError as e:
@@ -272,7 +275,8 @@ async def rewrite_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
 
 
 @router.post("/jobs/{job_id}/nodes/rw/refine/{model_id}")
-async def refine_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
+async def refine_rw_model(job_id: str, model_id: str, request: Request) -> dict[str, Any]:
+    require_job(job_id, request)
     try:
         await PIPELINE_RUNNER.refine_rw_model(job_id, model_id)
     except KeyError as e:
@@ -283,7 +287,8 @@ async def refine_rw_model(job_id: str, model_id: str) -> dict[str, Any]:
 
 
 @router.put("/jobs/{job_id}/nodes/rw/select")
-async def select_rw_model(job_id: str, body: SelectModelBody) -> dict[str, Any]:
+async def select_rw_model(job_id: str, body: SelectModelBody, request: Request) -> dict[str, Any]:
+    require_job(job_id, request)
     try:
         PIPELINE_RUNNER.select_rw_model(job_id, body.model_id)
     except KeyError as e:
@@ -294,8 +299,9 @@ async def select_rw_model(job_id: str, body: SelectModelBody) -> dict[str, Any]:
 
 
 @router.post("/jobs/{job_id}/nodes/image/regen/{scene_id}")
-async def regen_image_scene(job_id: str, scene_id: str) -> dict[str, Any]:
+async def regen_image_scene(job_id: str, scene_id: str, request: Request) -> dict[str, Any]:
     """重生 image 节点下的背景图或旧 scene 图片，不影响下游节点。"""
+    require_job(job_id, request)
     try:
         await PIPELINE_RUNNER.regen_image_scene(job_id, scene_id)
     except KeyError as e:
@@ -306,8 +312,9 @@ async def regen_image_scene(job_id: str, scene_id: str) -> dict[str, Any]:
 
 
 @router.put("/jobs/{job_id}/nodes/image/select")
-async def select_image_variant(job_id: str, body: SelectImageVariantBody) -> dict[str, Any]:
+async def select_image_variant(job_id: str, body: SelectImageVariantBody, request: Request) -> dict[str, Any]:
     """选择某个已生成候选为 scene 主图；下游仍读取标准 03_image/{scene}.webp。"""
+    require_job(job_id, request)
     try:
         rel = PIPELINE_RUNNER.select_image_variant(job_id, body.scene_id, body.image_relpath)
     except KeyError as e:
@@ -318,8 +325,9 @@ async def select_image_variant(job_id: str, body: SelectImageVariantBody) -> dic
 
 
 @router.post("/jobs/{job_id}/nodes/image/regen-sketch/{scene_id}/{n}")
-async def regen_image_sketch(job_id: str, scene_id: str, n: int) -> dict[str, Any]:
+async def regen_image_sketch(job_id: str, scene_id: str, n: int, request: Request) -> dict[str, Any]:
     """重生 image 节点下某个 scene 的第 n 个前景素材（1-based），不影响背景和其他素材。"""
+    require_job(job_id, request)
     try:
         rel = await PIPELINE_RUNNER.regen_image_sketch(job_id, scene_id, n)
     except KeyError as e:
@@ -330,8 +338,9 @@ async def regen_image_sketch(job_id: str, scene_id: str, n: int) -> dict[str, An
 
 
 @router.post("/jobs/{job_id}/scenes/{scene_id}/regen-image")
-async def regen_scene_image_from_preview(job_id: str, scene_id: str) -> dict[str, Any]:
+async def regen_scene_image_from_preview(job_id: str, scene_id: str, request: Request) -> dict[str, Any]:
     """preview 抽屉里点「生成图片」用：不要求 image 节点 done，直出图片。"""
+    require_job(job_id, request)
     try:
         rel = await PIPELINE_RUNNER.regen_scene_image_from_preview(job_id, scene_id)
     except KeyError as e:
@@ -342,8 +351,9 @@ async def regen_scene_image_from_preview(job_id: str, scene_id: str) -> dict[str
 
 
 @router.post("/jobs/{job_id}/nodes/tts/regen-scene/{scene_id}")
-async def regen_tts_scene(job_id: str, scene_id: str) -> dict[str, Any]:
+async def regen_tts_scene(job_id: str, scene_id: str, request: Request) -> dict[str, Any]:
     """final_preview：重生指定 scene 的整段音频，不影响其他 scene 和下游节点。"""
+    require_job(job_id, request)
     try:
         await PIPELINE_RUNNER.regen_tts_scene(job_id, scene_id)
     except KeyError as e:
@@ -354,12 +364,13 @@ async def regen_tts_scene(job_id: str, scene_id: str) -> dict[str, Any]:
 
 
 @router.post("/jobs/{job_id}/shenkuo/refresh")
-async def refresh_shenkuo(job_id: str) -> dict[str, Any]:
+async def refresh_shenkuo(job_id: str, request: Request) -> dict[str, Any]:
     """进画布触发：后台刷新沈括已采作品的播放数据 + 评论（仅这两项，其余产物不动）。
 
     立即返回（fire-and-forget）；逐条作品 1 小时内只采一次（Redis 节流锁）省 API 成本。
     refreshing=False 表示没起刷新（未采过 / 正在采 / 已有刷新在跑 / 纯文案模式），属正常 no-op。
     """
+    require_job(job_id, request)
     try:
         refreshing = PIPELINE_RUNNER.refresh_shenkuo(job_id)
     except KeyError as e:
@@ -368,11 +379,12 @@ async def refresh_shenkuo(job_id: str) -> dict[str, Any]:
 
 
 @router.put("/jobs/{job_id}/inputs")
-async def update_inputs(job_id: str, body: UpdateInputsRequest) -> dict[str, Any]:
+async def update_inputs(job_id: str, body: UpdateInputsRequest, request: Request) -> dict[str, Any]:
     """更新 input 节点：urls / raw_text / shares 任一组合都接受。
 
     服务端纯持久化，不解析。前端的正则在 textarea onChange 时实时跑。
     """
+    require_job(job_id, request)
     try:
         PIPELINE_RUNNER.get_job(job_id)
     except KeyError:
@@ -396,7 +408,8 @@ async def update_inputs(job_id: str, body: UpdateInputsRequest) -> dict[str, Any
 
 
 @router.put("/jobs/{job_id}/title")
-async def update_title(job_id: str, body: UpdateJobTitleRequest) -> dict[str, Any]:
+async def update_title(job_id: str, body: UpdateJobTitleRequest, request: Request) -> dict[str, Any]:
+    require_job(job_id, request)
     try:
         PIPELINE_RUNNER.update_title(job_id, body.title.strip())
     except KeyError:
@@ -406,7 +419,8 @@ async def update_title(job_id: str, body: UpdateJobTitleRequest) -> dict[str, An
 
 
 @router.put("/jobs/{job_id}/nodes/{node}/position")
-async def update_position(job_id: str, node: str, body: NodePositionRequest) -> dict[str, Any]:
+async def update_position(job_id: str, node: str, body: NodePositionRequest, request: Request) -> dict[str, Any]:
+    require_job(job_id, request)
     try:
         PIPELINE_RUNNER.update_node_position(job_id, node, body.x, body.y)
     except KeyError as e:
@@ -415,7 +429,8 @@ async def update_position(job_id: str, node: str, body: NodePositionRequest) -> 
 
 
 @router.get("/jobs/{job_id}/episode")
-async def get_episode(job_id: str) -> dict[str, Any]:
+async def get_episode(job_id: str, request: Request) -> dict[str, Any]:
+    require_job(job_id, request)
     try:
         PIPELINE_RUNNER.get_job(job_id)
     except KeyError:
@@ -427,7 +442,9 @@ async def get_episode(job_id: str) -> dict[str, Any]:
 
 
 @router.put("/jobs/{job_id}/episode")
-async def put_episode(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+async def put_episode(job_id: str, body: dict[str, request: Request, Any] = Body(...)) -> dict[str, Any]:
+
+    require_job(job_id, request)
     try:
         PIPELINE_RUNNER.get_job(job_id)
     except KeyError:
@@ -437,8 +454,9 @@ async def put_episode(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str
 
 
 @router.post("/jobs/{job_id}/jianying-draft")
-async def create_jianying_draft(job_id: str) -> dict[str, Any]:
+async def create_jianying_draft(job_id: str, request: Request) -> dict[str, Any]:
     """生成剪映草稿包：draft JSON + 素材副本 + SRT + timeline manifest，返回 zip 下载 URL。"""
+    require_job(job_id, request)
     try:
         state = PIPELINE_RUNNER.get_job(job_id)
     except KeyError:
@@ -459,11 +477,13 @@ async def create_jianying_draft(job_id: str) -> dict[str, Any]:
 # 鬼谷子选题（评论驱动双模型）—— virtual agent，结果落 per-job guiguzi.json，前端轮询
 # ---------------------------------------------------------------------------
 @router.post("/jobs/{job_id}/guiguzi/analyze")
-async def analyze_guiguzi(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+async def analyze_guiguzi(job_id: str, body: dict[str, request: Request, Any] = Body(...)) -> dict[str, Any]:
+
     """第一步：双模型反推爆款原因。立即返回 analyzing，后台跑，前端轮询取 analyzed。
 
     body: {"items": [{text, comment}, ...](≤5)}。
     """
+    require_job(job_id, request)
     items = body.get("items") if isinstance(body, dict) else None
     try:
         doc = PIPELINE_RUNNER.analyze_guiguzi(job_id, items or [])
@@ -475,13 +495,15 @@ async def analyze_guiguzi(job_id: str, body: dict[str, Any] = Body(...)) -> dict
 
 
 @router.post("/jobs/{job_id}/guiguzi/topics")
-async def generate_guiguzi(job_id: str, body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+async def generate_guiguzi(job_id: str, body: dict[str, request: Request, Any] = Body(...)) -> dict[str, Any]:
+
     """第二步：以(用户选定/编辑的)分析为指导出选题。立即返回 generating，后台跑。
 
     body: {"items": [{text, comment}, ...], "analysis": {...}, "prompt": str?, "force": bool}。
     prompt 传入(用户编辑后的提示词,含 $source 占位)则用它且全量重出;否则按 analysis 拼默认模板。
     force=False（默认·增量）：只为新评论补题，保留已出题评论；force=True（重新选题）：全部重出。
     """
+    require_job(job_id, request)
     items = body.get("items") if isinstance(body, dict) else None
     analysis = body.get("analysis") if isinstance(body, dict) else None
     prompt = body.get("prompt") if isinstance(body, dict) else None
@@ -496,8 +518,9 @@ async def generate_guiguzi(job_id: str, body: dict[str, Any] = Body(...)) -> dic
 
 
 @router.get("/jobs/{job_id}/guiguzi")
-async def get_guiguzi(job_id: str) -> dict[str, Any]:
+async def get_guiguzi(job_id: str, request: Request) -> dict[str, Any]:
     """读 per-job 选题结果（running/done/failed）。前端轮询取双栏 candidates。"""
+    require_job(job_id, request)
     try:
         PIPELINE_RUNNER.get_job(job_id)
     except KeyError:
@@ -517,7 +540,8 @@ _TAIL_POLL_INTERVAL = 0.5
 
 
 @router.get("/jobs/{job_id}/events")
-async def stream_events(job_id: str, since_seq: int | None = None) -> EventSourceResponse:
+async def stream_events(job_id: str, request: Request, since_seq: int | None = None) -> EventSourceResponse:
+
     """SSE：订阅 job 的节点状态变更事件。
 
     协议
@@ -534,6 +558,7 @@ async def stream_events(job_id: str, since_seq: int | None = None) -> EventSourc
     再继续 tail 新增——保证断线期间不丢事件。
     不带时（默认）：snapshot 全量 + 之后的增量，不重放历史，等价于旧行为。
     """
+    require_job(job_id, request)
     try:
         PIPELINE_RUNNER.get_job(job_id)
     except KeyError:

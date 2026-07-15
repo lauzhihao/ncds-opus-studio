@@ -1,6 +1,7 @@
-"""Google OAuth 用户 / session 持久化（SQLite，独立于 task/job 状态）。
+"""OAuth 用户 / session 持久化（SQLite）。
 
-对齐 vps-insight 的 auth_users / auth_sessions 模型，路径默认 state/auth.db。
+支持多 provider（google / apple）。owner_id = str(user.id)。
+旧表仅有 google_sub 时自动迁移。
 """
 
 from __future__ import annotations
@@ -14,13 +15,19 @@ from pathlib import Path
 @dataclass(frozen=True)
 class AuthUserRecord:
     id: int
-    google_sub: str
+    provider: str
+    provider_sub: str
     email: str
     name: str | None
     picture_url: str | None
     created_at: str
     updated_at: str
     last_login_at: str
+
+    @property
+    def google_sub(self) -> str | None:
+        """兼容旧代码读 google_sub。"""
+        return self.provider_sub if self.provider == "google" else None
 
 
 def now_utc_text() -> str:
@@ -39,13 +46,15 @@ class AuthStore:
                 """
                 CREATE TABLE IF NOT EXISTS auth_users (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  google_sub TEXT NOT NULL UNIQUE,
-                  email TEXT NOT NULL UNIQUE,
+                  provider TEXT NOT NULL,
+                  provider_sub TEXT NOT NULL,
+                  email TEXT NOT NULL,
                   name TEXT,
                   picture_url TEXT,
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL,
-                  last_login_at TEXT NOT NULL
+                  last_login_at TEXT NOT NULL,
+                  UNIQUE(provider, provider_sub)
                 );
 
                 CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -61,43 +70,81 @@ class AuthStore:
                   ON auth_sessions(session_hash, expires_at);
                 """
             )
+            self._migrate_from_google_only(conn)
+
+    def _migrate_from_google_only(self, conn: sqlite3.Connection) -> None:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(auth_users)").fetchall()}
+        if "google_sub" in cols and "provider" not in cols:
+            # 极旧结构：仅 google_sub → 重建
+            conn.executescript(
+                """
+                ALTER TABLE auth_users RENAME TO auth_users_legacy;
+                CREATE TABLE auth_users (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  provider TEXT NOT NULL,
+                  provider_sub TEXT NOT NULL,
+                  email TEXT NOT NULL,
+                  name TEXT,
+                  picture_url TEXT,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  last_login_at TEXT NOT NULL,
+                  UNIQUE(provider, provider_sub)
+                );
+                INSERT INTO auth_users (
+                  id, provider, provider_sub, email, name, picture_url,
+                  created_at, updated_at, last_login_at
+                )
+                SELECT id, 'google', google_sub, email, name, picture_url,
+                       created_at, updated_at, last_login_at
+                FROM auth_users_legacy;
+                DROP TABLE auth_users_legacy;
+                """
+            )
+            return
+        if "provider" not in cols:
+            return
+        # 若仍有 google_sub 列并存（半迁移），忽略
 
     def upsert_auth_user(
         self,
         *,
-        google_sub: str,
+        provider: str,
+        provider_sub: str,
         email: str,
         name: str | None,
         picture_url: str | None,
     ) -> AuthUserRecord:
         now = now_utc_text()
+        provider = provider.strip().lower()
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO auth_users (
-                  google_sub, email, name, picture_url, created_at, updated_at, last_login_at
+                  provider, provider_sub, email, name, picture_url,
+                  created_at, updated_at, last_login_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(google_sub) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(provider, provider_sub) DO UPDATE SET
                   email = excluded.email,
-                  name = excluded.name,
-                  picture_url = excluded.picture_url,
+                  name = COALESCE(excluded.name, auth_users.name),
+                  picture_url = COALESCE(excluded.picture_url, auth_users.picture_url),
                   updated_at = excluded.updated_at,
                   last_login_at = excluded.last_login_at
                 """,
-                (google_sub, email, name, picture_url, now, now, now),
+                (provider, provider_sub, email, name, picture_url, now, now, now),
             )
             row = conn.execute(
                 """
-                SELECT id, google_sub, email, name, picture_url,
+                SELECT id, provider, provider_sub, email, name, picture_url,
                        created_at, updated_at, last_login_at
                 FROM auth_users
-                WHERE google_sub = ?
+                WHERE provider = ? AND provider_sub = ?
                 """,
-                (google_sub,),
+                (provider, provider_sub),
             ).fetchone()
         if row is None:
-            raise RuntimeError(f"Auth user could not be read back: {email}")
+            raise RuntimeError(f"Auth user could not be read back: {provider}:{provider_sub}")
         return _row_to_auth_user(row)
 
     def create_auth_session(self, *, user_id: int, session_hash: str, expires_at: str) -> None:
@@ -122,7 +169,7 @@ class AuthStore:
             row = conn.execute(
                 """
                 SELECT
-                  u.id, u.google_sub, u.email, u.name, u.picture_url,
+                  u.id, u.provider, u.provider_sub, u.email, u.name, u.picture_url,
                   u.created_at, u.updated_at, u.last_login_at
                 FROM auth_sessions s
                 JOIN auth_users u ON u.id = s.user_id
@@ -141,6 +188,11 @@ class AuthStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM auth_sessions WHERE session_hash = ?", (session_hash,))
 
+    def count_users(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM auth_users").fetchone()
+        return int(row["c"] if row is not None else 0)
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
@@ -149,9 +201,24 @@ class AuthStore:
 
 
 def _row_to_auth_user(row: sqlite3.Row) -> AuthUserRecord:
+    keys = row.keys()
+    if "provider" in keys:
+        return AuthUserRecord(
+            id=row["id"],
+            provider=row["provider"],
+            provider_sub=row["provider_sub"],
+            email=row["email"],
+            name=row["name"],
+            picture_url=row["picture_url"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            last_login_at=row["last_login_at"],
+        )
+    # 兼容未迁移行
     return AuthUserRecord(
         id=row["id"],
-        google_sub=row["google_sub"],
+        provider="google",
+        provider_sub=row["google_sub"],
         email=row["email"],
         name=row["name"],
         picture_url=row["picture_url"],

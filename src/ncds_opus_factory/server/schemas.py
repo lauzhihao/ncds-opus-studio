@@ -70,6 +70,8 @@ class TaskMeta(BaseModel):
     parent_task_id: str | None = None
     round_id: str | None = None
     intent_key: str | None = None
+    # 多租户：auth 用户 id 字符串；None=无主/auth 关闭时创建。旧 meta 无此键 → None。
+    owner_id: str | None = None
     # 列表态附带的人工决策（approved/rejected/未决=None）。仅 list_tasks 读 review.json
     # 后回填到内存对象，**不写入 meta.json**（_write_meta exclude_none 会丢弃 None）。
     decision: ReviewDecision | None = None

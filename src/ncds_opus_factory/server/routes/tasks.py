@@ -15,11 +15,12 @@ import logging
 from collections.abc import AsyncGenerator
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from sse_starlette.sse import EventSourceResponse
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
+from ncds_opus_factory.server.access import current_owner_id, maybe_claim_legacy, require_task
 from ncds_opus_factory.server.artifacts import extract_artifacts
 from ncds_opus_factory.server.schemas import (
     Review,
@@ -39,17 +40,23 @@ router = APIRouter()
 
 
 @router.get("/tasks", response_model=list[TaskMeta])
-async def list_tasks() -> list[TaskMeta]:
-    """列出所有任务实例（meta，最新在前）。命令清单见 GET /commands。"""
-    return STORE.list_tasks()
+async def list_tasks(request: Request) -> list[TaskMeta]:
+    """列出当前用户可见的任务实例（meta，最新在前）。命令清单见 GET /commands。"""
+    owner_id = maybe_claim_legacy(request)
+    return STORE.list_tasks(owner_id=owner_id)
 
 
 @router.post("/tasks", response_model=TaskCreateResponse, status_code=201)
-async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreateResponse:
+async def create_task(
+    body: TaskCreateRequest,
+    request: Request,
+    response: Response,
+) -> TaskCreateResponse:
     """提交一个任务，立即返回 task_id（任务后台异步执行）。
 
     REST：201 Created + Location 头指向新建任务资源。
     """
+    owner_id = current_owner_id(request)
     if body.cmd not in RUNNER.registry:
         raise HTTPException(
             status_code=404,
@@ -80,11 +87,7 @@ async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreate
     # 派生链深度 ≤2,按业务层计(§2):卧龙段(cmd=wolong)是 round 的编排层、不算一层,
     # 非卧龙祖先 ≥2 即拒——卧龙→干活任务→孙任务封顶
     if body.parent_task_id:
-        parent = STORE.get_meta(body.parent_task_id)
-        if parent is None:
-            raise HTTPException(
-                status_code=400, detail=f"parent_task_id 不存在: {body.parent_task_id}"
-            )
+        parent = require_task(body.parent_task_id, request)
         depth, cur, hops = 0, parent, 0
         while cur is not None and hops < 10:
             if cur.cmd != "wolong":
@@ -106,6 +109,7 @@ async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreate
             parent_task_id=body.parent_task_id,
             round_id=body.round_id,
             intent_key=body.intent_key,
+            owner_id=owner_id,
         )
     except EnqueueUnavailable as e:
         # Redis 不可达：决策 D——meta 已置 failed（非幽灵 pending），返回 503 + task_id。
@@ -122,11 +126,9 @@ async def create_task(body: TaskCreateRequest, response: Response) -> TaskCreate
 
 
 @router.get("/tasks/{task_id}", response_model=TaskDetailResponse)
-async def get_task(task_id: str) -> TaskDetailResponse:
+async def get_task(task_id: str, request: Request) -> TaskDetailResponse:
     """查询任务详情。终态时 result 字段会包含 run 返回值。"""
-    meta = STORE.get_meta(task_id)
-    if not meta:
-        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    meta = require_task(task_id, request)
     result = STORE.get_result(task_id) if meta.status == "completed" else None
     artifacts = extract_artifacts(meta.cmd, result) if result else None
     return TaskDetailResponse(
@@ -149,14 +151,13 @@ async def get_task(task_id: str) -> TaskDetailResponse:
 
 
 @router.post("/tasks/{task_id}/review", response_model=Review)
-async def review_task(task_id: str, body: ReviewRequest) -> Review:
+async def review_task(task_id: str, request: Request, body: ReviewRequest) -> Review:
     """记录一次人工决策（移动端点同意/拒绝 + 可选备注）。
 
     幂等覆盖：再次提交即改判。决策落 state/tasks/{id}/review.json，不影响任务执行。
     任务不存在 -> 404。
     """
-    if not STORE.exists(task_id):
-        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    require_task(task_id, request)
     # 预筛防覆盖闸(P4):成稿 completed 后到预筛判定前,任务已在收件箱可见;
     # 用户抢先验收时,预筛的 wolong review 绝不能覆盖人工标注(一手标签会丢)
     if body.reviewer == "wolong":
@@ -191,14 +192,12 @@ async def review_task(task_id: str, body: ReviewRequest) -> Review:
 
 
 @router.post("/tasks/{task_id}/cancel")
-async def cancel_task(task_id: str) -> dict:
+async def cancel_task(task_id: str, request: Request) -> dict:
     """取消未开始/进行中的任务 -> cancelled(App 归入已归档,可恢复重新入队)。
 
     工作线程无法强杀:运行中的任务标记取消后后台跑完,结果作废、状态保持 cancelled。
     """
-    if not STORE.exists(task_id):
-        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
-    meta = STORE.get_meta(task_id)
+    meta = require_task(task_id, request)
     if meta.status not in ("pending", "running"):
         raise HTTPException(status_code=409, detail=f"cannot cancel a {meta.status} task")
     try:
@@ -218,11 +217,9 @@ async def cancel_task(task_id: str) -> dict:
 
 
 @router.post("/tasks/{task_id}/restore")
-async def restore_task(task_id: str) -> dict:
+async def restore_task(task_id: str, request: Request) -> dict:
     """已取消任务恢复并重新入队(沿用原 task_id 与参数,事件流续写)。"""
-    if not STORE.exists(task_id):
-        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
-    meta = STORE.get_meta(task_id)
+    meta = require_task(task_id, request)
     if meta.status != "cancelled":
         raise HTTPException(status_code=409, detail=f"cannot restore a {meta.status} task")
     # 卧龙段禁用恢复(§4.1):恢复的段会与队列里的段并发读改写同一个 round 文件
@@ -248,13 +245,12 @@ async def restore_task(task_id: str) -> dict:
 
 
 @router.delete("/tasks/{task_id}/review")
-async def revoke_review(task_id: str) -> dict:
+async def revoke_review(task_id: str, request: Request) -> dict:
     """撤销人工决策:已归档拉回「待验收」(删 review.json)。
 
     幂等:本来就没有决策也返回 ok(removed=false)。任务不存在 -> 404。
     """
-    if not STORE.exists(task_id):
-        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    require_task(task_id, request)
     removed = STORE.delete_review(task_id)
     # 案卷不删,标 revoked(被撤回的判断不能留在训练集里冒充有效标注)。
     # 自愈式:即使本次 removed=False,只要案卷还在就补标——覆盖上一次打标失败
@@ -273,10 +269,9 @@ _TAIL_POLL_INTERVAL = 0.5
 
 
 @router.get("/tasks/{task_id}/events")
-async def stream_events(task_id: str) -> EventSourceResponse:
+async def stream_events(task_id: str, request: Request) -> EventSourceResponse:
     """SSE 推送任务事件：先回放已有事件，再 tail 新增直到终态。"""
-    if not STORE.exists(task_id):
-        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    require_task(task_id, request)
     events_path = STORE.events_path(task_id)
 
     async def gen() -> AsyncGenerator[dict, None]:

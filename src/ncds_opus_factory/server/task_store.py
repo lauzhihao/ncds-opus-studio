@@ -92,6 +92,7 @@ class TaskStore:
         parent_task_id: str | None = None,
         round_id: str | None = None,
         intent_key: str | None = None,
+        owner_id: str | None = None,
     ) -> TaskMeta:
         task_id = _new_task_id(cmd)
         task_dir = self.task_dir(task_id)
@@ -108,6 +109,7 @@ class TaskStore:
             parent_task_id=parent_task_id,
             round_id=round_id,
             intent_key=intent_key,
+            owner_id=owner_id,
         )
         self._write_meta(meta)
         return meta
@@ -120,8 +122,12 @@ class TaskStore:
             return None
         return TaskMeta(**json.loads(path.read_text(encoding="utf-8")))
 
-    def list_tasks(self) -> list[TaskMeta]:
-        """列出所有任务实例的 meta，按 created_at 倒序（最新在前）。"""
+    def list_tasks(self, owner_id: str | None = None) -> list[TaskMeta]:
+        """列出任务 meta，按 created_at 倒序。
+
+        ``owner_id`` 给定时只返回该租户（含 owner_id is None 的无主任务，便于 claim）。
+        内部 cron/worker 扫全表时传 owner_id=None。
+        """
         metas: list[TaskMeta] = []
         if not self.base_dir.exists():
             return metas
@@ -135,6 +141,9 @@ class TaskStore:
                 logger.warning("[TaskStore] 跳过不可读 meta: %s", d.name)
                 continue
             if meta is not None:
+                # 严格隔离：只返回自己的任务
+                if owner_id is not None and meta.owner_id != owner_id:
+                    continue
                 # 回填人工决策，供移动端「待验收收件箱」一次拉到，省去逐条查详情。
                 # 只挂在内存对象上，不写回 meta.json（决策真源是 review.json）。
                 review = self.get_review(d.name)
@@ -144,6 +153,30 @@ class TaskStore:
         # created_at 是 ISO 时间串，字典序即时间序，倒排得最新在前
         metas.sort(key=lambda m: m.created_at, reverse=True)
         return metas
+
+    def set_task_owner(self, task_id: str, owner_id: str) -> TaskMeta:
+        meta = self.get_meta(task_id)
+        if meta is None:
+            raise FileNotFoundError(f"task not found: {task_id}")
+        if meta.owner_id is not None and meta.owner_id != owner_id:
+            raise PermissionError(f"task {task_id} owned by {meta.owner_id}")
+        if meta.owner_id != owner_id:
+            meta.owner_id = owner_id
+            self._write_meta(meta)
+        return meta
+
+    def claim_unowned_tasks(self, owner_id: str) -> int:
+        """把所有 owner_id is None 的 task 归给该用户。"""
+        n = 0
+        for meta in self.list_tasks():
+            if meta.owner_id is not None:
+                continue
+            try:
+                self.set_task_owner(meta.task_id, owner_id)
+                n += 1
+            except (FileNotFoundError, PermissionError, OSError) as exc:
+                logger.warning("[TaskStore] claim task %s failed: %s", meta.task_id, exc)
+        return n
 
     def update_status(
         self,

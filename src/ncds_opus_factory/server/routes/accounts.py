@@ -21,7 +21,10 @@ from pydantic import BaseModel
 
 from ncds_opus_factory.common import authors_repo, tikhub_client
 from ncds_opus_factory.server.state import RUNNER, STATE_DIR, STORE
-from ncds_opus_factory.server.subscriptions import load_subscriptions, subscriptions_path
+from ncds_opus_factory.server.subscriptions import (
+    iter_subscription_paths,
+    load_subscriptions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +106,9 @@ def _post_share_url(platform: str, aid: str, author_id: str = "") -> str:
 
 def _should_dispatch_refresh(platform: str, author_id: str) -> bool:
     """过期作者是否值得派 worker 刷新:仅已关注账号,且当前无在途刷新(防堆积)。"""
-    authors = load_subscriptions(subscriptions_path(STATE_DIR)).get("authors", [])
+    authors: list = []
+    for _owner, path in iter_subscription_paths(STATE_DIR):
+        authors.extend(load_subscriptions(path).get("authors", []))
     if not any(
         a.get("enabled", True)
         and str(a.get("platform") or "douyin") == platform

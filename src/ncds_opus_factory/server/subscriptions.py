@@ -58,9 +58,54 @@ def _task_key_from_params(params: dict[str, Any]) -> str:
     return f"{platform}:{author}"
 
 
-def subscriptions_path(state_dir: Path) -> Path:
-    """state_dir 是任务目录(state/tasks)，订阅文件在兄弟目录 state/shenkuo/ 下。"""
+def subscriptions_path(state_dir: Path, owner_id: str | None = None) -> Path:
+    """state_dir 是任务目录(state/tasks)，订阅文件在兄弟目录 state/shenkuo/ 下。
+
+    - owner_id 给定：``state/shenkuo/users/{owner_id}/subscriptions.json``（用户隔离）
+    - owner_id 空：兼容旧路径 ``state/shenkuo/subscriptions.json``（auth 关闭 / 迁移源）
+    """
+    base = state_dir.parent / "shenkuo"
+    if owner_id:
+        return base / "users" / str(owner_id) / "subscriptions.json"
+    return base / "subscriptions.json"
+
+
+def legacy_subscriptions_path(state_dir: Path) -> Path:
     return state_dir.parent / "shenkuo" / "subscriptions.json"
+
+
+def iter_subscription_paths(state_dir: Path) -> list[tuple[str | None, Path]]:
+    """cron 用：枚举 (owner_id, path)。含 legacy 全局文件 + 各用户文件。"""
+    out: list[tuple[str | None, Path]] = []
+    legacy = legacy_subscriptions_path(state_dir)
+    if legacy.is_file():
+        out.append((None, legacy))
+    users_root = state_dir.parent / "shenkuo" / "users"
+    if users_root.is_dir():
+        for d in sorted(users_root.iterdir()):
+            if not d.is_dir():
+                continue
+            p = d / "subscriptions.json"
+            if p.is_file():
+                out.append((d.name, p))
+    if not out:
+        out.append((None, legacy))
+    return out
+
+
+def ensure_user_subscriptions(state_dir: Path, owner_id: str) -> Path:
+    """确保用户订阅文件存在：无则从 legacy 全局文件复制一次（单租户迁移）。"""
+    path = subscriptions_path(state_dir, owner_id)
+    if path.is_file():
+        return path
+    legacy = legacy_subscriptions_path(state_dir)
+    if legacy.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+        logger.info("[subscriptions] 从 legacy 复制订阅到 user=%s", owner_id)
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def load_subscriptions(path: Path) -> dict[str, Any]:
@@ -161,13 +206,21 @@ def save_subscriptions(path: Path, cfg: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path) -> int:
+async def run_subscription_tick(
+    runner: TaskRunner,
+    store: TaskStore,
+    path: Path,
+    *,
+    owner_id: str | None = None,
+) -> int:
     """跑一轮订阅派发，返回本轮提交的任务数。独立出来便于测试与手动触发。
 
     三道闸防废任务:
     - 同作者已有在途刷新 -> 跳过(防堆积);
     - 同作者上次刷新距今不足一个周期 -> 跳过(重启即跑会烧配额);
     - cron 配额桶耗尽 -> 整轮停止(别制造注定 failed 的任务行去打扰 Leader)。
+
+    ``owner_id`` 写入新建 cron 任务的 meta，便于按用户隔离收件箱。
     """
     cfg = load_subscriptions(path)
     authors = [a for a in cfg["authors"] if a["enabled"] and _author_task_key(a)]
@@ -216,6 +269,7 @@ async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path
                 "shenkuo",
                 {"author": author_key, "platform": platform, "refresh_only": True},
                 source="cron",
+                owner_id=owner_id,
             )
             submitted += 1
             logger.info("[subscriptions] 刷新派发: %s -> %s", task_key[:32], task_id)
@@ -225,24 +279,31 @@ async def run_subscription_tick(runner: TaskRunner, store: TaskStore, path: Path
 
 
 async def subscription_loop(runner: TaskRunner, store: TaskStore, path: Path) -> None:
-    """常驻循环：每 interval_hours 一轮。配置热读——改文件即生效，无需重启。"""
-    logger.info("[subscriptions] 订阅传感器启动: %s", path)
+    """常驻循环：每 interval_hours 一轮。配置热读——改文件即生效，无需重启。
+
+    ``path`` 参数保留兼容（旧调用方传入 legacy 路径）；实际每轮枚举 legacy + 各用户订阅。
+    """
+    state_dir = store.base_dir
+    logger.info("[subscriptions] 订阅传感器启动: state_dir=%s legacy=%s", state_dir, path)
     while True:
         try:
             # Redis 探活：down 时静默跳过本 tick，不创建垃圾 failed meta（决策 D）。
             if not await get_default_queue().ping():
                 await asyncio.sleep(_ERROR_RETRY_S)
                 continue
-            n = await run_subscription_tick(runner, store, path)
-            if n:
-                logger.info("[subscriptions] 本轮派发 %d 个刷新任务", n)
-            # tick 间隔取「全局 + 各账号 per-account 频率」的最小值，保证最快的账号也能按时刷新
-            cfg = load_subscriptions(path)
-            candidates = [float(cfg.get("interval_hours", _DEFAULT_INTERVAL_HOURS))]
-            candidates += [
-                a["interval_hours"] for a in cfg["authors"]
-                if a.get("enabled") and _author_task_key(a) and a.get("interval_hours")
-            ]
+            total = 0
+            candidates = [float(_DEFAULT_INTERVAL_HOURS)]
+            for owner_id, sub_path in iter_subscription_paths(state_dir):
+                n = await run_subscription_tick(runner, store, sub_path, owner_id=owner_id)
+                total += n
+                cfg = load_subscriptions(sub_path)
+                candidates.append(float(cfg.get("interval_hours", _DEFAULT_INTERVAL_HOURS)))
+                candidates += [
+                    a["interval_hours"] for a in cfg["authors"]
+                    if a.get("enabled") and _author_task_key(a) and a.get("interval_hours")
+                ]
+            if total:
+                logger.info("[subscriptions] 本轮派发 %d 个刷新任务", total)
             interval = max(0.25, min(candidates))
             await asyncio.sleep(interval * 3600)
         except asyncio.CancelledError:

@@ -29,9 +29,11 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+from ncds_opus_factory.server.access import require_job
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +79,9 @@ def _resolve_safe(job_id: str, relpath: str) -> Path:
 
 
 @router.get("/jobs/{job_id}/files/{relpath:path}")
-async def get_job_file(job_id: str, relpath: str) -> FileResponse:
+async def get_job_file(job_id: str, relpath: str, request: Request) -> FileResponse:
     """流式返回 video-jobs/{job_id}/{relpath} 文件内容。"""
+    require_job(job_id, request)
     target = _resolve_safe(job_id, relpath)
 
     if not target.exists():
@@ -94,11 +97,12 @@ class WriteFileBody(BaseModel):
 
 
 @router.put("/jobs/{job_id}/files/{relpath:path}")
-async def put_job_file(job_id: str, relpath: str, body: WriteFileBody) -> dict:
+async def put_job_file(job_id: str, relpath: str, request: Request, body: WriteFileBody) -> dict:
     """文本写回 video-jobs/{job_id}/{relpath}；用于用户在抽屉里编辑精华稿等场景。
 
     只接 UTF-8 文本。安全检查走 _resolve_safe 防 path-traversal。
     """
+    require_job(job_id, request)
     target = _resolve_safe(job_id, relpath)
     if target.exists() and not target.is_file():
         raise HTTPException(400, f"not a regular file: {relpath}")

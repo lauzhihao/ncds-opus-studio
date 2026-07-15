@@ -34,9 +34,10 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
+from ncds_opus_factory.server.access import require_job
 from ncds_opus_factory.server.state import PIPELINE_RUNNER
 
 logger = logging.getLogger(__name__)
@@ -66,13 +67,6 @@ def _safe_join(base: Path, relpath: str) -> Path:
     return target
 
 
-def _require_job(job_id: str) -> None:
-    try:
-        PIPELINE_RUNNER.get_job(job_id)
-    except KeyError:
-        raise HTTPException(404, f"job not found: {job_id}")
-
-
 # ──────────────────────────────────────────────────────────────────
 # 静态资源 / HTML 入口
 # ──────────────────────────────────────────────────────────────────
@@ -80,14 +74,14 @@ def _require_job(job_id: str) -> None:
 # GET + HEAD：iframe src 走 GET，但探活/预检逻辑可能用 HEAD 预取资源头，一并支持。
 @router.api_route("/preview/{job_id}", methods=["GET", "HEAD"])
 @router.api_route("/preview/{job_id}/", methods=["GET", "HEAD"])
-async def preview_root(job_id: str) -> FileResponse:
-    _require_job(job_id)
+async def preview_root(job_id: str, request: Request) -> FileResponse:
+    require_job(job_id, request)
     return FileResponse(_TEMPLATE_DIR / _HTML_FILE)
 
 
 @router.api_route("/preview/{job_id}/{full_path:path}", methods=["GET", "HEAD"])
-async def preview_serve(job_id: str, full_path: str) -> Response:
-    _require_job(job_id)
+async def preview_serve(job_id: str, full_path: str, request: Request) -> Response:
+    require_job(job_id, request)
     job_dir = PIPELINE_RUNNER.video_jobs_dir / job_id
 
     # —— episode.json：必须 rw 节点已产出，否则 404（不降级模板自带）

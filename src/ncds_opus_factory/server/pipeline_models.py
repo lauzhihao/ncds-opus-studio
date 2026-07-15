@@ -32,6 +32,8 @@ class JobState:
     node_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
     mock: bool = False
     engine_iid: str | None = None
+    # 多租户：auth 用户 id 字符串；None=无主/auth 关闭时创建
+    owner_id: str | None = None
 
 
 class EventBus:

@@ -187,6 +187,7 @@ class TaskRunner:
         parent_task_id: str | None = None,
         round_id: str | None = None,
         intent_key: str | None = None,
+        owner_id: str | None = None,
     ) -> str:
         if cmd not in self.registry:
             raise KeyError(f"unknown command: {cmd}")
@@ -200,7 +201,7 @@ class TaskRunner:
                     return m.task_id
         meta = self.store.create(
             cmd, params, source=source, parent_task_id=parent_task_id,
-            round_id=round_id, intent_key=intent_key,
+            round_id=round_id, intent_key=intent_key, owner_id=owner_id,
         )
         # 配额判定移到 _run 出队侧（Redis incr_quota 原子判，跨进程不翻倍）。
         # 顺序约束：dedup 扫 store(同步) → store.create(同步) → Redis 登记 → 最后才 lpush。

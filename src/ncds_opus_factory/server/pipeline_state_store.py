@@ -69,9 +69,14 @@ class PipelineStateStoreMixin:
             node_configs=data.get("node_configs", {}),
             mock=data.get("mock", False),
             engine_iid=data.get("engine_iid"),
+            owner_id=data.get("owner_id"),
         )
 
-    def list_jobs(self) -> list[dict[str, Any]]:
+    def list_jobs(self, owner_id: str | None = None) -> list[dict[str, Any]]:
+        """列出 job 摘要。``owner_id`` 给定时只返回该租户（含无主，便于 claim）。
+
+        过滤语义：owner_id=None 表示不过滤；给定时保留 owner 匹配或 resource.owner_id is None。
+        """
         out: list[dict[str, Any]] = []
         if not self.video_jobs_dir.exists():
             return out
@@ -81,6 +86,10 @@ class PipelineStateStoreMixin:
                 continue
             try:
                 data = json.loads(sf.read_text(encoding="utf-8"))
+                job_owner = data.get("owner_id")
+                # 严格隔离：只返回自己的；无主仅在 claim 流程中处理，列表不展示给其他用户
+                if owner_id is not None and job_owner != owner_id:
+                    continue
                 try:
                     state = self.reconcile_runtime_state(self._load(data["job_id"]), emit=True)
                     data = asdict(state)
@@ -123,6 +132,7 @@ class PipelineStateStoreMixin:
                     "running": running_node is not None,
                     "running_node": running_node,
                     "node_status": node_status,
+                    "owner_id": data.get("owner_id"),
                 })
             except Exception as exc:
                 logger.warning("[pipeline] read %s failed: %s", sf, exc)
@@ -137,7 +147,14 @@ class PipelineStateStoreMixin:
         t = (title or "").strip()
         return t == "" or t.startswith("作品 ") or t.startswith("OPUS")
 
-    def create_job(self, pipeline_id: str, title: str, inputs: dict[str, Any]) -> JobState:
+    def create_job(
+        self,
+        pipeline_id: str,
+        title: str,
+        inputs: dict[str, Any],
+        *,
+        owner_id: str | None = None,
+    ) -> JobState:
         pipeline = get_pipeline(pipeline_id)
         job_id = uuid.uuid4().hex[:12]
         now = time.time()
@@ -161,12 +178,46 @@ class PipelineStateStoreMixin:
             updated_at=now,
             inputs=dict(inputs),
             nodes=nodes,
+            owner_id=owner_id,
         )
         self._save(state)
         return state
 
     def get_job(self, job_id: str) -> JobState:
         return self.reconcile_runtime_state(self._load(job_id), emit=True)
+
+    def set_job_owner(self, job_id: str, owner_id: str) -> JobState:
+        """把无主 job claim 给用户（幂等：已有不同 owner 则抛 KeyError 语义由调用方处理）。"""
+        state = self._load(job_id)
+        if state.owner_id is not None and state.owner_id != owner_id:
+            raise PermissionError(f"job {job_id} owned by {state.owner_id}")
+        if state.owner_id != owner_id:
+            state.owner_id = owner_id
+            self._save(state)
+        return self.get_job(job_id)
+
+    def claim_unowned_jobs(self, owner_id: str) -> int:
+        """把所有 owner_id is None 的 job 归给该用户。返回 claim 条数。"""
+        n = 0
+        if not self.video_jobs_dir.exists():
+            return 0
+        for d in self.video_jobs_dir.iterdir():
+            sf = d / "pipeline_state.json"
+            if not sf.is_file():
+                continue
+            try:
+                data = json.loads(sf.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if data.get("owner_id") is not None:
+                continue
+            job_id = data.get("job_id") or d.name
+            try:
+                self.set_job_owner(str(job_id), owner_id)
+                n += 1
+            except (KeyError, PermissionError, OSError) as exc:
+                logger.warning("[pipeline] claim job %s failed: %s", job_id, exc)
+        return n
 
     def get_episode(self, job_id: str) -> dict[str, Any] | None:
         ep = self.video_jobs_dir / job_id / "02_rw" / "episode.json"

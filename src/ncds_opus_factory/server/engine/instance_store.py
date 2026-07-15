@@ -188,6 +188,7 @@ class InstanceStore:
                 continue
             if meta is None:
                 continue
+            # 严格隔离：只返回自己的实例
             if owner_id is not None and meta.owner_id != owner_id:
                 continue
             metas.append(meta)
@@ -203,6 +204,30 @@ class InstanceStore:
         meta.updated_at = _now_iso()
         self._write_model(self.meta_path(iid), meta)
         return meta
+
+    def set_owner(self, iid: str, owner_id: str) -> InstanceMeta:
+        meta = self.get_meta(iid)
+        if meta is None:
+            raise FileNotFoundError(f"instance not found: {iid}")
+        if meta.owner_id is not None and meta.owner_id != owner_id:
+            raise PermissionError(f"instance {iid} owned by {meta.owner_id}")
+        if meta.owner_id != owner_id:
+            meta.owner_id = owner_id
+            meta.updated_at = _now_iso()
+            self._write_model(self.meta_path(iid), meta)
+        return meta
+
+    def claim_unowned(self, owner_id: str) -> int:
+        n = 0
+        for meta in self.list_instances():
+            if meta.owner_id is not None:
+                continue
+            try:
+                self.set_owner(meta.instance_id, owner_id)
+                n += 1
+            except (FileNotFoundError, PermissionError, OSError) as exc:
+                logger.warning("[InstanceStore] claim %s failed: %s", meta.instance_id, exc)
+        return n
 
     def write_step_state(self, iid: str, state: StepState) -> None:
         self._write_model(self.step_state_path(iid, state.step_id), state)

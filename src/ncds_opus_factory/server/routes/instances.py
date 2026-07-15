@@ -41,10 +41,11 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from ncds_opus_factory.server.access import current_owner_id, maybe_claim_legacy, require_instance
 from ncds_opus_factory.server.engine.types import InstanceMeta, InstanceState, StepState
 from ncds_opus_factory.server.state import INSTANCE_RUNNER, INSTANCE_STORE
 
@@ -90,12 +91,16 @@ class StepApproveRequest(BaseModel):
 # ---------------------------------------------------------------------------
 @router.get("/instances", response_model=list[InstanceMeta])
 async def list_instances(
-    owner_id: str | None = None,
+    request: Request,
     status: str | None = None,
     recipe_id: str | None = None,
 ) -> list[InstanceMeta]:
-    """列实例 meta（最新在前）。owner_id 在 store 层过滤，status/recipe_id 在此过滤。"""
+    """列实例 meta（最新在前）。强制按当前登录用户过滤；auth 关则不过滤。"""
+    owner_id = maybe_claim_legacy(request)
     metas = INSTANCE_STORE.list_instances(owner_id=owner_id)
+    # claim 后仍可能有其它用户的无主被本用户 claim 完；过滤严格可见
+    if owner_id is not None:
+        metas = [m for m in metas if m.owner_id == owner_id]
     if status:
         metas = [m for m in metas if m.status == status]
     if recipe_id:
@@ -104,13 +109,21 @@ async def list_instances(
 
 
 @router.post("/instances", response_model=InstanceCreateResponse, status_code=201)
-async def create_instance(body: InstanceCreateRequest, response: Response) -> InstanceCreateResponse:
+async def create_instance(
+    body: InstanceCreateRequest,
+    request: Request,
+    response: Response,
+) -> InstanceCreateResponse:
     """建一条生产实例（按 recipe 初始化各步为 idle），返回 instance_id。"""
+    # 客户端不可伪造 owner：auth 开时强制当前用户
+    owner_id = current_owner_id(request)
+    if owner_id is None:
+        owner_id = body.owner_id  # auth 关时允许演示传入
     try:
         state = INSTANCE_RUNNER.create_instance(
             body.recipe_id,
             body.inputs,
-            owner_id=body.owner_id,
+            owner_id=owner_id,
             source=body.source,
             driver=body.driver,
             round_id=body.round_id,
@@ -124,23 +137,21 @@ async def create_instance(body: InstanceCreateRequest, response: Response) -> In
         raise HTTPException(status_code=400, detail=f"invalid recipe: {exc}")
     iid = state.meta.instance_id
     response.headers["Location"] = f"/instances/{iid}"
-    logger.info("[server] instance created: recipe=%s iid=%s driver=%s",
-                body.recipe_id, iid, body.driver)
+    logger.info("[server] instance created: recipe=%s iid=%s driver=%s owner=%s",
+                body.recipe_id, iid, body.driver, owner_id)
     return InstanceCreateResponse(instance_id=iid, status=state.meta.status)
 
 
 @router.get("/instances/{iid}", response_model=InstanceState)
-async def get_instance(iid: str) -> InstanceState:
+async def get_instance(iid: str, request: Request) -> InstanceState:
     """全量实例状态（meta + 各步 state + 输入）。"""
-    state = INSTANCE_STORE.get_state(iid)
-    if state is None:
-        raise HTTPException(status_code=404, detail=f"instance not found: {iid}")
-    return state
+    return require_instance(iid, request)
 
 
 @router.get("/instances/{iid}/runnable")
-async def get_runnable(iid: str) -> dict:
+async def get_runnable(iid: str, request: Request) -> dict:
     """当前可跑步（idle 且 deps 全 done/skipped），拓扑序。driver 据此选下一步。"""
+    require_instance(iid, request)
     try:
         return {"runnable": INSTANCE_RUNNER.get_runnable_steps(iid)}
     except (KeyError, FileNotFoundError):
@@ -152,7 +163,13 @@ async def get_runnable(iid: str) -> dict:
 # 步骤推进（driver 原语）
 # ---------------------------------------------------------------------------
 @router.post("/instances/{iid}/steps/{sid}/run", response_model=StepState)
-async def run_step(iid: str, sid: str, body: StepRunRequest | None = None) -> StepState:
+async def run_step(
+    iid: str,
+    sid: str,
+    request: Request,
+    body: StepRunRequest | None = None,
+) -> StepState:
+    require_instance(iid, request)
     """跑一步（**同步 await**，阻塞到落定）。404=实例/步不存在；409=该步当前不可跑（须先 reset）。
 
     body 全可选（step_inputs/config 都缺省空）；无 body 的 POST 也合法（如直通步），按缺省跑。
@@ -167,7 +184,8 @@ async def run_step(iid: str, sid: str, body: StepRunRequest | None = None) -> St
 
 
 @router.post("/instances/{iid}/steps/{sid}/approve", response_model=StepState)
-async def approve_step(iid: str, sid: str, body: StepApproveRequest) -> StepState:
+async def approve_step(iid: str, sid: str, request: Request, body: StepApproveRequest) -> StepState:
+    require_instance(iid, request)
     """awaiting_review 出口：approved→定稿 / rejected→打回。409=该步未在等审。"""
     try:
         return await INSTANCE_RUNNER.approve_step(
@@ -181,7 +199,8 @@ async def approve_step(iid: str, sid: str, body: StepApproveRequest) -> StepStat
 
 
 @router.post("/instances/{iid}/steps/{sid}/reset")
-async def reset_step(iid: str, sid: str) -> dict:
+async def reset_step(iid: str, sid: str, request: Request) -> dict:
+    require_instance(iid, request)
     """硬重置该步 + 全部传递下游为 idle（改稿后下游失效）。409=步骤运行中不可重置。"""
     try:
         return {"reset": await INSTANCE_RUNNER.reset_step(iid, sid)}
@@ -192,7 +211,8 @@ async def reset_step(iid: str, sid: str) -> dict:
 
 
 @router.post("/instances/{iid}/finalize", response_model=InstanceMeta)
-async def finalize_instance(iid: str) -> InstanceMeta:
+async def finalize_instance(iid: str, request: Request) -> InstanceMeta:
+    require_instance(iid, request)
     """据各步终态结算 meta（failed/completed/pending/running）。"""
     try:
         return await INSTANCE_RUNNER.finalize_instance(iid)
@@ -210,7 +230,8 @@ def _parse_levels(level: str | None) -> set[str]:
 
 
 @router.get("/instances/{iid}/events")
-async def stream_events(iid: str, level: str | None = None) -> EventSourceResponse:
+async def stream_events(iid: str, request: Request, level: str | None = None) -> EventSourceResponse:
+    require_instance(iid, request)
     """SSE：先推一条 snapshot（全量 state），再按 level 订阅内存总线增量推送。
 
     ``level=meta,step,detail`` 可指定关心的层级；b1 总线只承载 meta/step，detail 暂不流（见 docstring）。

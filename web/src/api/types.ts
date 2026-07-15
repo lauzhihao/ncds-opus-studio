@@ -3,6 +3,7 @@
 
 export interface AuthUser {
   id: number;
+  provider?: string;
   email: string;
   name: string | null;
   pictureUrl: string | null;
@@ -13,6 +14,7 @@ export interface AuthMeResponse {
   authRequired: boolean;
   authenticated: boolean;
   user: AuthUser | null;
+  providers?: { google?: boolean; apple?: boolean };
 }
 
 export interface TaskCreateResponse {

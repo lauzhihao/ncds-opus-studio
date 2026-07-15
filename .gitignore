@@ -44,3 +44,6 @@ web/vite.config.js
 uv.lock
 /outputs/
 /tmp/
+
+# OAuth / Apple keys (never commit)
+secrets/
