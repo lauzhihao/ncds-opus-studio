@@ -8,10 +8,11 @@ import {
   type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 
 const TYPE_LINES = [
-  '还在玩￥36/15秒的抽卡短视频？',
+  '还在玩「￥36/15秒」的「抽卡」短视频？',
   '快来跟我一起',
   '成大事',
 ] as const;
@@ -120,7 +121,7 @@ function TypewriterBlock({ lines, onReady }: { lines: string[]; onReady: () => v
   }, [done]);
 
   return (
-    <div className="landing-type" lang="ja">
+    <div className={`landing-type${done ? ' is-done' : ''}`}>
       {lines.map((line, i) => {
         if (i > lineIdx) return null;
         const text = i < lineIdx ? line : line.slice(0, charIdx);
@@ -130,10 +131,22 @@ function TypewriterBlock({ lines, onReady }: { lines: string[]; onReady: () => v
           <p
             key={line}
             className={`landing-type-line${isHero ? ' is-hero' : ''}${isActive ? ' is-active' : ''}`}
-            lang="ja"
           >
-            {text}
-            {isActive && <span className="landing-caret" aria-hidden />}
+            {isHero ? (
+              <span className="landing-hero-mark">
+                {[...text].map((ch, ci) => (
+                  <span key={`${ch}-${ci}`} className="landing-hero-char">
+                    {ch}
+                  </span>
+                ))}
+                {isActive && <span className="landing-caret landing-caret-hero" aria-hidden />}
+              </span>
+            ) : (
+              <>
+                {formatCornerQuotes(text)}
+                {isActive && <span className="landing-caret" aria-hidden />}
+              </>
+            )}
           </p>
         );
       })}
@@ -281,6 +294,38 @@ function JoinModal({
       </div>
     </div>
   );
+}
+
+/** 直角引号「」内文字高亮（含未闭合的打字中片段） */
+function formatCornerQuotes(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let i = 0;
+  let k = 0;
+  while (i < text.length) {
+    if (text[i] === '「') {
+      const end = text.indexOf('」', i + 1);
+      if (end === -1) {
+        nodes.push(
+          <span key={k++} className="landing-quote">
+            {text.slice(i)}
+          </span>,
+        );
+        break;
+      }
+      nodes.push(
+        <span key={k++} className="landing-quote">
+          {text.slice(i, end + 1)}
+        </span>,
+      );
+      i = end + 1;
+      continue;
+    }
+    const next = text.indexOf('「', i);
+    const chunk = next === -1 ? text.slice(i) : text.slice(i, next);
+    nodes.push(<span key={k++}>{chunk}</span>);
+    i = next === -1 ? text.length : next;
+  }
+  return nodes;
 }
 
 function sleep(ms: number) {

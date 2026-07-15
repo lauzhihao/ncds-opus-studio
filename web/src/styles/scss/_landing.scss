@@ -1,22 +1,32 @@
-/* 未登录落地页：与作品列表同背景（--bg-canvas）
-   打字机日文字形：本地冬青/游ゴシック优先，Noto Sans JP 网络字体兜底
-  （否则浏览器常落到苹方，看起来“就是普通中文黑体”）。 */
-
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
+/* 未登录落地页：与作品列表同背景（--bg-canvas）。
+   字体栈参考 Anthropic 站点（Anthropic Sans/Serif 本机有则用，否则走其后 CJK/系统回退）。 */
 
 .landing {
-  --font-type:
-    'Hiragino Sans',
-    'Hiragino Kaku Gothic ProN',
-    'Hiragino Kaku Gothic Pro',
-    'Yu Gothic UI',
-    'Yu Gothic',
-    'YuGothic',
-    'Noto Sans JP',
-    'PingFang SC',
-    'Microsoft YaHei',
-    system-ui,
+  --font-anthropic-sans: "Anthropic Sans", system-ui, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
+  --font-anthropic-serif: "Anthropic Serif", "Anthropic Serif Fallback Georgia",
+    "Anthropic Serif Fallback Times", "Anthropic Serif Fallback DejaVu",
+    "Anthropic Serif Fallback Noto", Georgia, "Arial Hebrew", "Noto Sans Hebrew",
+    "Times New Roman", Times, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+    "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", "Hiragino Sans", "Yu Gothic",
+    Meiryo, "Noto Sans CJK JP", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR",
+    serif;
+  --font-anthropic-mono: "Anthropic Mono", ui-monospace, monospace;
+
+  /* 引导句：清爽无衬线；主标「成大事」：宋体/明朝刊头感 */
+  --font-lead: var(--font-anthropic-sans);
+  --font-hero:
+    'Songti SC',
+    'STSong',
+    'Source Han Serif SC',
+    'Noto Serif CJK SC',
+    'Hiragino Mincho ProN',
+    'YuMincho',
+    'Yu Mincho',
+    'MS PMincho',
+    Georgia,
+    'Times New Roman',
+    serif;
 
   min-height: 100vh;
   width: 100%;
@@ -57,9 +67,8 @@
 }
 
 .landing-title {
-  /* 左上系统名：恢复原 display 字体 */
-  font-family: var(--font-display);
-  font-style: italic;
+  font-family: var(--font-anthropic-serif);
+  font-style: normal;
   font-weight: 600;
   font-size: clamp(20px, 2.4vw, 26px);
   letter-spacing: -0.02em;
@@ -78,47 +87,125 @@
 }
 
 .landing-type {
-  max-width: 720px;
-  min-height: 9.5em;
-  /* lang=ja 让 CJK 优先走日文区域字形，避免被苹方/雅黑截胡 */
-  font-family: var(--font-type);
-  font-language-override: 'JAN';
+  max-width: 36rem;
+  min-height: 11em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
+/* 前两行：引导句 —— 字少，略放大仍不抢「成大事」 */
 .landing-type-line {
-  margin: 0 0 14px;
-  font-family: inherit;
-  font-size: clamp(20px, 3.6vw, 30px);
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--ink-2);
-  letter-spacing: 0.02em;
+  margin: 0 0 12px;
+  font-family: var(--font-lead);
+  font-size: clamp(20px, 3.2vw, 28px);
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
 }
 
+.landing-type-line.is-active:not(.is-hero) {
+  color: var(--ink-2);
+}
+
+/* 直角引号「」+ 强调词：品牌红 */
+.landing-quote {
+  color: var(--accent, #b8362a);
+  font-weight: 600;
+}
+
+/* 「成大事」：刊头级字距 + 宋体/明朝，像一句 slogan 而不是放大正文 */
 .landing-type-line.is-hero {
-  margin-top: 10px;
-  font-family: inherit;
+  margin: 22px 0 0;
+  min-height: 1.35em;
+  font-family: var(--font-hero);
   font-style: normal;
-  font-weight: 700;
-  font-size: clamp(36px, 7vw, 64px);
-  line-height: 1.2;
+  font-weight: 600;
+  font-size: clamp(42px, 8.5vw, 72px);
+  line-height: 1.15;
   color: var(--ink-1);
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
+}
+
+.landing-hero-mark {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.22em;
+  padding: 0 0.12em 0.14em;
+}
+
+.landing-hero-char {
+  display: inline-block;
+  /* 字距用 gap 控制，避免 letter-spacing 末字不平衡 */
+  animation: landing-hero-in 0.45s var(--ease-out) both;
+}
+
+.landing-type.is-done .landing-hero-char {
+  animation: none;
+}
+
+/* 完成后：极细 accent 提线，克制、不花 */
+.landing-hero-mark::after {
+  content: '';
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 0;
+  height: 1.5px;
+  border-radius: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent, #b8362a) 22%,
+    var(--accent, #b8362a) 78%,
+    transparent 100%
+  );
+  opacity: 0;
+  transform: scaleX(0.4);
+  transition:
+    opacity 0.55s var(--ease-out) 0.12s,
+    transform 0.65s var(--ease-out) 0.12s;
+}
+
+.landing-type.is-done .landing-hero-mark::after {
+  opacity: 0.72;
+  transform: scaleX(1);
 }
 
 .landing-caret {
   display: inline-block;
-  width: 2px;
-  height: 0.9em;
-  margin-left: 2px;
-  vertical-align: -0.08em;
-  background: var(--ink-1);
+  width: 1.5px;
+  height: 0.85em;
+  margin-left: 3px;
+  vertical-align: -0.06em;
+  background: var(--ink-2);
   animation: landing-blink 0.9s step-end infinite;
+}
+
+.landing-caret-hero {
+  height: 0.72em;
+  margin-left: 0.06em;
+  align-self: center;
+  background: var(--accent, #b8362a);
+  opacity: 0.85;
 }
 
 @keyframes landing-blink {
   50% {
     opacity: 0;
+  }
+}
+
+@keyframes landing-hero-in {
+  from {
+    opacity: 0.35;
+    transform: translateY(0.12em);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
@@ -202,7 +289,7 @@
   color: #c8f0c8;
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 18px 48px -20px rgba(0, 0, 0, 0.55);
-  font-family: var(--font-mono);
+  font-family: var(--font-anthropic-mono), var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   cursor: text;
@@ -345,8 +432,8 @@
 
 .landing-modal-title {
   margin: 0;
-  font-family: var(--font-display);
-  font-style: italic;
+  font-family: var(--font-anthropic-serif);
+  font-style: normal;
   font-weight: 650;
   font-size: 28px;
   letter-spacing: 0.04em;
