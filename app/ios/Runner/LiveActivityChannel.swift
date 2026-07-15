@@ -66,7 +66,7 @@ enum LiveActivityChannel {
           // pushType: .token —— 拿 APNs push token,让中继(持 .p8)能在后台直接推状态,
           // App 关掉灵动岛也实时。对应原生 ContentView.start。
           activity = try Activity.request(
-            attributes: ClaudeAttributes(name: "Claude Code"),
+            attributes: ClaudeAttributes(name: "Agent"),
             content: ActivityContent(state: cs, staleDate: nil),
             pushType: .token)
         }

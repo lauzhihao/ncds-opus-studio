@@ -1,6 +1,6 @@
 // 沈括采集结果面板 —— 对齐 app ShenkuoCollectPanel（shenkuo_collect_panel.dart）：
-// 封面+标题+话题+播放数据 / 工序状态点 / 提取文案（可展开）/ 声音素材（原声·人声·伴奏，
-// 内联播放）/ 高赞评论（可折叠）/ 抠图素材（横滑）。不放原视频。
+// 封面+标题+话题+播放数据 / 工序状态点 / 本地下载视频 / 提取文案（可展开）/
+// 声音素材（原声·人声·伴奏，内联播放）/ 高赞评论（可折叠）/ 抠图素材（横滑）。
 //
 // 数据来自 asr 节点 outputs.collected（沈括 collect_one 产出），媒体相对路径走 /artifacts/files/。
 // 采集在进画布时自动触发（JobCanvasPage 进画布即 runNode('asr')，后端有采集缓存），本面板纯展示、无手动按钮；
@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Circle,
   ExternalLink,
+  Film,
   Heart,
   Lightbulb,
   MessageCircle,
@@ -176,6 +177,7 @@ const STAGES: Array<[string, string]> = [
 
 function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: CommentSelection }) {
   const [textOpen, setTextOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
   const [audioOpen, setAudioOpen] = useState(false);
   const [commentsOpen, setCommentsOpen] = useState(false);
 
@@ -191,6 +193,8 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
   }
 
   const cover = fileUrl(entry.cover);
+  // 本地下载成片：collect_one 写入 entry.video（相对路径），经 artifacts 网关可播
+  const videoSrc = fileUrl(entry.video);
   const hashtags = entry.hashtags ?? [];
   const audio = entry.audio ?? {};
   const audioRows = [
@@ -202,8 +206,7 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
   const cutouts = (entry.cutouts ?? []).map(fileUrl).filter(Boolean) as string[];
 
   return (
-    // 一条作品 = 一组独立卡片：作品信息 / 提取文案 / 声音素材 / 高赞评论 / 抠图各占一张卡，
-    // 每张自带边框、独立区域，分块更清晰（不再塞进同一张大卡）。
+    // 一条作品 = 一组独立卡片：作品信息 / 本地下载视频 / 提取文案 / 声音素材 / 高赞评论 / 抠图
     <div className="shenkuo-entry-group" style={{ marginBottom: 'var(--s-4)' }}>
       {/* 卡片：作品信息（封面 + 标题 + 话题 + 播放数据 + 工序状态点） */}
       <article className="shenkuo-entry shenkuo-card" style={cardStyle}>
@@ -244,6 +247,54 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
           {entry.url && <UrlLink url={entry.url} />}
         </div>
       </article>
+
+      {/* 卡片：本地下载视频（自家 /artifacts 地址，可内联播放 / 新开页） */}
+      {videoSrc && (
+        <article className="shenkuo-card" style={cardStyle}>
+          <SectionHead
+            icon={<Film size={13} />}
+            label="本地下载视频"
+            right={
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <a
+                  href={videoSrc}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="dim-mono"
+                  title="在新标签打开本站视频地址"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    textDecoration: 'none',
+                    color: 'var(--ink-3)',
+                    fontSize: 'var(--text-2xs)',
+                  }}
+                >
+                  <ExternalLink size={11} strokeWidth={1.8} />
+                  打开地址
+                </a>
+                <CardToggle open={videoOpen} onToggle={() => setVideoOpen((v) => !v)} />
+              </div>
+            }
+          />
+          {videoOpen && (
+            <video
+              className="shenkuo-local-video"
+              controls
+              preload="metadata"
+              playsInline
+              poster={cover}
+              src={videoSrc}
+            />
+          )}
+          {!videoOpen && (
+            <div className="dim-mono" style={{ fontSize: 'var(--text-2xs)', wordBreak: 'break-all' }}>
+              {videoSrc}
+            </div>
+          )}
+        </article>
+      )}
 
       {/* 卡片：提取文案 */}
       {entry.text && (

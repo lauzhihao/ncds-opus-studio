@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/labels/platform_domain.dart';
 import '../../core/net/endpoint_resolver.dart';
 import '../../core/net/factory_client.dart';
 import '../../core/net/models.dart';
@@ -325,6 +326,7 @@ class _SectionHeader extends StatelessWidget {
 }
 
 /// 作者卡片:点卡进编辑;启用开关直接改本地数组(仍需保存生效);右上删除。
+/// 标题优先展示与 web 同源的名片(nickname),备注/sec_uid 作副文。
 class _AuthorCard extends StatelessWidget {
   const _AuthorCard({
     required this.author,
@@ -342,7 +344,10 @@ class _AuthorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final note = (author.note?.isNotEmpty ?? false) ? author.note! : '(未备注)';
+    final a = author;
+    final subtitle = (a.note?.isNotEmpty ?? false)
+        ? a.note!
+        : ((a.uniqueId?.isNotEmpty ?? false) ? '@${a.uniqueId}' : a.secUid);
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -350,27 +355,38 @@ class _AuthorCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _Avatar(url: a.avatar, label: a.displayName),
+              const SizedBox(width: AppSpacing.m),
               Expanded(
                 child: InkWell(
                   onTap: locked ? null : onTap,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(note, style: AppTypography.titleM, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      Text(a.displayName, style: AppTypography.titleM, maxLines: 2, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: AppSpacing.xs),
                       Text(
-                        author.secUid,
-                        style: AppTypography.monoS.copyWith(color: AppColors.inkFaint),
+                        subtitle,
+                        style: AppTypography.caption.copyWith(color: AppColors.inkMuted),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                      if (a.secUid.isNotEmpty && subtitle != a.secUid) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          a.secUid,
+                          style: AppTypography.monoS.copyWith(color: AppColors.inkFaint),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ],
                   ),
                 ),
               ),
               const SizedBox(width: AppSpacing.s),
               Switch(
-                value: author.isEnabled,
+                value: a.isEnabled,
                 onChanged: locked ? null : onToggle,
                 activeTrackColor: AppColors.orange,
               ),
@@ -380,9 +396,21 @@ class _AuthorCard extends StatelessWidget {
           Row(
             children: [
               TagChip(
-                label: author.isEnabled ? '巡查中' : '已停用',
-                tint: author.isEnabled ? AppColors.statusAdopted : AppColors.inkFaint,
+                label: platformDisplayName(a.platformOrDouyin),
+                tint: AppColors.inkFaint,
               ),
+              const SizedBox(width: 6),
+              TagChip(
+                label: a.isEnabled ? '巡查中' : '已停用',
+                tint: a.isEnabled ? AppColors.statusAdopted : AppColors.inkFaint,
+              ),
+              if (domainDisplayName(a.domain) != null) ...[
+                const SizedBox(width: 6),
+                TagChip(
+                  label: domainDisplayName(a.domain)!,
+                  tint: AppColors.accentCollect,
+                ),
+              ],
               const Spacer(),
               TextButton.icon(
                 onPressed: locked ? null : onDelete,
@@ -395,6 +423,37 @@ class _AuthorCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _Avatar extends StatelessWidget {
+  const _Avatar({this.url, required this.label});
+  final String? url;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final has = url != null && url!.isNotEmpty;
+    final ch = label.isNotEmpty ? label.characters.first : '作';
+    return ClipOval(
+      child: SizedBox(
+        width: 40,
+        height: 40,
+        child: has
+            ? Image.network(
+                url!,
+                fit: BoxFit.cover,
+                errorBuilder: (_, error, stackTrace) => _fallback(ch),
+              )
+            : _fallback(ch),
+      ),
+    );
+  }
+
+  Widget _fallback(String ch) => Container(
+        color: AppColors.accentCollect.withValues(alpha: 0.16),
+        alignment: Alignment.center,
+        child: Text(ch, style: AppTypography.subhead.copyWith(color: AppColors.accentCollect)),
+      );
 }
 
 /// 巡查间隔编辑底卡:十进制小时数,正数校验。
@@ -502,10 +561,22 @@ class _AuthorEditSheetState extends State<_AuthorEditSheet> {
       return;
     }
     final note = _note.text.trim();
+    // 编辑时保留名片/平台/赛道等字段,避免 PUT 整体覆盖时把 web 写入的快照冲掉。
+    final base = widget.author;
     Navigator.of(context).pop(SubscriptionAuthor(
       secUid: uid,
       note: note.isEmpty ? null : note,
       enabled: _enabled,
+      platform: base?.platform,
+      domain: base?.domain,
+      intervalHours: base?.intervalHours,
+      nickname: base?.nickname,
+      avatar: base?.avatar,
+      uniqueId: base?.uniqueId,
+      followerCount: base?.followerCount,
+      likeCount: base?.likeCount,
+      worksCount: base?.worksCount,
+      refreshedAt: base?.refreshedAt,
     ));
   }
 

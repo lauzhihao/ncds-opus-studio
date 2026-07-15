@@ -15,16 +15,22 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../core/clipboard/share_link_parser.dart';
 import '../../core/net/endpoint_resolver.dart';
 import '../../core/net/factory_client.dart';
 import '../../core/net/models.dart';
 import '../../core/net/relay_client.dart';
 import '../../core/native/live_activity_service.dart';
+import '../../design/components/decision_button.dart';
+import '../../design/components/tag_chip.dart';
 import '../../design/components/traffic_bulb.dart';
 import '../../design/components/wave_text.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
+import '../detail/shenkuo_collect_panel.dart' show shenkuoCount;
+import '../detail/shenkuo_home_screen.dart';
 import '../inbox/agent_task_list_screen.dart';
 import '../subscriptions/subscriptions_screen.dart';
 import 'agent_catalog.dart';
@@ -66,6 +72,10 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
   // 中继上报的真实 Claude 状态(主灯/灵动岛用;与工厂 agent 任务态分开)。
   final RelayClient _relay = RelayClient();
   ClaudeStatus? _relayStatus;
+
+  /// 首页「+」剪贴板采集预览(直接读剪贴板,结果卡嵌在首页,不弹手动输入)。
+  _ClipboardCollect? _clipCollect;
+  bool _clipSubmitting = false;
 
   @override
   void initState() {
@@ -192,6 +202,142 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
     return MainState.idle;
   }
 
+  /// 首页右上角「+」:不弹输入框,直接读剪贴板。
+  /// 命中抖音/TK/YouTube 链接 → 解析 → 首页卡片询问是否立即采集。
+  Future<void> _onClipboardAdd() async {
+    if (_clipSubmitting) return;
+    setState(() {
+      _clipCollect = const _ClipboardCollect.loading();
+    });
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim() ?? '';
+      if (text.isEmpty) {
+        if (!mounted) return;
+        setState(() => _clipCollect = null);
+        _toast('剪贴板是空的,先复制一条抖音/TK/YouTube 链接');
+        return;
+      }
+      final link = ShareLinkParser.detectFactorySupported(text);
+      if (link == null) {
+        if (!mounted) return;
+        setState(() => _clipCollect = null);
+        _toast('剪贴板没有支持的链接(抖音 / TikTok / YouTube)');
+        return;
+      }
+      await _resolveClipboardLink(link, sourceText: text);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _clipCollect = _ClipboardCollect.error('读取剪贴板失败:$e');
+      });
+    }
+  }
+
+  Future<void> _resolveClipboardLink(ShareLink link, {required String sourceText}) async {
+    try {
+      final preferWork = ShareLinkParser.looksLikeWork(sourceText);
+      if (preferWork) {
+        try {
+          final work = await _client.resolveWork(link.url);
+          if (!mounted) return;
+          setState(() {
+            _clipCollect = _ClipboardCollect.work(link: link, work: work);
+          });
+          return;
+        } catch (_) {
+          // 作品解析失败再试账号
+        }
+        final account = await _client.resolveAccount(link.url);
+        if (!mounted) return;
+        setState(() {
+          _clipCollect = _ClipboardCollect.account(link: link, account: account);
+        });
+        return;
+      }
+      try {
+        final account = await _client.resolveAccount(link.url);
+        if (!mounted) return;
+        setState(() {
+          _clipCollect = _ClipboardCollect.account(link: link, account: account);
+        });
+        return;
+      } catch (_) {
+        // 主页失败再试作品
+      }
+      final work = await _client.resolveWork(link.url);
+      if (!mounted) return;
+      setState(() {
+        _clipCollect = _ClipboardCollect.work(link: link, work: work);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _clipCollect = _ClipboardCollect.error('解析失败:请确认是抖音/TK/YouTube 链接');
+      });
+    }
+  }
+
+  Future<void> _confirmCollect() async {
+    final pick = _clipCollect;
+    if (pick == null || _clipSubmitting) return;
+    setState(() => _clipSubmitting = true);
+    try {
+      if (pick.work != null) {
+        final w = pick.work!;
+        final url = (w.shareUrl ?? pick.link?.url ?? '').trim();
+        if (url.isEmpty) throw FactoryError('没有可用分享链接');
+        await _client.createTask(
+          cmd: 'shenkuo',
+          params: <String, dynamic>{
+            'aweme': url,
+            'platform': w.platform.isNotEmpty ? w.platform : (pick.link?.backendPlatform ?? 'douyin'),
+          },
+        );
+      } else if (pick.account != null) {
+        final a = pick.account!;
+        await _client.createTask(
+          cmd: 'shenkuo',
+          params: <String, dynamic>{
+            'author': a.secUid,
+            'platform': a.platform.isNotEmpty ? a.platform : (pick.link?.backendPlatform ?? 'douyin'),
+          },
+        );
+      } else {
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _clipCollect = null;
+        _clipSubmitting = false;
+      });
+      _toast('已派给沈存中采集');
+      unawaited(_refreshStatus());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _clipSubmitting = false);
+      _toast('派采集失败:$e');
+    }
+  }
+
+  void _dismissClip() {
+    if (_clipSubmitting) return;
+    setState(() => _clipCollect = null);
+  }
+
+  void _toast(String msg) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(msg, style: AppTypography.body.copyWith(color: AppColors.ivory)),
+        backgroundColor: AppColors.ink.withValues(alpha: 0.92),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(milliseconds: 2600),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -209,6 +355,14 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
             const SizedBox(height: AppSpacing.block), // 英雄区与卡片墙间距 22
             _AgentBoard(
               reviewCounts: _reviewCounts,
+              clipCollect: _clipCollect,
+              clipSubmitting: _clipSubmitting,
+              onOpenSubscriptions: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const SubscriptionsScreen()),
+              ),
+              onClipboardAdd: _onClipboardAdd,
+              onConfirmCollect: _confirmCollect,
+              onDismissClip: _dismissClip,
             ),
           ],
         ),
@@ -217,7 +371,38 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
   }
 }
 
-// MARK: - 英雄区:左上主灯(30pt) + "Claude" + WaveText 状态词
+/// 首页「+」剪贴板采集预览状态。
+class _ClipboardCollect {
+  const _ClipboardCollect._({
+    required this.phase,
+    this.link,
+    this.work,
+    this.account,
+    this.error,
+  });
+
+  const _ClipboardCollect.loading() : this._(phase: _ClipPhase.loading);
+  const _ClipboardCollect.error(String message)
+      : this._(phase: _ClipPhase.error, error: message);
+  const _ClipboardCollect.work({required ShareLink link, required WorkResolveResult work})
+      : this._(phase: _ClipPhase.ready, link: link, work: work);
+  const _ClipboardCollect.account({
+    required ShareLink link,
+    required AccountResolveResult account,
+  }) : this._(phase: _ClipPhase.ready, link: link, account: account);
+
+  final _ClipPhase phase;
+  final ShareLink? link;
+  final WorkResolveResult? work;
+  final AccountResolveResult? account;
+  final String? error;
+
+  bool get isReady => phase == _ClipPhase.ready && (work != null || account != null);
+}
+
+enum _ClipPhase { loading, ready, error }
+
+// MARK: - 英雄区:左上主灯(30pt) + "Agent" + WaveText 状态词
 
 class _HeroArea extends StatelessWidget {
   const _HeroArea({required this.state, required this.booting});
@@ -245,8 +430,8 @@ class _HeroArea extends StatelessWidget {
             diameter: 30,
           ),
           const SizedBox(width: AppSpacing.m), // HStack spacing 12
-          // "Claude" + 状态词,spacing 6
-          Text('Claude', style: heroStyle.copyWith(color: AppColors.ink)),
+          // "Agent" + 状态词,spacing 6
+          Text('Agent', style: heroStyle.copyWith(color: AppColors.ink)),
           const SizedBox(width: AppSpacing.s),
           if (booting)
             Text('Connecting', style: heroStyle.copyWith(color: AppColors.ink.withValues(alpha: 0.45)))
@@ -319,16 +504,28 @@ class _HeroArea extends StatelessWidget {
 class _AgentBoard extends StatelessWidget {
   const _AgentBoard({
     required this.reviewCounts,
+    required this.onOpenSubscriptions,
+    required this.onClipboardAdd,
+    required this.onConfirmCollect,
+    required this.onDismissClip,
+    this.clipCollect,
+    this.clipSubmitting = false,
   });
 
   final Map<String, int> reviewCounts;
+  final VoidCallback onOpenSubscriptions;
+  final VoidCallback onClipboardAdd;
+  final VoidCallback onConfirmCollect;
+  final VoidCallback onDismissClip;
+  final _ClipboardCollect? clipCollect;
+  final bool clipSubmitting;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 顶部右对齐齿轮:进订阅管理(原生 gear→设置→订阅,这里简化直达)。
+        // 顶部右对齐:齿轮(订阅) + 加号(读剪贴板采集,沈存中入口动作)。
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
           child: Row(
@@ -338,13 +535,27 @@ class _AgentBoard extends StatelessWidget {
                 tooltip: '订阅管理',
                 visualDensity: VisualDensity.compact,
                 icon: Icon(Icons.settings, color: AppColors.ink.withValues(alpha: 0.55)),
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const SubscriptionsScreen()),
-                ),
+                onPressed: onOpenSubscriptions,
+              ),
+              IconButton(
+                tooltip: '从剪贴板采集',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.add, color: AppColors.orange),
+                onPressed: clipSubmitting ? null : onClipboardAdd,
               ),
             ],
           ),
         ),
+        if (clipCollect != null) ...[
+          const SizedBox(height: AppSpacing.s),
+          _ClipboardCollectCard(
+            pick: clipCollect!,
+            submitting: clipSubmitting,
+            onConfirm: onConfirmCollect,
+            onDismiss: onDismissClip,
+          ),
+          const SizedBox(height: AppSpacing.m),
+        ],
         const SizedBox(height: AppSpacing.m), // VStack spacing 12
         for (int i = 0; i < agentCatalog.length; i++) ...[
           if (i > 0) const SizedBox(height: AppSpacing.m),
@@ -358,12 +569,14 @@ class _AgentBoard extends StatelessWidget {
     );
   }
 
-  /// agent 卡点击 → 该 agent 的主题化收件箱(分桶 + 带图标状态芯片 + 专属详情)。
+  /// agent 卡点击 → 该 agent 的主题化收件箱。
+  /// 沈存中走专属页(决策任务 + 对标号资料库,与 web 同源数据);其余 agent 仍是任务分桶收件箱。
   void _openInbox(BuildContext context, AgentInfo agent) {
+    final Widget page = agent.cmd == 'shenkuo'
+        ? ShenkuoHomeScreen(agent: agent)
+        : AgentTaskListScreen(agent: agent);
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => AgentTaskListScreen(agent: agent),
-      ),
+      MaterialPageRoute<void>(builder: (_) => page),
     );
   }
 }
@@ -544,3 +757,243 @@ class _JustifiedName extends StatelessWidget {
 
 // 注:agent 卡原本每张一盏灯(_AgentStatusLight)已移除——6 张卡都跳动太花,
 // 改用橙色待验收数字角标;实时灯态只保留顶部主灯一盏。
+
+// MARK: - 首页剪贴板采集预览卡
+
+class _ClipboardCollectCard extends StatelessWidget {
+  const _ClipboardCollectCard({
+    required this.pick,
+    required this.submitting,
+    required this.onConfirm,
+    required this.onDismiss,
+  });
+
+  final _ClipboardCollect pick;
+  final bool submitting;
+  final VoidCallback onConfirm;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.cardInner),
+      decoration: BoxDecoration(
+        color: AppColors.ivory,
+        borderRadius: const BorderRadius.all(AppRadii.cardR),
+        boxShadow: [
+          BoxShadow(color: AppColors.cardShadow, blurRadius: 6, offset: const Offset(0, 3)),
+        ],
+        border: Border.all(color: AppColors.accentCollect.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.content_paste_search, size: 16, color: AppColors.accentCollect),
+              const SizedBox(width: 6),
+              Text(
+                '剪贴板 · 沈存中',
+                style: AppTypography.subhead.copyWith(
+                  color: AppColors.accentCollect,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              if (!submitting && pick.phase != _ClipPhase.loading)
+                IconButton(
+                  tooltip: '关闭',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  icon: Icon(Icons.close, size: 18, color: AppColors.inkFaint),
+                  onPressed: onDismiss,
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s),
+          if (pick.phase == _ClipPhase.loading)
+            Row(
+              children: [
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: AppSpacing.m),
+                Text('正在解析剪贴板链接…', style: AppTypography.body.copyWith(color: AppColors.inkMuted)),
+              ],
+            )
+          else if (pick.phase == _ClipPhase.error)
+            Text(
+              pick.error ?? '解析失败',
+              style: AppTypography.body.copyWith(color: AppColors.statusRed),
+            )
+          else if (pick.work != null)
+            _workBody(pick.work!, pick.link)
+          else if (pick.account != null)
+            _accountBody(pick.account!, pick.link),
+          if (pick.isReady) ...[
+            const SizedBox(height: AppSpacing.m),
+            Text(
+              pick.work != null ? '是否立即开始采集这条作品？' : '是否立即开始采集该作者？',
+              style: AppTypography.caption.copyWith(color: AppColors.inkMuted),
+            ),
+            const SizedBox(height: AppSpacing.s),
+            Row(
+              children: [
+                Expanded(
+                  child: DecisionButton(
+                    label: '稍后',
+                    filled: false,
+                    tint: AppColors.inkMuted,
+                    onPressed: submitting ? () {} : onDismiss,
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.m),
+                Expanded(
+                  child: DecisionButton(
+                    label: submitting ? '派发中…' : '立即开始采集',
+                    tint: AppColors.accentCollect,
+                    onPressed: submitting ? () {} : onConfirm,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _workBody(WorkResolveResult w, ShareLink? link) {
+    final title = (w.title ?? '').trim();
+    final author = w.author?['nickname'] as String?;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(
+            width: 56,
+            height: 74,
+            child: (w.coverUrl != null && w.coverUrl!.isNotEmpty)
+                ? Image.network(
+                    w.coverUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, error, stackTrace) => _placeholder(),
+                  )
+                : _placeholder(),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.m),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (link != null) TagChip(label: link.platform, tint: AppColors.accentCollect),
+              const SizedBox(height: 4),
+              Text(
+                title.isEmpty ? '作品 ${w.awemeId}' : title,
+                style: AppTypography.titleM,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (author != null && author.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(author, style: AppTypography.caption.copyWith(color: AppColors.inkMuted)),
+              ],
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                children: [
+                  if (w.digg != null) _stat(Icons.favorite, w.digg!, AppColors.statusRed),
+                  if (w.comment != null) _stat(Icons.mode_comment, w.comment!, AppColors.inkMuted),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _accountBody(AccountResolveResult a, ShareLink? link) {
+    final name = (a.nickname != null && a.nickname!.isNotEmpty) ? a.nickname! : '已解析账号';
+    return Row(
+      children: [
+        ClipOval(
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: (a.avatar != null && a.avatar!.isNotEmpty)
+                ? Image.network(
+                    a.avatar!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, error, stackTrace) => _avatarFallback(name),
+                  )
+                : _avatarFallback(name),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.m),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (link != null) ...[
+                    TagChip(label: link.platform, tint: AppColors.accentCollect),
+                    const SizedBox(width: 6),
+                  ],
+                  Expanded(
+                    child: Text(name, style: AppTypography.titleM, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                ],
+              ),
+              if (a.uniqueId != null && a.uniqueId!.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text('@${a.uniqueId}', style: AppTypography.caption.copyWith(color: AppColors.inkMuted)),
+              ],
+              if (a.followerCount != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  '粉丝 ${shenkuoCount(a.followerCount!)}',
+                  style: AppTypography.caption.copyWith(color: AppColors.inkMuted),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _stat(IconData icon, int n, Color color) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: color),
+          const SizedBox(width: 2),
+          Text(
+            shenkuoCount(n),
+            style: AppTypography.caption.copyWith(fontWeight: FontWeight.w600, color: color),
+          ),
+        ],
+      );
+
+  Widget _placeholder() => Container(
+        color: AppColors.ink.withValues(alpha: 0.06),
+        alignment: Alignment.center,
+        child: Icon(Icons.movie_outlined, size: 20, color: AppColors.inkFaint),
+      );
+
+  Widget _avatarFallback(String name) {
+    final ch = name.isNotEmpty ? name.characters.first : '作';
+    return Container(
+      color: AppColors.accentCollect.withValues(alpha: 0.16),
+      alignment: Alignment.center,
+      child: Text(ch, style: AppTypography.titleM.copyWith(color: AppColors.accentCollect)),
+    );
+  }
+}

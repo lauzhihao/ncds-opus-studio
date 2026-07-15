@@ -32,6 +32,6 @@
 		</dict>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>用于在同一局域网内连接你 Mac 上的状态中继(agent)，读取 Claude 当前状态。</string>
+	<string>用于在同一局域网内连接你 Mac 上的状态中继(agent)，读取 Agent 当前状态。</string>
 </dict>
 </plist>

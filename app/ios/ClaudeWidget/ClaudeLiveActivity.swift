@@ -156,12 +156,12 @@ struct LockScreenView: View {
     }
 }
 
-// 状态文案:Claude + 状态词(状态词上状态色)。灵动岛展开态 / 锁屏复用。
+// 状态文案:Agent + 状态词(状态词上状态色)。灵动岛展开态 / 锁屏复用。
 struct StatusText: View {
     let state: String
     var body: some View {
         HStack(spacing: 5) {
-            Text("Claude").foregroundStyle(.white)
+            Text("Agent").foregroundStyle(.white)
             Text(stateLabel(state)).foregroundStyle(stateColor(state))
         }
         .lineLimit(1)

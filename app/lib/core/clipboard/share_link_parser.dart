@@ -5,9 +5,11 @@
 class ShareLinkParser {
   ShareLinkParser._();
 
+  /// 展示用全量域名(含快手/B站/小红书等探测)。
   static const Map<String, String> _platforms = <String, String>{
     'douyin.com': '抖音',
     'iesdouyin.com': '抖音',
+    'tiktok.com': 'TikTok',
     'kuaishou.com': '快手',
     'bilibili.com': 'B站',
     'b23.tv': 'B站',
@@ -17,25 +19,74 @@ class ShareLinkParser {
     'youtu.be': 'YouTube',
   };
 
-  static final RegExp _urlRe = RegExp(r'https?://[^\s]+');
+  /// 工厂沈存中当前可采的平台(与后端 shenkuo/works resolve 对齐)。
+  static const Map<String, String> factoryPlatforms = <String, String>{
+    'douyin.com': '抖音',
+    'iesdouyin.com': '抖音',
+    'tiktok.com': 'TikTok',
+    'youtube.com': 'YouTube',
+    'youtu.be': 'YouTube',
+  };
+
+  /// host → 后端 platform key。
+  static const Map<String, String> _backendKeys = <String, String>{
+    'douyin.com': 'douyin',
+    'iesdouyin.com': 'douyin',
+    'tiktok.com': 'tiktok',
+    'youtube.com': 'youtube',
+    'youtu.be': 'youtube',
+  };
+
+  static final RegExp _urlRe = RegExp(r'https?://[^\s]+', caseSensitive: false);
 
   /// 返回首个命中的分享链接;无则 null。
-  static ShareLink? detect(String text) {
+  static ShareLink? detect(String text) => _detect(text, _platforms);
+
+  /// 仅抖音 / TikTok / YouTube(首页「+」采集入口用)。
+  static ShareLink? detectFactorySupported(String text) => _detect(text, factoryPlatforms);
+
+  static ShareLink? _detect(String text, Map<String, String> table) {
     for (final RegExpMatch m in _urlRe.allMatches(text)) {
       final String url = m.group(0)!;
-      final String host = Uri.tryParse(url)?.host ?? '';
-      for (final MapEntry<String, String> e in _platforms.entries) {
-        if (host.contains(e.key)) return ShareLink(platform: e.value, url: url);
+      final String host = (Uri.tryParse(url)?.host ?? '').toLowerCase();
+      for (final MapEntry<String, String> e in table.entries) {
+        if (host.contains(e.key)) {
+          return ShareLink(
+            platform: e.value,
+            url: url,
+            backendPlatform: _backendKeys[e.key] ?? 'douyin',
+          );
+        }
       }
     }
     return null;
   }
+
+  /// 粗判更像单作品还是作者主页(决定 resolve 顺序)。
+  static bool looksLikeWork(String text) {
+    final t = text.toLowerCase();
+    return t.contains('/video/') ||
+        t.contains('aweme') ||
+        t.contains('modal_id') ||
+        t.contains('v.douyin.com') ||
+        t.contains('vm.tiktok.com') ||
+        t.contains('vt.tiktok.com') ||
+        t.contains('youtu.be/') ||
+        t.contains('watch?v=') ||
+        t.contains('youtube.com/shorts');
+  }
 }
 
 class ShareLink {
-  const ShareLink({required this.platform, required this.url});
-  final String platform;
+  const ShareLink({
+    required this.platform,
+    required this.url,
+    this.backendPlatform = 'douyin',
+  });
+
+  final String platform; // 展示名:抖音 / TikTok / YouTube
   final String url;
+  final String backendPlatform; // douyin | tiktok | youtube
 }
 
 /// 剪贴板探测可换接口。

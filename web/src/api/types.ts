@@ -255,6 +255,7 @@ export interface ShenkuoEntry {
   hashtags?: string[];
   stats?: Record<string, number>; // digg/comment/share/collect（抖音不公开播放量）
   cover?: string; // 封面相对路径
+  video?: string; // 本地下载视频相对路径（state/works/.../video.mp4），经 /artifacts/files/ 访问
   duration?: number; // 视频时长（秒），缺失/0 -> 前端不渲染时长徽标
   text?: string; // 提取文案（清洗稿，内嵌）
   top_comments?: ShenkuoComment[]; // 高赞评论（>10 赞，按赞排序）
@@ -367,18 +368,18 @@ export interface AccountResolveResult {
 
 // POST /works/resolve 的结果：从抖音作品分享链接解析出的作品卡（临时任务"智能解析"）。
 export interface WorkResolveResult {
-  platform: string; // 'douyin'
+  platform: string; // 'douyin' | 'tiktok' | 'youtube'
   aweme_id: string;
   share_url: string;
   title: string; // 作品标题（desc）
   hashtags: string[];
-  // 四项互动数据（抖音不公开播放量）
-  digg: number;
-  comment: number;
-  share: number;
-  collect: number;
+  // 互动数据：抖音四项齐全；TK/油管可能缺 share/collect（前端按平台/有无字段渲染）
+  digg?: number;
+  comment?: number;
+  share?: number;
+  collect?: number;
   cover_url: string;
-  // 作者档案：「关注ta」据此加入对标订阅
+  // 作者档案：「关注ta」据此加入对标订阅；油管等可能无 sec_uid
   author: {
     platform: string;
     sec_uid: string;

@@ -912,33 +912,269 @@ class RoundDetail {
 
 // —— 订阅管理:GET/PUT /subscriptions ——
 // PUT 是整体覆盖写:页面应先 GET 拿全量,改完原对象 toJson 回写——别用局部构造的配置覆盖。
+// 字段与 web SubscriptionAuthor / 后端 routes/subscriptions.py 对齐;展示快照由
+// GET 时 authors_repo 水合,PUT 时只瘦引用 + 可选快照 upsert。
 
 /// 一个订阅作者。enabled 后端缺省 true(null 视为 true);note 是人读备注。
+/// 名片字段(nickname/avatar/…)是展示快照,与 web 同源,可缺省。
 class SubscriptionAuthor {
-  const SubscriptionAuthor({required this.secUid, this.note, this.enabled});
+  const SubscriptionAuthor({
+    required this.secUid,
+    this.note,
+    this.enabled,
+    this.platform,
+    this.domain,
+    this.intervalHours,
+    this.nickname,
+    this.avatar,
+    this.uniqueId,
+    this.followerCount,
+    this.likeCount,
+    this.worksCount,
+    this.refreshedAt,
+  });
 
   final String secUid; // sec_uid
   final String? note;
   final bool? enabled;
+  final String? platform; // douyin | tiktok | youtube,默认 douyin
+  final String? domain; // 赛道 key
+  final double? intervalHours; // 每账号覆盖全局巡查间隔
+  final String? nickname;
+  final String? avatar;
+  final String? uniqueId; // unique_id:抖音号 / TK handle
+  final int? followerCount;
+  final int? likeCount;
+  final int? worksCount;
+  final double? refreshedAt; // unix 秒
 
   bool get isEnabled => enabled ?? true;
+  String get platformOrDouyin => (platform == null || platform!.isEmpty) ? 'douyin' : platform!;
+
+  /// 卡片主标题:昵称 > 备注 > @号 > sec_uid 截断。
+  String get displayName {
+    final n = nickname?.trim();
+    if (n != null && n.isNotEmpty) return n;
+    final noteText = note?.trim();
+    if (noteText != null && noteText.isNotEmpty) return noteText;
+    final handle = uniqueId?.trim();
+    if (handle != null && handle.isNotEmpty) return '@$handle';
+    if (secUid.length <= 12) return secUid;
+    return '${secUid.substring(0, 10)}…';
+  }
 
   factory SubscriptionAuthor.fromJson(Map<String, dynamic> j) => SubscriptionAuthor(
         secUid: j['sec_uid'] as String? ?? '',
         note: j['note'] as String?,
         enabled: j['enabled'] as bool?,
+        platform: j['platform'] as String?,
+        domain: j['domain'] as String?,
+        intervalHours: (j['interval_hours'] as num?)?.toDouble(),
+        nickname: j['nickname'] as String?,
+        avatar: j['avatar'] as String?,
+        uniqueId: j['unique_id'] as String?,
+        followerCount: (j['follower_count'] as num?)?.toInt(),
+        likeCount: (j['like_count'] as num?)?.toInt(),
+        worksCount: (j['works_count'] as num?)?.toInt(),
+        refreshedAt: (j['refreshed_at'] as num?)?.toDouble(),
       );
 
+  /// PUT 回写:身份 + 订阅设置必带;展示快照有值才带(后端会 upsert 作者库)。
   Map<String, dynamic> toJson() => <String, dynamic>{
         'sec_uid': secUid,
         if (note != null) 'note': note,
         if (enabled != null) 'enabled': enabled,
+        'platform': platformOrDouyin,
+        if (domain != null && domain!.isNotEmpty) 'domain': domain,
+        if (intervalHours != null) 'interval_hours': intervalHours,
+        if (uniqueId != null && uniqueId!.isNotEmpty) 'unique_id': uniqueId,
+        if (nickname != null) 'nickname': nickname,
+        if (avatar != null) 'avatar': avatar,
+        if (followerCount != null) 'follower_count': followerCount,
+        if (likeCount != null) 'like_count': likeCount,
+        if (worksCount != null) 'works_count': worksCount,
+        if (refreshedAt != null) 'refreshed_at': refreshedAt,
       };
 
-  SubscriptionAuthor copyWith({String? secUid, String? note, bool? enabled}) => SubscriptionAuthor(
+  SubscriptionAuthor copyWith({
+    String? secUid,
+    String? note,
+    bool? enabled,
+    String? platform,
+    String? domain,
+    double? intervalHours,
+    String? nickname,
+    String? avatar,
+    String? uniqueId,
+    int? followerCount,
+    int? likeCount,
+    int? worksCount,
+    double? refreshedAt,
+  }) =>
+      SubscriptionAuthor(
         secUid: secUid ?? this.secUid,
         note: note ?? this.note,
         enabled: enabled ?? this.enabled,
+        platform: platform ?? this.platform,
+        domain: domain ?? this.domain,
+        intervalHours: intervalHours ?? this.intervalHours,
+        nickname: nickname ?? this.nickname,
+        avatar: avatar ?? this.avatar,
+        uniqueId: uniqueId ?? this.uniqueId,
+        followerCount: followerCount ?? this.followerCount,
+        likeCount: likeCount ?? this.likeCount,
+        worksCount: worksCount ?? this.worksCount,
+        refreshedAt: refreshedAt ?? this.refreshedAt,
+      );
+}
+
+// —— 对标账号作品 / 解析(与 web 同源,沈存中资料库视角)——
+
+/// GET /accounts/{sec_uid}/posts 单条作品(benchmark all_posts + collected 标记)。
+class AccountPost {
+  const AccountPost({
+    required this.awemeId,
+    this.desc,
+    this.digg,
+    this.comment,
+    this.share,
+    this.collect,
+    this.create,
+    this.coverUrl,
+    this.duration,
+    this.shareUrl,
+    this.collected = false,
+  });
+
+  final String awemeId;
+  final String? desc;
+  final int? digg;
+  final int? comment;
+  final int? share;
+  final int? collect;
+  final int? create; // 发布时间 unix 秒
+  final String? coverUrl;
+  final int? duration; // 秒;0/null=未知
+  final String? shareUrl;
+  final bool collected; // 是否已深采
+
+  factory AccountPost.fromJson(Map<String, dynamic> j) => AccountPost(
+        awemeId: j['aweme_id'] as String? ?? '',
+        desc: j['desc'] as String?,
+        digg: (j['digg'] as num?)?.toInt(),
+        comment: (j['comment'] as num?)?.toInt(),
+        share: (j['share'] as num?)?.toInt(),
+        collect: (j['collect'] as num?)?.toInt(),
+        create: (j['create'] as num?)?.toInt(),
+        coverUrl: j['cover_url'] as String?,
+        duration: (j['duration'] as num?)?.toInt(),
+        shareUrl: j['share_url'] as String?,
+        collected: j['collected'] as bool? ?? false,
+      );
+}
+
+/// POST /accounts/resolve 账号档案(作者库缓存 + TikHub)。
+class AccountResolveResult {
+  const AccountResolveResult({
+    required this.platform,
+    required this.secUid,
+    this.nickname,
+    this.uniqueId,
+    this.avatar,
+    this.followerCount,
+    this.likeCount,
+    this.worksCount,
+    this.cached,
+    this.stale,
+  });
+
+  final String platform;
+  final String secUid;
+  final String? nickname;
+  final String? uniqueId;
+  final String? avatar;
+  final int? followerCount;
+  final int? likeCount;
+  final int? worksCount;
+  final bool? cached;
+  final bool? stale;
+
+  factory AccountResolveResult.fromJson(Map<String, dynamic> j) => AccountResolveResult(
+        platform: j['platform'] as String? ?? 'douyin',
+        secUid: j['sec_uid'] as String? ?? '',
+        nickname: j['nickname'] as String?,
+        uniqueId: j['unique_id'] as String?,
+        avatar: j['avatar'] as String?,
+        followerCount: (j['follower_count'] as num?)?.toInt(),
+        likeCount: (j['like_count'] as num?)?.toInt(),
+        worksCount: (j['works_count'] as num?)?.toInt(),
+        cached: j['cached'] as bool?,
+        stale: j['stale'] as bool?,
+      );
+
+  /// 解析结果 → 可写入订阅名单的作者行(默认启用)。
+  SubscriptionAuthor toSubscriptionAuthor({String? note, String? domain}) => SubscriptionAuthor(
+        secUid: secUid,
+        note: note,
+        enabled: true,
+        platform: platform,
+        domain: domain,
+        nickname: nickname,
+        avatar: avatar,
+        uniqueId: uniqueId,
+        followerCount: followerCount,
+        likeCount: likeCount,
+        worksCount: worksCount,
+        refreshedAt: DateTime.now().millisecondsSinceEpoch / 1000.0,
+      );
+}
+
+/// POST /works/resolve 单作品卡(作品仓库 manifest.card)。
+class WorkResolveResult {
+  const WorkResolveResult({
+    required this.platform,
+    required this.awemeId,
+    this.shareUrl,
+    this.title,
+    this.hashtags,
+    this.digg,
+    this.comment,
+    this.share,
+    this.collect,
+    this.coverUrl,
+    this.author,
+    this.cached,
+    this.domain,
+  });
+
+  final String platform;
+  final String awemeId;
+  final String? shareUrl;
+  final String? title;
+  final List<String>? hashtags;
+  final int? digg;
+  final int? comment;
+  final int? share;
+  final int? collect;
+  final String? coverUrl;
+  final Map<String, dynamic>? author;
+  final bool? cached;
+  final String? domain;
+
+  factory WorkResolveResult.fromJson(Map<String, dynamic> j) => WorkResolveResult(
+        platform: j['platform'] as String? ?? 'douyin',
+        awemeId: j['aweme_id'] as String? ?? '',
+        shareUrl: j['share_url'] as String?,
+        title: j['title'] as String?,
+        hashtags: (j['hashtags'] as List?)?.map((e) => '$e').toList(),
+        digg: (j['digg'] as num?)?.toInt(),
+        comment: (j['comment'] as num?)?.toInt(),
+        share: (j['share'] as num?)?.toInt(),
+        collect: (j['collect'] as num?)?.toInt(),
+        coverUrl: j['cover_url'] as String?,
+        author: (j['author'] as Map?)?.cast<String, dynamic>(),
+        cached: j['cached'] as bool?,
+        domain: j['domain'] as String?,
       );
 }
 

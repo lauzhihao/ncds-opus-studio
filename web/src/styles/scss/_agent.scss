@@ -1034,8 +1034,8 @@
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
     }
-    /* domains 紧跟 author-row 右侧（order:3 桌面端默认位置） */
-    .resolved-domains { order: 3; }
+    /* domains 紧跟 author-row 右侧；水平间距略大于账号卡，避免赛道 pill 挤在一起 */
+    .resolved-domains { order: 3; gap: var(--s-2) var(--s-3); }
 
     /* 删除按钮：右上角 */
     .resolved-work-del {

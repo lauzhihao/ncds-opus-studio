@@ -247,6 +247,51 @@ class FactoryClient {
     return SubscriptionsTickResponse.fromJson((r.data as Map).cast<String, dynamic>()).submitted ?? 0;
   }
 
+  // —— Accounts / Works(与 web 同源:作者库 + benchmark + 作品仓库)——
+  // 沈存中「对标号」资料库视角读这些;决策验收仍走 /tasks。
+
+  /// GET /subscriptions?domain= 可选赛道过滤(与 web 首页 domain tab 同源)。
+  Future<SubscriptionsConfig> subscriptionsFiltered({String? domain}) async {
+    final qs = (domain != null && domain.isNotEmpty)
+        ? '?domain=${Uri.encodeQueryComponent(domain)}'
+        : '';
+    final r = await _get('/subscriptions$qs');
+    return SubscriptionsConfig.fromJson((r.data as Map).cast<String, dynamic>());
+  }
+
+  /// GET /accounts/{sec_uid}/posts:对标号作品列表(benchmark + collected 标记)。
+  Future<List<AccountPost>> accountPosts(
+    String secUid, {
+    String platform = 'douyin',
+    String? uniqueId,
+  }) async {
+    final q = <String, String>{'platform': platform};
+    if (uniqueId != null && uniqueId.isNotEmpty) q['unique_id'] = uniqueId;
+    final qs = q.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
+    final path = '/accounts/${Uri.encodeComponent(secUid)}/posts?$qs';
+    final r = await _get(path);
+    final list = ((r.data as Map?)?['posts'] as List?) ?? const <dynamic>[];
+    final ok = <AccountPost>[];
+    for (final e in list) {
+      try {
+        ok.add(AccountPost.fromJson((e as Map).cast<String, dynamic>()));
+      } catch (_) {/* 丢弃脏数据 */}
+    }
+    return ok;
+  }
+
+  /// POST /accounts/resolve:主页链接/口令 → 账号档案(作者库缓存)。
+  Future<AccountResolveResult> resolveAccount(String text) async {
+    final r = await _post('/accounts/resolve', body: <String, dynamic>{'text': text});
+    return AccountResolveResult.fromJson((r.data as Map).cast<String, dynamic>());
+  }
+
+  /// POST /works/resolve:作品分享链接 → 作品卡(作品仓库缓存)。
+  Future<WorkResolveResult> resolveWork(String text) async {
+    final r = await _post('/works/resolve', body: <String, dynamic>{'text': text});
+    return WorkResolveResult.fromJson((r.data as Map).cast<String, dynamic>());
+  }
+
   // —— SSE 进度流 ——
   // 按行读 text/event-stream,取 data: 行解析 TaskEvent;收到 [DONE] 结束。对应 Swift events()。
 

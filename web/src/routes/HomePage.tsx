@@ -840,6 +840,12 @@ function AddTempTaskModal({
             );
           }
           const w = s.work!;
+          // 抖音/TK 才有稳定的分享/收藏口径；油管等平台缺字段时不要渲染成 "undefined"
+          const showShareCollect = w.platform === 'douyin' || w.platform === 'tiktok';
+          const authorName = (w.author?.nickname || '').trim();
+          const authorSecUid = (w.author?.sec_uid || '').trim();
+          // 无作者身份时整行不渲染（避免「未知作者 + 禁用关注」）；有昵称无 sec_uid 只显示名字
+          const hasAuthor = Boolean(authorSecUid || authorName);
           return (
             <div key={s.id} className="resolved-work">
               {w.cover_url ? (
@@ -863,36 +869,44 @@ function AddTempTaskModal({
                   </div>
                 )}
                 <div className="resolved-work-bottom">
-                  <div className="resolved-work-author-row">
-                    <div className="resolved-work-author">
-                      {w.author.avatar && (
-                        <img
-                          className="rwa-avatar"
-                          src={w.author.avatar}
-                          alt=""
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                        />
-                      )}
-                      <span className="rwa-name">{w.author.nickname || '未知作者'}</span>
+                  {hasAuthor && (
+                    <div className="resolved-work-author-row">
+                      <div className="resolved-work-author">
+                        {w.author.avatar && (
+                          <img
+                            className="rwa-avatar"
+                            src={w.author.avatar}
+                            alt=""
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        )}
+                        <span className="rwa-name">{authorName || '未知作者'}</span>
+                      </div>
+                      {authorSecUid ? (
+                        <button
+                          className="btn sm ghost"
+                          disabled={s.followed}
+                          title="把作者加入对标账号（提交作品时执行）"
+                          onClick={() => markFollow(s)}
+                        >
+                          {s.followed ? (
+                            <><Check size={13} strokeWidth={2} /> 已关注</>
+                          ) : (
+                            <><UserPlus size={13} strokeWidth={1.8} /> 关注ta</>
+                          )}
+                        </button>
+                      ) : null}
                     </div>
-                    <button
-                      className="btn sm ghost"
-                      disabled={s.followed || !w.author.sec_uid}
-                      title={w.author.sec_uid ? '把作者加入对标账号（提交作品时执行）' : '该作品无作者信息'}
-                      onClick={() => markFollow(s)}
-                    >
-                      {s.followed ? (
-                        <><Check size={13} strokeWidth={2} /> 已关注</>
-                      ) : (
-                        <><UserPlus size={13} strokeWidth={1.8} /> 关注ta</>
-                      )}
-                    </button>
-                  </div>
+                  )}
                   <div className="resolved-work-stats">
-                    <span><b>{formatCount(w.digg)}</b><i>点赞</i></span>
-                    <span><b>{formatCount(w.comment)}</b><i>评论</i></span>
-                    <span><b>{formatCount(w.share)}</b><i>分享</i></span>
-                    <span><b>{formatCount(w.collect)}</b><i>收藏</i></span>
+                    {w.digg != null && <span><b>{formatCount(w.digg)}</b><i>点赞</i></span>}
+                    {w.comment != null && <span><b>{formatCount(w.comment)}</b><i>评论</i></span>}
+                    {showShareCollect && w.share != null && (
+                      <span><b>{formatCount(w.share)}</b><i>分享</i></span>
+                    )}
+                    {showShareCollect && w.collect != null && (
+                      <span><b>{formatCount(w.collect)}</b><i>收藏</i></span>
+                    )}
                   </div>
                   {/* 赛道单选：选定后写回 manifest（AC#1 AC#2） */}
                   <div className="resolved-domains" role="radiogroup" aria-label="赛道">

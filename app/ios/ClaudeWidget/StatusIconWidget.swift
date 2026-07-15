@@ -79,8 +79,8 @@ struct StatusIconWidget: Widget {
         StaticConfiguration(kind: "ClaudeStatusIcon", provider: StatusProvider()) { entry in
             StatusIconView(state: entry.state)
         }
-        .configurationDisplayName("SClaude")
-        .description("SClaude traffic light on your Home Screen; the bottom-right dot shows the current state (updates are throttled by iOS, so it may lag a few minutes).")
+        .configurationDisplayName("Agent")
+        .description("Agent traffic light on your Home Screen; the bottom-right dot shows the current state (updates are throttled by iOS, so it may lag a few minutes).")
         .supportedFamilies([.systemSmall])
     }
 }
