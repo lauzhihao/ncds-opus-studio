@@ -33,6 +33,8 @@ dependencies = [
     # Google / Apple OAuth（web /studio + app mobile id_token）
     "google-auth>=2.35.0",
     "PyJWT[crypto]>=2.8",
+    # Apple form_post callback 需要 FastAPI Form
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
