@@ -53,13 +53,13 @@ export function LandingPage({
           {providers.google && (
             <button type="button" className="landing-btn landing-btn-google" onClick={onGoogle}>
               <GoogleLogo />
-              <span>Google</span>
+              <span>Continue with Google</span>
             </button>
           )}
           {providers.apple && (
             <button type="button" className="landing-btn landing-btn-apple" onClick={onApple}>
               <AppleLogo />
-              <span>Apple</span>
+              <span>Continue with Apple</span>
             </button>
           )}
         </div>
@@ -268,13 +268,13 @@ function JoinModal({
           {providers.google && (
             <button type="button" className="landing-btn landing-btn-google" onClick={onGoogle}>
               <GoogleLogo />
-              <span>Google</span>
+              <span>Continue with Google</span>
             </button>
           )}
           {providers.apple && (
             <button type="button" className="landing-btn landing-btn-apple" onClick={onApple}>
               <AppleLogo />
-              <span>Apple</span>
+              <span>Continue with Apple</span>
             </button>
           )}
         </div>

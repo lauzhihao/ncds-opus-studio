@@ -146,9 +146,9 @@
 }
 
 .landing-btn {
-  min-width: 148px;
+  min-width: 200px;
   height: 42px;
-  padding: 0 18px;
+  padding: 0 20px;
   border-radius: 999px;
   font-size: 13px;
   font-weight: 650;
@@ -158,6 +158,7 @@
   justify-content: center;
   gap: 9px;
   transition: transform 0.14s ease, filter 0.14s ease, box-shadow 0.14s ease;
+  white-space: nowrap;
 }
 
 .landing-btn-icon {
