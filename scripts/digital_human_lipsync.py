@@ -172,7 +172,7 @@ def run_command(cmd: list[str], *, check: bool = False) -> CommandResult:
 
 
 def ssh_cmd(host: str, remote_command: str) -> list[str]:
-    return ["ssh", host, "bash", "-lc", remote_command]
+    return ["ssh", host, "bash", "-lc", q(remote_command)]
 
 
 def scp_from_remote_cmd(host: str, remote_path: str, local_path: Path) -> list[str]:
