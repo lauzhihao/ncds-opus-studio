@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../core/auth/session_store.dart';
 import '../../core/net/factory_client.dart';
 import '../../core/net/models.dart';
 import '../../design/components/app_card.dart';
@@ -40,7 +41,11 @@ import '../../design/typography.dart';
 
 /// 产物审看入口:根据 kind 决定内联渲染方式;无可访问地址时降级为纯展示行。
 class ArtifactViewer extends StatelessWidget {
-  const ArtifactViewer({super.key, required this.client, required this.artifact});
+  const ArtifactViewer({
+    super.key,
+    required this.client,
+    required this.artifact,
+  });
 
   final FactoryClient client;
   final NofArtifact artifact;
@@ -98,7 +103,10 @@ class _ArtifactHeader extends StatelessWidget {
           ),
         ),
         const SizedBox(width: AppSpacing.s),
-        if (trailing != null) trailing! else TagChip(label: ks.name, tint: AppColors.accentTopic),
+        if (trailing != null)
+          trailing!
+        else
+          TagChip(label: ks.name, tint: AppColors.accentTopic),
       ],
     );
   }
@@ -167,6 +175,8 @@ class _ImageArtifact extends StatelessWidget {
                     url,
                     fit: BoxFit.cover,
                     width: double.infinity,
+                    // 产物走鉴权路径,原生加载器不会带 Dio interceptor。
+                    headers: SessionStore.instance.authHeaders,
                     loadingBuilder: (context, child, progress) {
                       if (progress == null) return child;
                       return const _MediaHint(text: '加载图片中…');
@@ -214,9 +224,12 @@ class _FullscreenImage extends StatelessWidget {
                   child: Image.network(
                     url,
                     fit: BoxFit.contain,
+                    headers: SessionStore.instance.authHeaders,
                     errorBuilder: (context, error, stack) => Text(
                       '图片加载失败',
-                      style: AppTypography.body.copyWith(color: AppColors.ivory),
+                      style: AppTypography.body.copyWith(
+                        color: AppColors.ivory,
+                      ),
                     ),
                   ),
                 ),
@@ -268,7 +281,10 @@ class _VideoArtifactState extends State<_VideoArtifact> {
         setState(() => _error = '地址无法解析');
         return;
       }
-      final c = VideoPlayerController.networkUrl(uri);
+      final c = VideoPlayerController.networkUrl(
+        uri,
+        httpHeaders: SessionStore.instance.authHeaders,
+      );
       await c.initialize();
       if (!mounted) {
         await c.dispose(); // 初始化期间已离场:别泄漏
@@ -323,7 +339,9 @@ class _VideoArtifactState extends State<_VideoArtifact> {
         ClipRRect(
           borderRadius: BorderRadius.circular(AppRadii.image),
           child: AspectRatio(
-            aspectRatio: c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
+            aspectRatio: c.value.aspectRatio == 0
+                ? 16 / 9
+                : c.value.aspectRatio,
             child: Stack(
               alignment: Alignment.center,
               children: [
@@ -394,7 +412,10 @@ class _AudioArtifactState extends State<_AudioArtifact> {
         setState(() => _error = '地址无法解析');
         return;
       }
-      await _player.setUrl(uri.toString());
+      await _player.setUrl(
+        uri.toString(),
+        headers: SessionStore.instance.authHeaders,
+      );
       if (!mounted) return;
       setState(() => _ready = true);
     } catch (e) {
@@ -432,12 +453,15 @@ class _AudioArtifactState extends State<_AudioArtifact> {
           stream: _player.playerStateStream,
           builder: (context, snap) {
             final state = snap.data;
-            final completed = state?.processingState == ProcessingState.completed;
+            final completed =
+                state?.processingState == ProcessingState.completed;
             final playing = (state?.playing ?? false) && !completed;
             return IconButton(
               iconSize: 40,
               color: AppColors.orange,
-              icon: Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_fill),
+              icon: Icon(
+                playing ? Icons.pause_circle_filled : Icons.play_circle_fill,
+              ),
               onPressed: () async {
                 if (playing) {
                   await _player.pause();
@@ -484,7 +508,9 @@ class _AudioProgress extends StatelessWidget {
                     inactiveTrackColor: AppColors.ink.withValues(alpha: 0.12),
                     thumbColor: AppColors.orange,
                     overlayColor: AppColors.orange.withValues(alpha: 0.18),
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 6,
+                    ),
                   ),
                   child: Slider(
                     min: 0,
@@ -502,10 +528,18 @@ class _AudioProgress extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(_fmt(position),
-                          style: AppTypography.monoXS.copyWith(color: AppColors.inkMuted)),
-                      Text(_fmt(duration),
-                          style: AppTypography.monoXS.copyWith(color: AppColors.inkMuted)),
+                      Text(
+                        _fmt(position),
+                        style: AppTypography.monoXS.copyWith(
+                          color: AppColors.inkMuted,
+                        ),
+                      ),
+                      Text(
+                        _fmt(duration),
+                        style: AppTypography.monoXS.copyWith(
+                          color: AppColors.inkMuted,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -576,8 +610,10 @@ class _TextArtifactRowState extends State<_TextArtifactRow> {
           ],
           if (!hasUrl) ...[
             const SizedBox(height: AppSpacing.xs),
-            Text('暂无可访问地址',
-                style: AppTypography.caption.copyWith(color: AppColors.inkFaint)),
+            Text(
+              '暂无可访问地址',
+              style: AppTypography.caption.copyWith(color: AppColors.inkFaint),
+            ),
           ],
         ],
       ),
@@ -609,8 +645,10 @@ class _PlainArtifactRow extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             )
           else
-            Text('暂无可访问地址',
-                style: AppTypography.caption.copyWith(color: AppColors.inkFaint)),
+            Text(
+              '暂无可访问地址',
+              style: AppTypography.caption.copyWith(color: AppColors.inkFaint),
+            ),
         ],
       ),
     );

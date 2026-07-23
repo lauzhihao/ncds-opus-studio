@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import '../auth/session_store.dart';
 import 'endpoint_resolver.dart';
 import 'models.dart';
 
@@ -21,27 +22,71 @@ bool isCancellation(Object error) =>
 
 /// 工厂后端(ncds-opus-studio)客户端,从 iOS NofClient 移植。
 /// LAN 直连;base URL 经 [EndpointResolver] 取得(默认直连已知别名,无 Bonjour)。
+/// 鉴权:从 [SessionStore] 注入 `Authorization: Bearer <session>`(web 用 cookie)。
 class FactoryClient {
-  FactoryClient({required this.resolver, Dio? dio})
-      // 连接超时:换网络后旧 IP 失活时快速失败,触发重解析自愈,而非无限挂起。
-      // (不影响 SSE——长流用的是 receiveTimeout,见 events()。)
-      : _dio = dio ?? (Dio()..options.connectTimeout = const Duration(seconds: 5));
+  FactoryClient({required this.resolver, Dio? dio, SessionStore? session})
+    // 连接超时:换网络后旧 IP 失活时快速失败,触发重解析自愈,而非无限挂起。
+    // (不影响 SSE——长流用的是 receiveTimeout,见 events()。)
+    : _dio =
+          dio ?? (Dio()..options.connectTimeout = const Duration(seconds: 5)),
+      _session = session ?? SessionStore.instance {
+    // 每个 client 实例都挂一次,避免漏掉业务页自行 new 的路径。
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          final token = _session.token;
+          if (token != null && token.isNotEmpty) {
+            options.headers['Authorization'] = 'Bearer $token';
+          }
+          handler.next(options);
+        },
+      ),
+    );
+  }
 
   final EndpointResolver resolver;
   final Dio _dio;
+  final SessionStore _session;
 
   Future<String> _base() async =>
       (await resolver.resolveBase()).toString().replaceAll(RegExp(r'/+$'), '');
 
   Options get _json => Options(
-        responseType: ResponseType.json,
-        validateStatus: (_) => true, // 自己判 2xx,拿到 body 拼错误信息
-      );
+    responseType: ResponseType.json,
+    validateStatus: (_) => true, // 自己判 2xx,拿到 body 拼错误信息
+  );
 
-  Never _throwHttp(Response<dynamic> r) =>
-      throw FactoryError('HTTP ${r.statusCode}: ${r.data}', statusCode: r.statusCode);
+  Never _throwHttp(Response<dynamic> r) => throw FactoryError(
+    'HTTP ${r.statusCode}: ${r.data}',
+    statusCode: r.statusCode,
+  );
 
   bool _ok(int? code) => code != null && code >= 200 && code < 300;
+
+  // —— Auth(对齐 web /api/auth/*;mobile 走 Bearer 而非 cookie)——
+
+  Future<AuthMeResponse> authMe() async {
+    final r = await _get('/api/auth/me');
+    return AuthMeResponse.fromJson((r.data as Map).cast<String, dynamic>());
+  }
+
+  /// POST /api/auth/mobile:{provider,id_token} → sessionToken + user。
+  Future<MobileLoginResponse> mobileLogin({
+    required String provider,
+    required String idToken,
+  }) async {
+    final r = await _post(
+      '/api/auth/mobile',
+      body: <String, dynamic>{'provider': provider, 'id_token': idToken},
+    );
+    return MobileLoginResponse.fromJson(
+      (r.data as Map).cast<String, dynamic>(),
+    );
+  }
+
+  Future<void> logout() async {
+    await _post('/api/auth/logout');
+  }
 
   Future<Response<dynamic>> _get(String path) async {
     final base = await _base();
@@ -50,7 +95,9 @@ class FactoryClient {
       if (!_ok(r.statusCode)) _throwHttp(r);
       return r;
     } on DioException catch (e) {
-      if (!isCancellation(e)) resolver.invalidate(); // 连不上→作废解析缓存,下次重解析(IP 变了时自愈)
+      if (!isCancellation(e)) {
+        resolver.invalidate(); // 连不上→作废解析缓存,下次重解析(IP 变了时自愈)
+      }
       throw FactoryError('网络错误: ${e.message ?? e.type.name}');
     }
   }
@@ -61,12 +108,16 @@ class FactoryClient {
       final r = await _dio.post<dynamic>(
         '$base$path',
         data: body,
-        options: _json.copyWith(contentType: body != null ? Headers.jsonContentType : null),
+        options: _json.copyWith(
+          contentType: body != null ? Headers.jsonContentType : null,
+        ),
       );
       if (!_ok(r.statusCode)) _throwHttp(r);
       return r;
     } on DioException catch (e) {
-      if (!isCancellation(e)) resolver.invalidate(); // 连不上→作废解析缓存,下次重解析(IP 变了时自愈)
+      if (!isCancellation(e)) {
+        resolver.invalidate(); // 连不上→作废解析缓存,下次重解析(IP 变了时自愈)
+      }
       throw FactoryError('网络错误: ${e.message ?? e.type.name}');
     }
   }
@@ -77,12 +128,16 @@ class FactoryClient {
       final r = await _dio.put<dynamic>(
         '$base$path',
         data: body,
-        options: _json.copyWith(contentType: body != null ? Headers.jsonContentType : null),
+        options: _json.copyWith(
+          contentType: body != null ? Headers.jsonContentType : null,
+        ),
       );
       if (!_ok(r.statusCode)) _throwHttp(r);
       return r;
     } on DioException catch (e) {
-      if (!isCancellation(e)) resolver.invalidate(); // 连不上→作废解析缓存,下次重解析(IP 变了时自愈)
+      if (!isCancellation(e)) {
+        resolver.invalidate(); // 连不上→作废解析缓存,下次重解析(IP 变了时自愈)
+      }
       throw FactoryError('网络错误: ${e.message ?? e.type.name}');
     }
   }
@@ -126,7 +181,9 @@ class FactoryClient {
     for (final e in list) {
       try {
         ok.add(TaskMeta.fromJson((e as Map).cast<String, dynamic>()));
-      } catch (_) {/* 丢弃脏数据 */}
+      } catch (_) {
+        /* 丢弃脏数据 */
+      }
     }
     if (list.isNotEmpty && ok.isEmpty) {
       throw FactoryError('/tasks 共 ${list.length} 条全部解码失败');
@@ -139,9 +196,17 @@ class FactoryClient {
     return TaskDetail.fromJson((r.data as Map).cast<String, dynamic>());
   }
 
-  Future<String> createTask({required String cmd, required Map<String, dynamic> params}) async {
-    final r = await _post('/tasks', body: <String, dynamic>{'cmd': cmd, 'params': params});
-    return TaskCreateResponse.fromJson((r.data as Map).cast<String, dynamic>()).taskId;
+  Future<String> createTask({
+    required String cmd,
+    required Map<String, dynamic> params,
+  }) async {
+    final r = await _post(
+      '/tasks',
+      body: <String, dynamic>{'cmd': cmd, 'params': params},
+    );
+    return TaskCreateResponse.fromJson(
+      (r.data as Map).cast<String, dynamic>(),
+    ).taskId;
   }
 
   Future<void> cancelTask(String id) => _post('/tasks/$id/cancel');
@@ -149,7 +214,12 @@ class FactoryClient {
   Future<void> restoreTask(String id) => _post('/tasks/$id/restore');
 
   /// POST /tasks/{id}/review。note_origin=machine 时标注模板生成,不冒充人工语料。
-  Future<NofReview> review(String id, {required String decision, String? note, String? noteOrigin}) async {
+  Future<NofReview> review(
+    String id, {
+    required String decision,
+    String? note,
+    String? noteOrigin,
+  }) async {
     final body = <String, dynamic>{'decision': decision};
     if (note != null && note.isNotEmpty) body['note'] = note;
     if (noteOrigin != null) body['note_origin'] = noteOrigin;
@@ -161,10 +231,15 @@ class FactoryClient {
   Future<void> revokeReview(String id) async {
     final base = await _base();
     try {
-      final r = await _dio.delete<dynamic>('$base/tasks/$id/review', options: _json);
+      final r = await _dio.delete<dynamic>(
+        '$base/tasks/$id/review',
+        options: _json,
+      );
       if (!_ok(r.statusCode)) _throwHttp(r);
     } on DioException catch (e) {
-      if (!isCancellation(e)) resolver.invalidate(); // 连不上→作废解析缓存,下次重解析(IP 变了时自愈)
+      if (!isCancellation(e)) {
+        resolver.invalidate(); // 连不上→作废解析缓存,下次重解析(IP 变了时自愈)
+      }
       throw FactoryError('网络错误: ${e.message ?? e.type.name}');
     }
   }
@@ -185,7 +260,9 @@ class FactoryClient {
     for (final e in list) {
       try {
         ok.add(NofCommand.fromJson((e as Map).cast<String, dynamic>()));
-      } catch (_) {/* 丢弃脏数据 */}
+      } catch (_) {
+        /* 丢弃脏数据 */
+      }
     }
     return ok;
   }
@@ -207,7 +284,9 @@ class FactoryClient {
     for (final e in list) {
       try {
         ok.add(RoundSummary.fromJson((e as Map).cast<String, dynamic>()));
-      } catch (_) {/* 丢弃脏数据 */}
+      } catch (_) {
+        /* 丢弃脏数据 */
+      }
     }
     if (list.isNotEmpty && ok.isEmpty) {
       throw FactoryError('/rounds 共 ${list.length} 条全部解码失败');
@@ -230,21 +309,28 @@ class FactoryClient {
   /// GET /subscriptions:订阅配置全量。
   Future<SubscriptionsConfig> subscriptions() async {
     final r = await _get('/subscriptions');
-    return SubscriptionsConfig.fromJson((r.data as Map).cast<String, dynamic>());
+    return SubscriptionsConfig.fromJson(
+      (r.data as Map).cast<String, dynamic>(),
+    );
   }
 
   /// PUT /subscriptions:整体覆盖写。务必传「GET 拿回后就地修改」的全量配置——
   /// authors 为 null/缺省会被后端当成空表,把订阅清光。返回回写后的全量配置。
   Future<SubscriptionsConfig> putSubscriptions(SubscriptionsConfig cfg) async {
     final r = await _put('/subscriptions', body: cfg.toJson());
-    return SubscriptionsConfig.fromJson((r.data as Map).cast<String, dynamic>());
+    return SubscriptionsConfig.fromJson(
+      (r.data as Map).cast<String, dynamic>(),
+    );
   }
 
   /// POST /subscriptions/tick:手动触发一轮派发(调试/演示)。返回实际派发任务数。
   Future<int> tickSubscriptions() async {
     final r = await _post('/subscriptions/tick');
     if (r.data is! Map) return 0;
-    return SubscriptionsTickResponse.fromJson((r.data as Map).cast<String, dynamic>()).submitted ?? 0;
+    return SubscriptionsTickResponse.fromJson(
+          (r.data as Map).cast<String, dynamic>(),
+        ).submitted ??
+        0;
   }
 
   // —— Accounts / Works(与 web 同源:作者库 + benchmark + 作品仓库)——
@@ -256,7 +342,9 @@ class FactoryClient {
         ? '?domain=${Uri.encodeQueryComponent(domain)}'
         : '';
     final r = await _get('/subscriptions$qs');
-    return SubscriptionsConfig.fromJson((r.data as Map).cast<String, dynamic>());
+    return SubscriptionsConfig.fromJson(
+      (r.data as Map).cast<String, dynamic>(),
+    );
   }
 
   /// GET /accounts/{sec_uid}/posts:对标号作品列表(benchmark + collected 标记)。
@@ -267,7 +355,9 @@ class FactoryClient {
   }) async {
     final q = <String, String>{'platform': platform};
     if (uniqueId != null && uniqueId.isNotEmpty) q['unique_id'] = uniqueId;
-    final qs = q.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
+    final qs = q.entries
+        .map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
     final path = '/accounts/${Uri.encodeComponent(secUid)}/posts?$qs';
     final r = await _get(path);
     final list = ((r.data as Map?)?['posts'] as List?) ?? const <dynamic>[];
@@ -275,20 +365,30 @@ class FactoryClient {
     for (final e in list) {
       try {
         ok.add(AccountPost.fromJson((e as Map).cast<String, dynamic>()));
-      } catch (_) {/* 丢弃脏数据 */}
+      } catch (_) {
+        /* 丢弃脏数据 */
+      }
     }
     return ok;
   }
 
   /// POST /accounts/resolve:主页链接/口令 → 账号档案(作者库缓存)。
   Future<AccountResolveResult> resolveAccount(String text) async {
-    final r = await _post('/accounts/resolve', body: <String, dynamic>{'text': text});
-    return AccountResolveResult.fromJson((r.data as Map).cast<String, dynamic>());
+    final r = await _post(
+      '/accounts/resolve',
+      body: <String, dynamic>{'text': text},
+    );
+    return AccountResolveResult.fromJson(
+      (r.data as Map).cast<String, dynamic>(),
+    );
   }
 
   /// POST /works/resolve:作品分享链接 → 作品卡(作品仓库缓存)。
   Future<WorkResolveResult> resolveWork(String text) async {
-    final r = await _post('/works/resolve', body: <String, dynamic>{'text': text});
+    final r = await _post(
+      '/works/resolve',
+      body: <String, dynamic>{'text': text},
+    );
     return WorkResolveResult.fromJson((r.data as Map).cast<String, dynamic>());
   }
 
@@ -301,7 +401,11 @@ class FactoryClient {
       '$base/tasks/$id/events',
       options: Options(
         responseType: ResponseType.stream,
-        headers: const <String, dynamic>{'Accept': 'text/event-stream'},
+        headers: <String, dynamic>{
+          'Accept': 'text/event-stream',
+          // interceptor 也会补 Bearer;显式再写一次防个别平台丢自定义 header。
+          ..._session.authHeaders,
+        },
         receiveTimeout: const Duration(hours: 1), // 长任务进度间隔可能 >60s
       ),
     );
@@ -315,7 +419,9 @@ class FactoryClient {
       if (payload == '[DONE]') break;
       try {
         yield TaskEvent.fromJson(jsonDecode(payload) as Map<String, dynamic>);
-      } catch (_) {/* 跳过坏行 */}
+      } catch (_) {
+        /* 跳过坏行 */
+      }
     }
   }
 }

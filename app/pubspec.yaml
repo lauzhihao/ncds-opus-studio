@@ -41,7 +41,9 @@ dependencies:
   speech_to_text: ^7.0.0 # 打回意见语音口述(iOS 端上 SFSpeechRecognizer zh-CN)
   record: ^6.0.0 # 安卓端上识别不可用时,录音 WAV 上传服务端「一句话识别」兜底
   path_provider: ^2.1.5 # 录音临时文件路径
-
+  shared_preferences: ^2.5.5
+  sign_in_with_apple: ^8.1.0
+  google_sign_in: ^7.2.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -73,6 +75,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/icon/neng.png
 
   fonts:
     - family: Fraunces

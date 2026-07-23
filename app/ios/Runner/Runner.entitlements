@@ -5,5 +5,10 @@
 	<!-- Live Activity 走 APNs 后台推送(中继持 .p8 推状态)需要此能力。上架改 production。 -->
 	<key>aps-environment</key>
 	<string>development</string>
+	<!-- 原生 Apple 登录 → POST /api/auth/mobile {provider:apple,id_token} -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 </dict>
 </plist>

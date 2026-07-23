@@ -29,6 +29,8 @@ import '../../design/components/traffic_bulb.dart';
 import '../../design/components/wave_text.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
+import '../auth/auth_gate.dart';
+import '../detail/shenkuo_add_sheet.dart';
 import '../detail/shenkuo_collect_panel.dart' show shenkuoCount;
 import '../detail/shenkuo_home_screen.dart';
 import '../inbox/agent_task_list_screen.dart';
@@ -56,7 +58,8 @@ class AgentHome extends StatefulWidget {
 
 class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
   late final FactoryClient _client =
-      widget.client ?? FactoryClient(resolver: DirectEndpointResolver(_devBase));
+      widget.client ??
+      FactoryClient(resolver: DirectEndpointResolver(_devBase));
 
   Map<String, AgentStatus> _statusMap = const <String, AgentStatus>{};
   Map<String, int> _reviewCounts = const <String, int>{};
@@ -73,7 +76,7 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
   final RelayClient _relay = RelayClient();
   ClaudeStatus? _relayStatus;
 
-  /// 首页「+」剪贴板采集预览(直接读剪贴板,结果卡嵌在首页,不弹手动输入)。
+  /// 首页「+」剪贴板命中后的采集预览卡;剪贴板空/无支持链接则改弹手动添加 sheet。
   _ClipboardCollect? _clipCollect;
   bool _clipSubmitting = false;
 
@@ -104,7 +107,10 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
   void _start() {
     _timer?.cancel();
     _refreshStatus();
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _refreshStatus());
+    _timer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _refreshStatus(),
+    );
   }
 
   /// 拉 /tasks 按 cmd 聚合灯态 + 待验收数;同一份全量数据,不另发请求。
@@ -117,17 +123,23 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
       final Map<String, AgentStatus> map = <String, AgentStatus>{};
       final Map<String, int> counts = <String, int>{};
       for (final AgentInfo agent in agentCatalog) {
-        final List<TaskMeta> mine = tasks.where((t) => t.cmd == agent.cmd).toList();
+        final List<TaskMeta> mine = tasks
+            .where((t) => t.cmd == agent.cmd)
+            .toList();
         if (mine.any((t) => t.status == 'running')) {
           map[agent.cmd] = AgentStatus.working;
-        } else if (mine.any((t) =>
-            t.status == 'failed' || (t.status == 'completed' && t.decision == null))) {
+        } else if (mine.any(
+          (t) =>
+              t.status == 'failed' ||
+              (t.status == 'completed' && t.decision == null),
+        )) {
           map[agent.cmd] = AgentStatus.asking;
         } else {
           map[agent.cmd] = AgentStatus.idle;
         }
-        counts[agent.cmd] =
-            mine.where((t) => t.status == 'completed' && t.decision == null).length;
+        counts[agent.cmd] = mine
+            .where((t) => t.status == 'completed' && t.decision == null)
+            .length;
       }
       if (!mounted) return;
       setState(() {
@@ -202,8 +214,9 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
     return MainState.idle;
   }
 
-  /// 首页右上角「+」:不弹输入框,直接读剪贴板。
-  /// 命中抖音/TK/YouTube 链接 → 解析 → 首页卡片询问是否立即采集。
+  /// 首页右上角「+」:先读剪贴板。
+  /// - 命中抖音/TK/YouTube → 解析 → 首页卡片确认采集
+  /// - 空 / 无支持链接 → 弹 [showShenkuoAddSheet] 手动加作者或作品
   Future<void> _onClipboardAdd() async {
     if (_clipSubmitting) return;
     setState(() {
@@ -215,14 +228,14 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
       if (text.isEmpty) {
         if (!mounted) return;
         setState(() => _clipCollect = null);
-        _toast('剪贴板是空的,先复制一条抖音/TK/YouTube 链接');
+        await _openManualAddSheet();
         return;
       }
       final link = ShareLinkParser.detectFactorySupported(text);
       if (link == null) {
         if (!mounted) return;
         setState(() => _clipCollect = null);
-        _toast('剪贴板没有支持的链接(抖音 / TikTok / YouTube)');
+        await _openManualAddSheet();
         return;
       }
       await _resolveClipboardLink(link, sourceText: text);
@@ -234,7 +247,33 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _resolveClipboardLink(ShareLink link, {required String sourceText}) async {
+  /// 手动粘贴/输入:作者对标 或 单作品采集(复用沈存中添加底卡)。
+  Future<void> _openManualAddSheet() async {
+    List<SubscriptionAuthor> existing = const <SubscriptionAuthor>[];
+    try {
+      final cfg = await _client.subscriptions();
+      existing = List<SubscriptionAuthor>.from(
+        cfg.authors ?? const <SubscriptionAuthor>[],
+      );
+    } catch (_) {
+      // 拉订阅失败仍允许打开 sheet;提交时再校验。
+    }
+    if (!mounted) return;
+    final changed = await showShenkuoAddSheet(
+      context: context,
+      client: _client,
+      existingAuthors: existing,
+    );
+    if (changed == true && mounted) {
+      _toast('已添加');
+      unawaited(_refreshStatus());
+    }
+  }
+
+  Future<void> _resolveClipboardLink(
+    ShareLink link, {
+    required String sourceText,
+  }) async {
     try {
       final preferWork = ShareLinkParser.looksLikeWork(sourceText);
       if (preferWork) {
@@ -251,7 +290,10 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
         final account = await _client.resolveAccount(link.url);
         if (!mounted) return;
         setState(() {
-          _clipCollect = _ClipboardCollect.account(link: link, account: account);
+          _clipCollect = _ClipboardCollect.account(
+            link: link,
+            account: account,
+          );
         });
         return;
       }
@@ -259,7 +301,10 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
         final account = await _client.resolveAccount(link.url);
         if (!mounted) return;
         setState(() {
-          _clipCollect = _ClipboardCollect.account(link: link, account: account);
+          _clipCollect = _ClipboardCollect.account(
+            link: link,
+            account: account,
+          );
         });
         return;
       } catch (_) {
@@ -291,7 +336,9 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
           cmd: 'shenkuo',
           params: <String, dynamic>{
             'aweme': url,
-            'platform': w.platform.isNotEmpty ? w.platform : (pick.link?.backendPlatform ?? 'douyin'),
+            'platform': w.platform.isNotEmpty
+                ? w.platform
+                : (pick.link?.backendPlatform ?? 'douyin'),
           },
         );
       } else if (pick.account != null) {
@@ -300,7 +347,9 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
           cmd: 'shenkuo',
           params: <String, dynamic>{
             'author': a.secUid,
-            'platform': a.platform.isNotEmpty ? a.platform : (pick.link?.backendPlatform ?? 'douyin'),
+            'platform': a.platform.isNotEmpty
+                ? a.platform
+                : (pick.link?.backendPlatform ?? 'douyin'),
           },
         );
       } else {
@@ -330,7 +379,10 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
     messenger.clearSnackBars();
     messenger.showSnackBar(
       SnackBar(
-        content: Text(msg, style: AppTypography.body.copyWith(color: AppColors.ivory)),
+        content: Text(
+          msg,
+          style: AppTypography.body.copyWith(color: AppColors.ivory),
+        ),
         backgroundColor: AppColors.ink.withValues(alpha: 0.92),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(milliseconds: 2600),
@@ -357,9 +409,7 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
               reviewCounts: _reviewCounts,
               clipCollect: _clipCollect,
               clipSubmitting: _clipSubmitting,
-              onOpenSubscriptions: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const SubscriptionsScreen()),
-              ),
+              onOpenSettings: () => _openSettingsSheet(context),
               onClipboardAdd: _onClipboardAdd,
               onConfirmCollect: _confirmCollect,
               onDismissClip: _dismissClip,
@@ -367,6 +417,99 @@ class _AgentHomeState extends State<AgentHome> with WidgetsBindingObserver {
           ],
         ),
       ),
+    );
+  }
+
+  /// 齿轮:订阅管理 + 退出登录(底部),便于回登录页调样式。
+  void _openSettingsSheet(BuildContext context) {
+    final auth = AuthScope.maybeOf(context);
+    final user = auth?.user;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.ivory,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadii.card),
+        ),
+      ),
+      builder: (sheetCtx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.pageH,
+              AppSpacing.m,
+              AppSpacing.pageH,
+              AppSpacing.m,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.ink.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.m),
+                if (user != null) ...[
+                  Text(
+                    user.displayLabel,
+                    style: AppTypography.subhead,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (user.email.isNotEmpty)
+                    Text(
+                      user.email,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.inkMuted,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  const SizedBox(height: AppSpacing.m),
+                ],
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    Icons.notifications_outlined,
+                    color: AppColors.ink.withValues(alpha: 0.7),
+                  ),
+                  title: Text('订阅管理', style: AppTypography.body),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const SubscriptionsScreen(),
+                      ),
+                    );
+                  },
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.logout, color: AppColors.statusRed),
+                  title: Text(
+                    '退出登录',
+                    style: AppTypography.body.copyWith(
+                      color: AppColors.statusRed,
+                    ),
+                  ),
+                  onTap: () async {
+                    Navigator.of(sheetCtx).pop();
+                    await auth?.logout();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -383,9 +526,11 @@ class _ClipboardCollect {
 
   const _ClipboardCollect.loading() : this._(phase: _ClipPhase.loading);
   const _ClipboardCollect.error(String message)
-      : this._(phase: _ClipPhase.error, error: message);
-  const _ClipboardCollect.work({required ShareLink link, required WorkResolveResult work})
-      : this._(phase: _ClipPhase.ready, link: link, work: work);
+    : this._(phase: _ClipPhase.error, error: message);
+  const _ClipboardCollect.work({
+    required ShareLink link,
+    required WorkResolveResult work,
+  }) : this._(phase: _ClipPhase.ready, link: link, work: work);
   const _ClipboardCollect.account({
     required ShareLink link,
     required AccountResolveResult account,
@@ -397,7 +542,8 @@ class _ClipboardCollect {
   final AccountResolveResult? account;
   final String? error;
 
-  bool get isReady => phase == _ClipPhase.ready && (work != null || account != null);
+  bool get isReady =>
+      phase == _ClipPhase.ready && (work != null || account != null);
 }
 
 enum _ClipPhase { loading, ready, error }
@@ -413,7 +559,9 @@ class _HeroArea extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Fraunces 24 bold,与灵动岛/锁屏一致。
-    final TextStyle heroStyle = AppTypography.displayTitle.copyWith(fontWeight: FontWeight.w700);
+    final TextStyle heroStyle = AppTypography.displayTitle.copyWith(
+      fontWeight: FontWeight.w700,
+    );
     return Padding(
       // 灯左缘对齐下方 agent 头像左缘
       padding: const EdgeInsets.only(left: 14, top: 4),
@@ -434,7 +582,12 @@ class _HeroArea extends StatelessWidget {
           Text('Agent', style: heroStyle.copyWith(color: AppColors.ink)),
           const SizedBox(width: AppSpacing.s),
           if (booting)
-            Text('Connecting', style: heroStyle.copyWith(color: AppColors.ink.withValues(alpha: 0.45)))
+            Text(
+              'Connecting',
+              style: heroStyle.copyWith(
+                color: AppColors.ink.withValues(alpha: 0.45),
+              ),
+            )
           else
             WaveText(
               text: _word,
@@ -504,7 +657,7 @@ class _HeroArea extends StatelessWidget {
 class _AgentBoard extends StatelessWidget {
   const _AgentBoard({
     required this.reviewCounts,
-    required this.onOpenSubscriptions,
+    required this.onOpenSettings,
     required this.onClipboardAdd,
     required this.onConfirmCollect,
     required this.onDismissClip,
@@ -513,7 +666,7 @@ class _AgentBoard extends StatelessWidget {
   });
 
   final Map<String, int> reviewCounts;
-  final VoidCallback onOpenSubscriptions;
+  final VoidCallback onOpenSettings;
   final VoidCallback onClipboardAdd;
   final VoidCallback onConfirmCollect;
   final VoidCallback onDismissClip;
@@ -525,20 +678,23 @@ class _AgentBoard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 顶部右对齐:齿轮(订阅) + 加号(读剪贴板采集,沈存中入口动作)。
+        // 顶部右对齐:齿轮(设置菜单) + 加号(读剪贴板采集,沈存中入口动作)。
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
           child: Row(
             children: [
               const Spacer(),
               IconButton(
-                tooltip: '订阅管理',
+                tooltip: '设置',
                 visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.settings, color: AppColors.ink.withValues(alpha: 0.55)),
-                onPressed: onOpenSubscriptions,
+                icon: Icon(
+                  Icons.settings,
+                  color: AppColors.ink.withValues(alpha: 0.55),
+                ),
+                onPressed: onOpenSettings,
               ),
               IconButton(
-                tooltip: '从剪贴板采集',
+                tooltip: '采集(剪贴板 / 手动添加)',
                 visualDensity: VisualDensity.compact,
                 icon: Icon(Icons.add, color: AppColors.orange),
                 onPressed: clipSubmitting ? null : onClipboardAdd,
@@ -575,9 +731,7 @@ class _AgentBoard extends StatelessWidget {
     final Widget page = agent.cmd == 'shenkuo'
         ? ShenkuoHomeScreen(agent: agent)
         : AgentTaskListScreen(agent: agent);
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => page),
-    );
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
   }
 }
 
@@ -782,16 +936,26 @@ class _ClipboardCollectCard extends StatelessWidget {
         color: AppColors.ivory,
         borderRadius: const BorderRadius.all(AppRadii.cardR),
         boxShadow: [
-          BoxShadow(color: AppColors.cardShadow, blurRadius: 6, offset: const Offset(0, 3)),
+          BoxShadow(
+            color: AppColors.cardShadow,
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
         ],
-        border: Border.all(color: AppColors.accentCollect.withValues(alpha: 0.22)),
+        border: Border.all(
+          color: AppColors.accentCollect.withValues(alpha: 0.22),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.content_paste_search, size: 16, color: AppColors.accentCollect),
+              Icon(
+                Icons.content_paste_search,
+                size: 16,
+                color: AppColors.accentCollect,
+              ),
               const SizedBox(width: 6),
               Text(
                 '剪贴板 · 沈存中',
@@ -806,7 +970,10 @@ class _ClipboardCollectCard extends StatelessWidget {
                   tooltip: '关闭',
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  constraints: const BoxConstraints(
+                    minWidth: 28,
+                    minHeight: 28,
+                  ),
                   icon: Icon(Icons.close, size: 18, color: AppColors.inkFaint),
                   onPressed: onDismiss,
                 ),
@@ -822,7 +989,10 @@ class _ClipboardCollectCard extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
                 const SizedBox(width: AppSpacing.m),
-                Text('正在解析剪贴板链接…', style: AppTypography.body.copyWith(color: AppColors.inkMuted)),
+                Text(
+                  '正在解析剪贴板链接…',
+                  style: AppTypography.body.copyWith(color: AppColors.inkMuted),
+                ),
               ],
             )
           else if (pick.phase == _ClipPhase.error)
@@ -892,7 +1062,8 @@ class _ClipboardCollectCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (link != null) TagChip(label: link.platform, tint: AppColors.accentCollect),
+              if (link != null)
+                TagChip(label: link.platform, tint: AppColors.accentCollect),
               const SizedBox(height: 4),
               Text(
                 title.isEmpty ? '作品 ${w.awemeId}' : title,
@@ -902,14 +1073,21 @@ class _ClipboardCollectCard extends StatelessWidget {
               ),
               if (author != null && author.isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text(author, style: AppTypography.caption.copyWith(color: AppColors.inkMuted)),
+                Text(
+                  author,
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.inkMuted,
+                  ),
+                ),
               ],
               const SizedBox(height: 4),
               Wrap(
                 spacing: 8,
                 children: [
-                  if (w.digg != null) _stat(Icons.favorite, w.digg!, AppColors.statusRed),
-                  if (w.comment != null) _stat(Icons.mode_comment, w.comment!, AppColors.inkMuted),
+                  if (w.digg != null)
+                    _stat(Icons.favorite, w.digg!, AppColors.statusRed),
+                  if (w.comment != null)
+                    _stat(Icons.mode_comment, w.comment!, AppColors.inkMuted),
                 ],
               ),
             ],
@@ -920,7 +1098,9 @@ class _ClipboardCollectCard extends StatelessWidget {
   }
 
   Widget _accountBody(AccountResolveResult a, ShareLink? link) {
-    final name = (a.nickname != null && a.nickname!.isNotEmpty) ? a.nickname! : '已解析账号';
+    final name = (a.nickname != null && a.nickname!.isNotEmpty)
+        ? a.nickname!
+        : '已解析账号';
     return Row(
       children: [
         ClipOval(
@@ -931,7 +1111,8 @@ class _ClipboardCollectCard extends StatelessWidget {
                 ? Image.network(
                     a.avatar!,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, error, stackTrace) => _avatarFallback(name),
+                    errorBuilder: (_, error, stackTrace) =>
+                        _avatarFallback(name),
                   )
                 : _avatarFallback(name),
           ),
@@ -944,23 +1125,38 @@ class _ClipboardCollectCard extends StatelessWidget {
               Row(
                 children: [
                   if (link != null) ...[
-                    TagChip(label: link.platform, tint: AppColors.accentCollect),
+                    TagChip(
+                      label: link.platform,
+                      tint: AppColors.accentCollect,
+                    ),
                     const SizedBox(width: 6),
                   ],
                   Expanded(
-                    child: Text(name, style: AppTypography.titleM, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    child: Text(
+                      name,
+                      style: AppTypography.titleM,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ],
               ),
               if (a.uniqueId != null && a.uniqueId!.isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text('@${a.uniqueId}', style: AppTypography.caption.copyWith(color: AppColors.inkMuted)),
+                Text(
+                  '@${a.uniqueId}',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.inkMuted,
+                  ),
+                ),
               ],
               if (a.followerCount != null) ...[
                 const SizedBox(height: 2),
                 Text(
                   '粉丝 ${shenkuoCount(a.followerCount!)}',
-                  style: AppTypography.caption.copyWith(color: AppColors.inkMuted),
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.inkMuted,
+                  ),
                 ),
               ],
             ],
@@ -971,29 +1167,35 @@ class _ClipboardCollectCard extends StatelessWidget {
   }
 
   Widget _stat(IconData icon, int n, Color color) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 11, color: color),
-          const SizedBox(width: 2),
-          Text(
-            shenkuoCount(n),
-            style: AppTypography.caption.copyWith(fontWeight: FontWeight.w600, color: color),
-          ),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 11, color: color),
+      const SizedBox(width: 2),
+      Text(
+        shenkuoCount(n),
+        style: AppTypography.caption.copyWith(
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    ],
+  );
 
   Widget _placeholder() => Container(
-        color: AppColors.ink.withValues(alpha: 0.06),
-        alignment: Alignment.center,
-        child: Icon(Icons.movie_outlined, size: 20, color: AppColors.inkFaint),
-      );
+    color: AppColors.ink.withValues(alpha: 0.06),
+    alignment: Alignment.center,
+    child: Icon(Icons.movie_outlined, size: 20, color: AppColors.inkFaint),
+  );
 
   Widget _avatarFallback(String name) {
     final ch = name.isNotEmpty ? name.characters.first : '作';
     return Container(
       color: AppColors.accentCollect.withValues(alpha: 0.16),
       alignment: Alignment.center,
-      child: Text(ch, style: AppTypography.titleM.copyWith(color: AppColors.accentCollect)),
+      child: Text(
+        ch,
+        style: AppTypography.titleM.copyWith(color: AppColors.accentCollect),
+      ),
     );
   }
 }
