@@ -21,6 +21,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 import requests
+from ncds_opus_core.common import cancel
 
 CHUNK_SIZE = 1024 * 1024
 CONNECT_TIMEOUT = 15
@@ -955,8 +956,21 @@ def download_cover(cover_url: str, output_path: str | Path) -> bool:
         return False
 
 
-def download_video(url: str, output_path: str | Path, max_retries: int = DOWNLOAD_RETRIES) -> str:
-    """streaming 下载 + 有限重试。写 .part 临时文件成功后原子替换。"""
+def download_video(
+    url: str,
+    output_path: str | Path,
+    max_retries: int = DOWNLOAD_RETRIES,
+    *,
+    on_progress: ProgressFn = lambda _text: None,
+    check: Callable[[], bool] = lambda: False,
+    wait_for_completion: bool = False,
+) -> str:
+    """Streaming download with cancellation and periodic byte progress.
+
+    ``wait_for_completion`` is used by the film-import task: it disables HTTP
+    timeouts so a long authorized source can continue until it either finishes
+    or the user cancels the node.
+    """
     referer = "https://www.tiktok.com/" if re.search(r"tiktok|byteoversea", url, re.I) else "https://www.douyin.com/"
     headers = {"User-Agent": _UA, "Referer": referer}
     out = Path(output_path)
@@ -965,14 +979,36 @@ def download_video(url: str, output_path: str | Path, max_retries: int = DOWNLOA
     last_error: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
-            with requests.get(url, headers=headers, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), stream=True) as resp:
+            request_timeout = None if wait_for_completion else (CONNECT_TIMEOUT, READ_TIMEOUT)
+            with requests.get(url, headers=headers, timeout=request_timeout, stream=True) as resp:
                 resp.raise_for_status()
+                try:
+                    total_bytes = int(resp.headers.get("Content-Length") or 0)
+                except ValueError:
+                    total_bytes = 0
+                written = 0
+                last_reported = 0.0
                 with open(tmp, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                        cancel.checkpoint(check)
                         if chunk:
                             f.write(chunk)
+                            written += len(chunk)
+                            now = time.monotonic()
+                            if now - last_reported >= 2:
+                                if total_bytes:
+                                    on_progress(
+                                        f"TikHub 下载中 {written / 1024 / 1024:.1f} MiB "
+                                        f"({written * 100 / total_bytes:.0f}%)"
+                                    )
+                                else:
+                                    on_progress(f"TikHub 下载中 {written / 1024 / 1024:.1f} MiB")
+                                last_reported = now
             tmp.replace(out)
             return str(out)
+        except cancel.TaskCancelled:
+            tmp.unlink(missing_ok=True)
+            raise
         except Exception as error:  # noqa: BLE001 — 网络异常统一重试
             last_error = error
             if tmp.exists():

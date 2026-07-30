@@ -14,8 +14,8 @@ DouK/yt-dlp 没装 / 平台改版 / 网络抖动都安全降级，不致命。�
 
 from __future__ import annotations
 
-import importlib.util
 import hashlib
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -26,6 +26,7 @@ from urllib.parse import urljoin
 
 import requests
 from ncds_opus_core.common import cancel
+
 from ncds_opus_factory.common import tikhub_client
 from ncds_opus_factory.common.tikhub_client import (
     download_cover,
@@ -87,6 +88,7 @@ def _douk_http_download(
     aweme_id: str, out: Path, on_progress: ProgressFn = noop,
     check: cancel.CheckFn = lambda: False,
     platform: str = "douyin", source_url: str | None = None,
+    wait_for_completion: bool = False,
 ) -> str | None:
     """通过独立 DouK sidecar 下载单作品。
 
@@ -98,7 +100,7 @@ def _douk_http_download(
 
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    timeout = _douk_timeout()
+    request_timeout = None if wait_for_completion else (10, _douk_timeout())
     payload = {
         "platform": platform,
         "video_id": aweme_id,
@@ -123,7 +125,7 @@ def _douk_http_download(
             f"{endpoint}/v1/download",
             json=payload,
             headers=headers,
-            timeout=(10, timeout),
+            timeout=request_timeout,
         )
         if response.status_code >= 400:
             on_progress(
@@ -143,13 +145,19 @@ def _douk_http_download(
             artifact_url,
             headers=headers,
             stream=True,
-            timeout=(10, timeout),
+            timeout=request_timeout,
         ) as artifact:
             if artifact.status_code >= 400:
                 on_progress(
                     f"[{platform}:{aweme_id}] DouK artifact 返回 {artifact.status_code}，回退 yt-dlp"
                 )
                 return None
+            try:
+                total_bytes = int(getattr(artifact, "headers", {}).get("Content-Length") or 0)
+            except ValueError:
+                total_bytes = 0
+            written = 0
+            last_reported = 0.0
             with tmp.open("wb") as f:
                 for chunk in artifact.iter_content(chunk_size=1024 * 1024):
                     cancel.checkpoint(check)
@@ -157,6 +165,17 @@ def _douk_http_download(
                         continue
                     digest.update(chunk)
                     f.write(chunk)
+                    written += len(chunk)
+                    now = time.monotonic()
+                    if now - last_reported >= 2:
+                        if total_bytes:
+                            on_progress(
+                                f"[{platform}:{aweme_id}] DouK 下载中 {written / 1024 / 1024:.1f} MiB "
+                                f"({written * 100 / total_bytes:.0f}%)"
+                            )
+                        else:
+                            on_progress(f"[{platform}:{aweme_id}] DouK 下载中 {written / 1024 / 1024:.1f} MiB")
+                        last_reported = now
         if not tmp.exists() or tmp.stat().st_size == 0:
             tmp.unlink(missing_ok=True)
             on_progress(f"[{platform}:{aweme_id}] DouK artifact 为空，回退 yt-dlp")
@@ -212,6 +231,7 @@ def _ytdlp_download(
     aweme_id: str, out: Path, on_progress: ProgressFn = noop,
     check: cancel.CheckFn = lambda: False,
     platform: str = "douyin", source_url: str | None = None,
+    wait_for_completion: bool = False,
 ) -> str | None:
     """yt-dlp 匿名下载单作品(无 TikHub、无登录态)。
 
@@ -229,8 +249,11 @@ def _ytdlp_download(
     url = _ytdlp_url(aweme_id, platform=platform, source_url=source_url)
     cmd = [*prefix, "-o", tmpl, "--no-warnings", "--no-playlist", url]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    on_progress(f"[{platform}:{aweme_id}] yt-dlp 开始下载")
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # noqa: S603 - fixed downloader argv
     t0 = time.time()
+    last_reported = 0.0
+    last_size = -1
     while True:
         rc = proc.poll()
         if rc is not None:
@@ -242,9 +265,20 @@ def _ytdlp_download(
             except subprocess.TimeoutExpired:
                 proc.kill()
             raise cancel.TaskCancelled("cancelled during yt-dlp download")
-        if time.time() - t0 > _YTDLP_TIMEOUT:
+        elapsed = time.time() - t0
+        if not wait_for_completion and elapsed > _YTDLP_TIMEOUT:
             proc.kill()
             return None  # 超时当 yt-dlp 失败，回退 TikHub
+        now = time.monotonic()
+        produced = list(out.parent.glob(f"{out.stem}.ytdl.*"))
+        partial_size = max((path.stat().st_size for path in produced if path.is_file()), default=0)
+        if now - last_reported >= 2 and partial_size != last_size:
+            on_progress(f"[{platform}:{aweme_id}] yt-dlp 下载中 {partial_size / 1024 / 1024:.1f} MiB")
+            last_reported = now
+            last_size = partial_size
+        elif now - last_reported >= 15:
+            on_progress(f"[{platform}:{aweme_id}] yt-dlp 仍在下载准备中，已等待 {elapsed:.0f}s")
+            last_reported = now
         time.sleep(1)
 
     produced = sorted(out.parent.glob(f"{out.stem}.ytdl.*"))
@@ -263,6 +297,7 @@ def fetch_and_download(
     aweme_id: str, out: Path, on_progress: ProgressFn = noop,
     check: cancel.CheckFn = lambda: False, token: str | None = None,
     platform: str = "douyin", source_url: str | None = None,
+    wait_for_completion: bool = False,
 ) -> str:
     """下载作品视频：DouK sidecar 优先；yt-dlp 次之；抖音/TK 最后回退 TikHub。
 
@@ -273,6 +308,7 @@ def fetch_and_download(
     try:
         path = _douk_http_download(
             aweme_id, out, on_progress, check, platform=platform, source_url=source_url,
+            wait_for_completion=wait_for_completion,
         )
         if path:
             return path
@@ -284,6 +320,7 @@ def fetch_and_download(
     try:
         path = _ytdlp_download(
             aweme_id, out, on_progress, check, platform=platform, source_url=source_url,
+            wait_for_completion=wait_for_completion,
         )
         if path:
             return path
@@ -306,4 +343,10 @@ def fetch_and_download(
     )
     if not url:
         raise RuntimeError(f"TikHub 未返回 {platform} 播放地址: {aweme_id}")
-    return tikhub_client.download_video(url, out)
+    return tikhub_client.download_video(
+        url,
+        out,
+        on_progress=on_progress,
+        check=check,
+        wait_for_completion=wait_for_completion,
+    )

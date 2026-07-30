@@ -121,6 +121,7 @@ def run_import(*, job_dir: str, inputs: dict[str, Any], on_progress: ProgressFn)
             check=cancel.current(),
             platform=platform,
             source_url=source_url,
+            wait_for_completion=True,
         )
         cancel.checkpoint()
         if not partial_path.is_file() or partial_path.stat().st_size == 0:
