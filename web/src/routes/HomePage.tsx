@@ -404,6 +404,7 @@ export function HomePage() {
         <AddTempTaskModal
           onClose={() => setShowAddTemp(false)}
           onCreated={(jobId) => { if (mockMode) void openDemoJob(); else nav(`/jobs/${jobId}`); }}
+          onFilmLocalization={() => { setShowAddTemp(false); nav('/film'); }}
         />
       )}
 
@@ -667,9 +668,11 @@ const MAX_STAGED_WORK = 5; // 一次最多解析 5 个作品
 function AddTempTaskModal({
   onClose,
   onCreated,
+  onFilmLocalization,
 }: {
   onClose: () => void;
   onCreated: (jobId: string) => void;
+  onFilmLocalization: () => void;
 }) {
   const { showToast } = useToast();
   const [text, setText] = useState('');
@@ -740,6 +743,7 @@ function AddTempTaskModal({
   }
 
   const ready = staged.filter((s) => s.status === 'done' && s.work);
+  const hasFilmDomain = ready.some((s) => s.domain === 'film');
 
   // 提交时异步触发关注：把标记了 followed 的作者加入对标订阅。
   // 已在列表的忽略（不报错）；整体 fire-and-forget，不阻塞作品创建/导航。
@@ -926,6 +930,9 @@ function AddTempTaskModal({
                       </button>
                     ))}
                   </div>
+                  {s.domain === 'film' && (
+                    <p className="film-domain-note">影视本地化仅处理你上传并确认授权的原片，分享链接不会导入原视频。</p>
+                  )}
                 </div>
               </div>
               <button
@@ -942,9 +949,13 @@ function AddTempTaskModal({
 
         <div className="modal-actions">
           <button className="btn ghost sm" onClick={onClose} disabled={busy}>取消</button>
-          <button className="btn primary sm" onClick={doCreate} disabled={busy || ready.length === 0}>
+          <button
+            className="btn primary sm"
+            onClick={hasFilmDomain ? onFilmLocalization : doCreate}
+            disabled={busy || ready.length === 0}
+          >
             {busy ? <Loader2 size={13} strokeWidth={2} className="spin" /> : <Sparkles size={13} strokeWidth={1.8} />}
-            {busy ? '创建中…' : `新建作品${ready.length ? ` (${ready.length})` : ''}`}
+            {busy ? '创建中…' : hasFilmDomain ? '前往上传授权原片' : `新建作品${ready.length ? ` (${ready.length})` : ''}`}
           </button>
         </div>
       </div>
