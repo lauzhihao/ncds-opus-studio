@@ -983,9 +983,6 @@ function AddTempTaskModal({
                       </button>
                     ))}
                   </div>
-                  {s.domain === 'film' && (
-                    <p className="film-domain-note">影视本地化会直接使用该分享链接对应的原片；点击创建即确认你拥有必要授权。</p>
-                  )}
                 </div>
               </div>
               {!hasAuthor && (
