@@ -31,6 +31,7 @@ from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_
 from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
 from ncds_opus_factory.server.pipeline_asr_tasks import (
     collect_entry_error,
+    is_film_domain_collect,
     is_transcript_only_collect,
 )
 from ncds_opus_factory.server.pipeline_lines_tasks import (
@@ -118,9 +119,12 @@ def run_asr_step(
 
     collect_dir = jd / "01_collect"
     collect_dir.mkdir(parents=True, exist_ok=True)
+    film_domain = is_film_domain_collect(kwargs)
     transcript_only = is_transcript_only_collect(kwargs)
     top_comments = 0 if transcript_only else 20
-    if transcript_only:
+    if film_domain:
+        on_progress("沈括影视采集模式：跳过评论、抠图和音轨提取")
+    elif transcript_only:
         on_progress("沈括纯文案模式：跳过评论和抠图，保留音轨采集")
 
     # shares：InputPanel 解析出的标题/作者，按 URL 对齐（可选）。
@@ -171,7 +175,7 @@ def run_asr_step(
                 aweme_id, collect_dir,
                 meta=meta, on_progress=item_progress,
                 top_comments=top_comments,
-                do_audio=True, do_frames=False,
+                do_audio=not film_domain, do_frames=False,
                 platform=platform, source_url=source_url,
             )
             entry["index"] = idx

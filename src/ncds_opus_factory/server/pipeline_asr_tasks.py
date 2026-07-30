@@ -34,9 +34,9 @@ def collect_entry_error(entry: dict[str, Any]) -> str | None:
 def is_transcript_only_collect(inputs: dict[str, Any] | None) -> bool:
     """是否使用沈括纯文案快采模式。
 
-    film domain 默认命中：影视解说测试阶段只需要下载/听写原稿和音轨，避免评论、
-    抠图等额外 API/本地重活。也允许显式 collect_mode=transcript_only，给未来非影视
-    任务复用这个轻量路径。
+    film domain 默认命中：影视解说测试阶段只需要下载/听写原稿，避免评论、抠图等
+    额外 API/本地重活。也允许显式 collect_mode=transcript_only，给未来非影视任务
+    复用这个轻量路径；是否提取音轨由 domain 独立决定。
     """
     if not isinstance(inputs, dict):
         return False
@@ -45,6 +45,13 @@ def is_transcript_only_collect(inputs: dict[str, Any] | None) -> bool:
         return True
     if inputs.get("transcript_only") is True:
         return True
+    return is_film_domain_collect(inputs)
+
+
+def is_film_domain_collect(inputs: dict[str, Any] | None) -> bool:
+    """film domain 的沈括采集不提取音轨。"""
+    if not isinstance(inputs, dict):
+        return False
     return str(inputs.get("domain") or "").strip().lower() == "film"
 
 
@@ -69,9 +76,12 @@ class PipelineAsrCollectRun:
 
         collect_dir = self.job_dir / "01_collect"
         collect_dir.mkdir(parents=True, exist_ok=True)
+        film_domain = is_film_domain_collect(self.inputs)
         transcript_only = is_transcript_only_collect(self.inputs)
         top_comments = 0 if transcript_only else 20
-        if transcript_only:
+        if film_domain:
+            self._on_progress("沈括影视采集模式：跳过评论、抠图和音轨提取")
+        elif transcript_only:
             self._on_progress("沈括纯文案模式：跳过评论和抠图，保留音轨采集")
 
         collected_by_idx: dict[int, dict[str, Any]] = {}
@@ -106,7 +116,7 @@ class PipelineAsrCollectRun:
                     aweme_id, collect_dir,
                     meta=meta, on_progress=self._on_progress,
                     top_comments=top_comments,
-                    do_audio=True, do_frames=False,
+                    do_audio=not film_domain, do_frames=False,
                     platform=ref.platform, source_url=ref.url,
                 )
                 entry["index"] = idx
