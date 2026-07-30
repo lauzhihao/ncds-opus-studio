@@ -35,13 +35,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from ncds_opus_core.pipelines import PIPELINE_REGISTRY
 from ncds_opus_core.templates import template_dir as _core_template_dir
@@ -49,7 +51,6 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from ncds_opus_factory.server.access import current_owner_id, maybe_claim_legacy, require_job
-
 from ncds_opus_factory.server.jianying_draft import build_jianying_draft
 from ncds_opus_factory.server.state import PIPELINE_RUNNER
 
@@ -95,6 +96,23 @@ class UpdateInputsRequest(BaseModel):
     urls: list[str] | None = None
     raw_text: str | None = None
     shares: list[dict[str, Any]] | None = None
+
+
+_FILM_SOURCE_SUFFIXES = {".mp4", ".mov", ".mkv"}
+_DEFAULT_FILM_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _film_max_upload_bytes() -> int:
+    """Read upload limit at request time so deployments can tune it without code changes."""
+    raw = os.getenv("NOF_FILM_SOURCE_MAX_BYTES") or os.getenv("NOF_FILM_MAX_UPLOAD_BYTES")
+    if not raw:
+        return _DEFAULT_FILM_MAX_UPLOAD_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("[film] invalid upload limit; using default")
+        return _DEFAULT_FILM_MAX_UPLOAD_BYTES
+    return value if value > 0 else _DEFAULT_FILM_MAX_UPLOAD_BYTES
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +205,75 @@ async def create_job(body: CreateJobRequest, request: Request) -> dict[str, Any]
         owner_id=current_owner_id(request),
     )
     return _serialize_job(state)
+
+
+@router.post("/jobs/{job_id}/source")
+async def upload_film_source(
+    job_id: str,
+    request: Request,
+    source: UploadFile = File(...),
+    rights_confirmed: bool = Form(...),
+) -> dict[str, Any]:
+    """Save one authorised source video for ``film_localization``.
+
+    Upload is streamed into a fixed, job-local filename.  The original filename
+    is metadata only, so it can never influence a filesystem path.
+    """
+    state = require_job(job_id, request)
+    if state.pipeline_id != "film_localization":
+        raise HTTPException(400, "source upload is only available for film_localization jobs")
+    if rights_confirmed is not True:
+        raise HTTPException(400, "rights_confirmed=true is required")
+    filename = source.filename or ""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in _FILM_SOURCE_SUFFIXES:
+        raise HTTPException(415, "source must be an mp4, mov, or mkv file")
+
+    max_bytes = _film_max_upload_bytes()
+    source_dir = PIPELINE_RUNNER.video_jobs_dir / job_id / "00_source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    final_path = source_dir / f"source{suffix}"
+    partial_path = source_dir / f"source{suffix}.part"
+    bytes_written = 0
+    try:
+        with partial_path.open("wb") as handle:
+            while chunk := await source.read(1024 * 1024):
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise HTTPException(413, f"source exceeds upload limit of {max_bytes} bytes")
+                handle.write(chunk)
+        partial_path.replace(final_path)
+    except HTTPException:
+        partial_path.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        partial_path.unlink(missing_ok=True)
+        logger.warning("[film] source upload failed for job=%s: %s", job_id, type(exc).__name__)
+        raise HTTPException(500, "source upload could not be saved") from exc
+    finally:
+        await source.close()
+
+    # The relative path is intentionally compatible with /jobs/{id}/files/...
+    # and is the only source path accepted by downstream film tasks.
+    source_relpath = f"00_source/{final_path.name}"
+    source_meta = {
+        "filename": filename,
+        "path": source_relpath,
+        "size_bytes": bytes_written,
+        "rights_confirmed": True,
+    }
+    PIPELINE_RUNNER.update_inputs(job_id, {
+        "source_video": source_relpath,
+        "source": source_meta,
+        "rights_confirmed": True,
+    })
+    return {
+        "job_id": job_id,
+        "source": source_meta,
+        "source_video": source_relpath,
+        "rights_confirmed": True,
+        "bytes": bytes_written,
+    }
 
 
 @router.get("/jobs")

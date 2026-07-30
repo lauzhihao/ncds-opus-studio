@@ -357,6 +357,7 @@ class PipelineSchedulerMixin:
 
         if (
             self._engine is not None
+            and state.pipeline_id == "final_preview"
             and node_name in self._engine_nodes
             and node_name not in self._LEGACY_ONLY_NODES
         ):
@@ -376,7 +377,17 @@ class PipelineSchedulerMixin:
         elif node_name == "preview":
             outputs = {}
         elif node_name == "render":
-            outputs = await self._execute_render(job_id)
+            state = self._load(job_id)
+            if state.pipeline_id == "film_localization":
+                outputs = await self._execute_film_render(job_id)
+            else:
+                outputs = await self._execute_render(job_id)
+        elif node_name == "analyze":
+            outputs = await self._execute_film_analyze(job_id)
+        elif node_name == "localize":
+            outputs = await self._execute_film_localize(job_id)
+        elif node_name == "voice":
+            outputs = await self._execute_film_voice(job_id)
         else:
             raise ValueError(f"unknown runnable node: {node_name}")
 
