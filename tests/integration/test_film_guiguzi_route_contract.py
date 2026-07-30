@@ -490,3 +490,33 @@ def test_film_rw_rejects_legacy_raw_script_without_completed_revision(
     assert not (
         env.jobs_root / job_id / "02_rw" / "film_localization.json"
     ).exists()
+
+
+def test_deterministic_mixed_role_skips_optional_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ncds_opus_factory.commands import film_script_split
+
+    segments = [
+        {
+            "segment_key": "film:mixed-dialogue",
+            "source_text_raw": "go go go 啊啊",
+            "source_text": "go go go 啊啊",
+            "start_ms": 1000,
+            "end_ms": 2000,
+            "role": film_script_split.ROLE_ORIGINAL,
+            "language": "en",
+            "confidence": 0.72,
+        }
+    ]
+
+    def unexpected_agent_call(_segments: list[dict[str, Any]]) -> list[Any]:
+        raise AssertionError("deterministic mixed role must not call Agent")
+
+    monkeypatch.setattr(
+        film_script_split,
+        "REVIEW_AGENT",
+        unexpected_agent_call,
+    )
+
+    assert film_script_split.audit_ambiguous_segments(segments) == segments

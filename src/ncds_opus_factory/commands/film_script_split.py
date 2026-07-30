@@ -191,7 +191,13 @@ def _review_ambiguous_with_opus(
         ], ensure_ascii=False),
     ])
     try:
-        value = json.loads(call_opus(prompt, timeout_seconds=300))
+        value = json.loads(
+            call_opus(
+                prompt,
+                timeout_seconds=120,
+                effort="low",
+            )
+        )
     except Exception:  # noqa: BLE001 - Agent audit is optional; rules remain usable.
         return []
     return value if isinstance(value, list) else []
@@ -204,11 +210,13 @@ def audit_ambiguous_segments(
     segments: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Apply reviewer labels only; source text and timing remain immutable."""
+    # A mixed-language segment with a deterministic dominant role is already
+    # usable (for example English dialogue with a Chinese filler sound). Only
+    # unresolved rows need an Agent call; reviewing every 0.72-confidence
+    # mixed row made the otherwise local classification wait on Opus.
     ambiguous = [
         segment for segment in segments
         if segment.get("role") == ROLE_UNKNOWN
-        or segment.get("language") == "mixed"
-        or float(segment.get("confidence") or 0) < 0.9
     ]
     if not ambiguous:
         return segments
