@@ -6,7 +6,7 @@
 
     state/works/{platform}/{aweme_id}/
       manifest.json   # 作品卡(card,works.py 写) + 采集产物清单(products/status,沈括写)
-      video.mp4  asr.paraformer.json  asr.txt  asr.clean.txt
+      video.mp4  asr.paraformer.json  asr.timeline.json  asr.txt  asr.clean.txt
       cover.jpg  comments.json  audio/  frames/  cutouts/
 
 manifest 顶层 key 按"产出者"分区、互不重叠：

@@ -794,6 +794,45 @@ textarea.code-pane.editable:focus {
   background: var(--accent-soft);
 }
 .rw-qc-skip { color: var(--ink-3); font-family: var(--font-mono); font-size: var(--text-xs); }
+
+.film-localization-panel {
+  gap: var(--s-3);
+}
+
+.film-translation-list {
+  display: grid;
+  gap: var(--s-2);
+  min-height: 0;
+  overflow: auto;
+}
+
+.film-translation-row {
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+
+  .fit-ok {
+    color: var(--status-done);
+  }
+
+  .fit-too-long {
+    color: var(--status-failed, #d1242f);
+  }
+}
+
+.film-translation-source {
+  margin-bottom: 6px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+
+.film-translation-target {
+  color: var(--ink-1);
+  font-size: var(--text-md);
+  line-height: 1.55;
+}
+
 .asr-error {
   color: var(--status-failed, #c84a4a);
   font-family: var(--font-mono);

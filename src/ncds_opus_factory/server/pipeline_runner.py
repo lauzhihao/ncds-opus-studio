@@ -17,6 +17,7 @@ from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 from ncds_opus_factory.server.pipeline_agent_tasks import PipelineAgentTasksMixin
 from ncds_opus_factory.server.pipeline_asr_tasks import PipelineAsrCollectRun
+from ncds_opus_factory.server.pipeline_domain_strategies import pipeline_strategy
 from ncds_opus_factory.server.pipeline_engine_bridge import PipelineEngineBridgeMixin
 from ncds_opus_factory.server.pipeline_events import PipelineEventsMixin
 from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
@@ -111,6 +112,9 @@ class PipelineRunner(
         """ASR/Shenkuo fast collect remains legacy because it streams outputs mid-run."""
         state = self._load(job_id)
         job_dir = self.video_jobs_dir / job_id
+        strategy = pipeline_strategy("asr", state.inputs.get("domain"))
+        if strategy.asr_policy is None:
+            raise RuntimeError("ASR domain strategy has no collection policy")
         return await PipelineAsrCollectRun(
             runner=self,
             job_id=job_id,
@@ -118,6 +122,7 @@ class PipelineRunner(
             inputs=state.inputs,
             flag_path=self._cancel_flag(job_id, "asr"),
             run_in_thread_cancellable=self._run_in_thread_cancellable,
+            policy=strategy.asr_policy(state.inputs),
         ).run()
 
     async def _execute_rw(self, job_id: str) -> dict[str, Any]:
@@ -191,6 +196,10 @@ class PipelineRunner(
             call_opus_for_rw=rw_helpers._call_opus_for_rw,
             model_id=DEFAULT_OPUS_MODEL_ID,
         ).run()
+
+    async def _execute_preview(self, _job_id: str) -> dict[str, Any]:
+        """Legacy preview gate has no backend work."""
+        return {}
 
     async def _execute_render(self, job_id: str) -> dict[str, Any]:
         """Legacy fallback: render final_preview MP4."""

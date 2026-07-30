@@ -15,10 +15,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Literal
+from collections.abc import Callable
+from typing import Any, Literal
 
 from ncds_opus_core.common import cancel
+
 from ncds_opus_factory.commands import build_full_registry
+from ncds_opus_factory.server.domain_strategy import (
+    EngineStrategyContext,
+    normalize_domain,
+)
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
 from ncds_opus_factory.server.engine.recipes import RECIPE_REGISTRY
 from ncds_opus_factory.server.engine.types import (
@@ -31,6 +37,7 @@ from ncds_opus_factory.server.engine.types import (
     StepStatus,
     can_transition,
 )
+from ncds_opus_factory.server.pipeline_domain_strategies import pipeline_strategy
 from ncds_opus_factory.server.schemas import Review
 
 logger = logging.getLogger(__name__)
@@ -54,10 +61,21 @@ def _invoke(
 ) -> Any:
     """asyncio.to_thread 的同步目标：run_fn(on_progress=..., **params)。
     cancel_check 装进线程局部，performer 在 cancel.checkpoint() 处中止。"""
+    return _with_cancel(
+        lambda: run_fn(on_progress=on_progress, **params),
+        cancel_check,
+    )
+
+
+def _with_cancel(
+    run: Callable[[], Any],
+    cancel_check: Callable[[], bool] | None,
+) -> Any:
+    """给完整的同步派发链安装一次线程局部取消检查。"""
     if cancel_check is not None:
         cancel.install(cancel_check)
     try:
-        return run_fn(on_progress=on_progress, **params)
+        return run()
     finally:
         cancel.uninstall()
 
@@ -235,8 +253,28 @@ class InstanceRunner:
         # 仅当 step_inputs 未显式传 domain 且 instance inputs 里有非空 domain 时才注入
         if instance_domain and not params.get("domain"):
             params["domain"] = instance_domain
+
+        def _invoke_with_domain_strategy() -> Any:
+            def _dispatch() -> Any:
+                def _default_execute() -> Any:
+                    return run_fn(on_progress=_step_progress, **params)
+
+                if recipe.recipe_id != "final_preview":
+                    return _default_execute()
+                strategy = pipeline_strategy(step_id, params.get("domain"))
+                context = EngineStrategyContext(
+                    node=step_id,
+                    domain=normalize_domain(params.get("domain")),
+                    params=params,
+                    on_progress=_step_progress,
+                    default_execute=_default_execute,
+                )
+                return strategy.execute_engine(context)
+
+            return _with_cancel(_dispatch, cancel_check)
+
         try:
-            result = await asyncio.to_thread(_invoke, run_fn, params, _step_progress, cancel_check)
+            result = await asyncio.to_thread(_invoke_with_domain_strategy)
         except cancel.TaskCancelled:
             # 取消：步骤回 idle（可重跑；running→idle 非法，故直接写 fresh StepState 不走 _transition），
             # 重抛让 _execute_via_engine 透传 TaskCancelled 给 _execute 的 except TaskCancelled 分支。

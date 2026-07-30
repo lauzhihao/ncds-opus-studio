@@ -71,6 +71,12 @@
 只写**字符串 key**（`cmd` / `agent` id），引擎通过 **`build_full_registry()`（P1.x 已建：6 core + 8 factory）**
 查表派发。因此引擎对 agents 零静态依赖，core 保持纯净，新增 agent/步骤只是往 registry 加一行。
 
+**Domain strategy 派发（2026-07-30 已实现）**：所有有执行体的生产节点在 facade 与
+`InstanceRunner` 中统一按 `(node, domain)` 从 `DomainStrategyRegistry` 解析；未知 domain 命中
+`*` default，保持既有生产行为。`film` 当前只覆盖沈括 ASR 采集策略（不提取音轨）、鬼谷子
+timeline 分类 processor、柳永 RW 本地化策略。新增 domain 只需实现并注册 strategy/processor，
+不改节点核心分发代码；无 performer 的 input/output/人工 preview 闸门仍按 recipe 状态机处理。
+
 ---
 
 ## 2. 核心抽象

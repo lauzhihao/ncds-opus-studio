@@ -309,7 +309,7 @@ export function AgentDrawer({ jobId, agent, job, pipeline, angleConfirmed, onClo
         );
       case 'rw':
         return (
-          <LiuyongPanel jobId={jobId} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('rw')} onReconnectSSE={onReconnectSSE} />
+          <LiuyongPanel jobId={jobId} job={job} nodeDef={nodeDef!} nodeState={nodeState} onAdvanced={() => advance('rw')} onReconnectSSE={onReconnectSSE} />
         );
       case 'lines':
         return (

@@ -7,8 +7,15 @@
 // 评论变化时支持增量「更新选题」/ 全量「重新选题」；改分析则回 A 点「重新分析」。
 // 不可用的模型（如 opus 订阅过期）自动隐藏，不展示也不显示错误。
 
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
-import { FileText, Heart, Lightbulb, MessageCircle, PenLine, Search, Sparkles } from 'lucide-react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ComponentType,
+} from 'react';
+import { FileText, Heart, Languages, Lightbulb, MessageCircle, PenLine, Play, Search, Sparkles } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type {
@@ -18,6 +25,8 @@ import type {
   GuiguziItem,
   GuiguziResult,
   GuiguziTopic,
+  FilmScriptSegment,
+  FilmTargetLanguage,
   JobState,
 } from '../../api/types';
 import { guiguziChosenStorageKey, guiguziItemsStorageKey } from '../../config/agents';
@@ -70,7 +79,173 @@ function readItems(jobId: string): GuiguziItem[] {
   }
 }
 
-export function GuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
+const TARGET_LANGUAGES: { code: FilmTargetLanguage; label: string }[] = [
+  { code: 'en', label: 'English' },
+  { code: 'ja', label: '日本語' },
+  { code: 'ko', label: '한국어' },
+  { code: 'es', label: 'Español' },
+  { code: 'fr', label: 'Français' },
+  { code: 'de', label: 'Deutsch' },
+];
+
+const GUIguziPanelByDomain: Record<string, ComponentType<Props>> = {
+  film: FilmGuiguziPanel,
+  film_script_split: FilmGuiguziPanel,
+};
+
+export function GuiguziPanel(props: Props) {
+  const domain = String(props.job.inputs.domain ?? '').trim().toLowerCase();
+  const mode = String(props.job.inputs.mode ?? '').trim().toLowerCase();
+  const Panel = GUIguziPanelByDomain[domain]
+    ?? GUIguziPanelByDomain[mode]
+    ?? TopicGuiguziPanel;
+  return <Panel {...props} />;
+}
+
+function FilmGuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
+  const { showToast } = useToast();
+  const [result, setResult] = useState<GuiguziResult | null>(null);
+  const [targetLanguage, setTargetLanguage] = useState<FilmTargetLanguage>('en');
+  const [busy, setBusy] = useState(false);
+  const asrDone = job.nodes.asr?.status === 'done';
+  const running = result?.status === 'running';
+  const segments = result?.segments ?? [];
+
+  useEffect(() => {
+    api.getGuiguzi(jobId).then(setResult).catch(() => setResult(null));
+  }, [jobId]);
+
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => {
+      api.getGuiguzi(jobId).then(setResult).catch(() => {});
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [jobId, running]);
+
+  async function splitTimeline() {
+    if (!asrDone) {
+      showToast('请先让沈括完成采集');
+      return;
+    }
+    setBusy(true);
+    try {
+      setResult(await api.analyzeGuiguzi(jobId, []));
+    } catch (error) {
+      showToast('时间线分类启动失败');
+      console.error('[FilmGuiguziPanel] split failed', error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmLocalization() {
+    if (result?.mode !== 'film_script_split' || result.status !== 'done') return;
+    setBusy(true);
+    try {
+      await api.runNode(
+        jobId,
+        'rw',
+        { target_language: targetLanguage },
+        true,
+      );
+      onConfirmed?.();
+    } catch (error) {
+      showToast('启动翻译失败，请稍后再试');
+      console.error('[FilmGuiguziPanel] localization failed', error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="panel guiguzi-panel film-script-panel">
+      <div className="panel-section">
+        <div className="panel-section-title film-panel-title">
+          <Languages size={14} strokeWidth={1.8} />
+          影视声音时间线
+          <button
+            className="btn primary sm"
+            disabled={!asrDone || busy || running}
+            onClick={splitTimeline}
+          >
+            {running ? '分类中…' : segments.length > 0 ? '重新分类' : '开始分类'}
+          </button>
+        </div>
+        {!asrDone && (
+          <div className="empty-state">
+            先让 <button className="link-btn" onClick={onGotoShenkuo}>沈括</button> 完成采集与听写。
+          </div>
+        )}
+        {running && (
+          <div className="gg-loading">
+            <GlobalLoading size={44} coreColor="var(--bg-surface)" />
+            <div className="dim-mono">{result?.progress || '按 ASR timeline 分类中…'}</div>
+          </div>
+        )}
+        {result?.status === 'failed' && (
+          <div className="panel-hint panel-hint-error">
+            {result.error || '时间线分类失败'}
+          </div>
+        )}
+      </div>
+
+      {segments.length > 0 && (
+        <>
+          <div className="panel-section film-summary">
+            <span>可替换解说 {result?.summary?.replaceable_narration ?? 0}</span>
+            <span>保留原声 {result?.summary?.preserved_original ?? 0}</span>
+            <span>待确认 {result?.summary?.unknown ?? 0}</span>
+          </div>
+          <div className="panel-section film-segment-list">
+            {segments.map((segment) => (
+              <FilmSegmentRow key={segment.segment_key} segment={segment} />
+            ))}
+          </div>
+          <div className="panel-section film-localization-action">
+            <label>
+              目标语言
+              <select
+                value={targetLanguage}
+                onChange={(event) => setTargetLanguage(event.target.value as FilmTargetLanguage)}
+              >
+                {TARGET_LANGUAGES.map((language) => (
+                  <option key={language.code} value={language.code}>
+                    {language.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="btn primary sm" disabled={busy} onClick={confirmLocalization}>
+              <Play size={12} strokeWidth={2} />
+              确认并交给柳永
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function FilmSegmentRow({ segment }: { segment: FilmScriptSegment }) {
+  const roleLabel = {
+    replaceable_narration: '可替换解说',
+    preserved_original: '保留原声',
+    unknown: '待确认',
+  }[segment.role];
+  return (
+    <div className={`film-segment role-${segment.role}`}>
+      <div className="film-segment-meta">
+        <span>{(segment.start_ms / 1000).toFixed(1)}s–{(segment.end_ms / 1000).toFixed(1)}s</span>
+        <span>{roleLabel}</span>
+        <span>{segment.language} · {Math.round(segment.confidence * 100)}%</span>
+      </div>
+      <div className="film-segment-text">{segment.source_text}</div>
+    </div>
+  );
+}
+
+function TopicGuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
   const { showToast } = useToast();
   const [items, setItems] = useState<GuiguziItem[]>(() => readItems(jobId));
   const [result, setResult] = useState<GuiguziResult | null>(null);

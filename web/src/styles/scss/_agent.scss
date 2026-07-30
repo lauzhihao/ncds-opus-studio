@@ -656,6 +656,91 @@
   display: flex;
 }
 
+.film-panel-title {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+
+  .btn {
+    margin-left: auto;
+  }
+}
+
+.film-summary {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+
+  span {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--ink-2);
+    font-size: var(--text-xs);
+  }
+}
+
+.film-segment-list {
+  display: grid;
+  gap: var(--s-2);
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.film-segment {
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ink-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+
+  &.role-replaceable_narration {
+    border-left-color: var(--accent);
+  }
+
+  &.role-preserved_original {
+    border-left-color: var(--status-done);
+  }
+}
+
+.film-segment-meta {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.film-segment-text {
+  color: var(--ink-1);
+  line-height: 1.55;
+}
+
+.film-localization-action {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--s-3);
+
+  label {
+    display: grid;
+    gap: 5px;
+    color: var(--ink-3);
+    font-size: var(--text-xs);
+  }
+
+  select {
+    min-width: 150px;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    color: var(--ink-1);
+  }
+}
+
 /* —— 通用命令步面板 —— */
 .step-run-panel {
   .step-run-status {

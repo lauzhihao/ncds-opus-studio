@@ -258,6 +258,8 @@ export interface ShenkuoEntry {
   video?: string; // 本地下载视频相对路径（state/works/.../video.mp4），经 /artifacts/files/ 访问
   duration?: number; // 视频时长（秒），缺失/0 -> 前端不渲染时长徽标
   text?: string; // 提取文案（清洗稿，内嵌）
+  timeline?: string; // 标准 ASR timeline 相对路径（完整内容不进入 pipeline_state）
+  segment_count?: number;
   top_comments?: ShenkuoComment[]; // 高赞评论（>10 赞，按赞排序）
   audio?: Record<string, string>; // original/vocals/bgm 相对路径（后台补）
   frames?: string[];
@@ -303,21 +305,63 @@ export interface GuiguziAnalysisColumn {
   error?: string | null;
 }
 
+export type FilmScriptRole =
+  | 'replaceable_narration'
+  | 'preserved_original'
+  | 'unknown';
+
+export interface FilmScriptSegment {
+  id: string;
+  source_segment_id: string;
+  source_work_id: string;
+  segment_key: string;
+  part_index?: number;
+  start_ms: number;
+  end_ms: number;
+  source_text: string;
+  role: FilmScriptRole;
+  language: string;
+  confidence: number;
+  subtype?: 'dialogue' | 'song' | 'ambience' | 'unknown';
+}
+
 // 鬼谷子两步流结果（per-job guiguzi.json；前端轮询 GET /jobs/{id}/guiguzi）。
 //   analyzing → analyzed（用户介入：编辑分析 + 2选1）→ generating → done
 export interface GuiguziResult {
+  mode?: 'topic_discovery' | 'film_script_split';
   // 粗粒度轮询信号：running(分析/出题中) / analyzed(分析完待用户) / done / failed
   status: 'running' | 'analyzed' | 'done' | 'failed';
-  stage?: 'analyzing' | 'analyzed' | 'generating' | 'done' | 'failed';
+  stage?: 'analyzing' | 'analyzed' | 'generating' | 'splitting' | 'done' | 'failed';
   items?: GuiguziItem[];
   analysis?: Record<string, GuiguziAnalysisColumn | undefined> | null; // 第一步多模型
   chosen_analysis?: GuiguziAnalysis | null; // 第二步选定/编辑的那份
   candidates?: Record<string, GuiguziCandidate | undefined> | null; // 第二步多模型选题
   prompt?: string | null; // 本次出选题用的提示词模板（含 $source 占位），供前端回显/编辑
   topics?: GuiguziTopic[] | null;
+  segments?: FilmScriptSegment[] | null;
+  summary?: Partial<Record<FilmScriptRole, number>> | null;
   error?: string | null;
   progress?: string;
   updated_at?: number;
+}
+
+export type FilmTargetLanguage = 'en' | 'ja' | 'ko' | 'es' | 'fr' | 'de';
+
+export interface FilmLocalizationSegment {
+  segment_id: string;
+  source_segment_id: string;
+  source_work_id: string;
+  segment_key: string;
+  part_index?: number | null;
+  start_ms: number;
+  end_ms: number;
+  source_text: string;
+  translated_text: string;
+  target_language: FilmTargetLanguage;
+  available_duration_ms: number;
+  estimated_duration_ms: number;
+  duration_fit: 'ok' | 'too_long';
+  duration_ratio?: number | null;
 }
 
 // 前端从抖音分享文本里 regex 解析出的一条作品。

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from ncds_opus_core.common import cancel as _cancel
 
+from ncds_opus_factory.server.domain_strategy import AsrCollectionPolicy
+from ncds_opus_factory.server.pipeline_domain_strategies import pipeline_strategy
 
 TRANSCRIPT_ONLY_COLLECT_MODE = "transcript_only"
 
@@ -32,12 +35,7 @@ def collect_entry_error(entry: dict[str, Any]) -> str | None:
 
 
 def is_transcript_only_collect(inputs: dict[str, Any] | None) -> bool:
-    """是否使用沈括纯文案快采模式。
-
-    film domain 默认命中：影视解说测试阶段只需要下载/听写原稿，避免评论、抠图等
-    额外 API/本地重活。也允许显式 collect_mode=transcript_only，给未来非影视任务
-    复用这个轻量路径；是否提取音轨由 domain 独立决定。
-    """
+    """是否显式使用沈括纯文案快采模式。"""
     if not isinstance(inputs, dict):
         return False
     mode = str(inputs.get("collect_mode") or inputs.get("shenkuo_collect_mode") or "").strip().lower()
@@ -45,14 +43,7 @@ def is_transcript_only_collect(inputs: dict[str, Any] | None) -> bool:
         return True
     if inputs.get("transcript_only") is True:
         return True
-    return is_film_domain_collect(inputs)
-
-
-def is_film_domain_collect(inputs: dict[str, Any] | None) -> bool:
-    """film domain 的沈括采集不提取音轨。"""
-    if not isinstance(inputs, dict):
-        return False
-    return str(inputs.get("domain") or "").strip().lower() == "film"
+    return False
 
 
 @dataclass
@@ -65,6 +56,7 @@ class PipelineAsrCollectRun:
     inputs: dict[str, Any]
     flag_path: Path
     run_in_thread_cancellable: Callable[..., Awaitable[Any]]
+    policy: AsrCollectionPolicy | None = None
 
     async def run(self) -> dict[str, Any]:
         from ncds_opus_factory.commands import shenkuo
@@ -76,13 +68,14 @@ class PipelineAsrCollectRun:
 
         collect_dir = self.job_dir / "01_collect"
         collect_dir.mkdir(parents=True, exist_ok=True)
-        film_domain = is_film_domain_collect(self.inputs)
-        transcript_only = is_transcript_only_collect(self.inputs)
-        top_comments = 0 if transcript_only else 20
-        if film_domain:
-            self._on_progress("沈括影视采集模式：跳过评论、抠图和音轨提取")
-        elif transcript_only:
-            self._on_progress("沈括纯文案模式：跳过评论和抠图，保留音轨采集")
+        strategy = pipeline_strategy("asr", self.inputs.get("domain"))
+        policy = self.policy
+        if policy is None:
+            if strategy.asr_policy is None:
+                raise RuntimeError("ASR domain strategy has no collection policy")
+            policy = strategy.asr_policy(self.inputs)
+        if policy.progress_message:
+            self._on_progress(policy.progress_message)
 
         collected_by_idx: dict[int, dict[str, Any]] = {}
 
@@ -115,8 +108,9 @@ class PipelineAsrCollectRun:
                     shenkuo.collect_one, self.flag_path,
                     aweme_id, collect_dir,
                     meta=meta, on_progress=self._on_progress,
-                    top_comments=top_comments,
-                    do_audio=not film_domain, do_frames=False,
+                    top_comments=policy.top_comments,
+                    do_audio=policy.do_audio,
+                    do_frames=policy.do_frames,
                     platform=ref.platform, source_url=ref.url,
                 )
                 entry["index"] = idx

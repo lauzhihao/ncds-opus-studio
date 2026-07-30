@@ -13,6 +13,11 @@ from typing import Any
 from ncds_opus_core.common import cancel as _cancel
 from ncds_opus_core.pipelines import get_pipeline
 
+from ncds_opus_factory.server.domain_strategy import (
+    PipelineStrategyContext,
+    normalize_domain,
+)
+from ncds_opus_factory.server.pipeline_domain_strategies import pipeline_strategy
 from ncds_opus_factory.server.pipeline_models import NodeState
 
 logger = logging.getLogger(__name__)
@@ -26,6 +31,16 @@ class PipelineSchedulerMixin:
     _ORPHAN_GRACE_SEC: float = 10.0
     _PIPELINE_TASK_CMD: str = "pipeline_node"
     _LEGACY_ONLY_NODES: set[str] = {"asr", "rw"}
+    _DEFAULT_NODE_METHODS: dict[str, str] = {
+        "asr": "_execute_asr_collect",
+        "rw": "_execute_rw",
+        "lines": "_execute_lines",
+        "storyboard": "_execute_storyboard",
+        "tts": "_execute_tts",
+        "image": "_execute_image",
+        "preview": "_execute_preview",
+        "render": "_execute_render",
+    }
 
     def attach_task_runner(self, task_runner: Any) -> None:
         """Inject the process-wide TaskRunner.
@@ -343,7 +358,7 @@ class PipelineSchedulerMixin:
         return True
 
     async def _execute_real(self, job_id: str, node_name: str) -> None:
-        """真实执行：按 node_name 分发到对应实现。"""
+        """真实执行：统一经 domain strategy 解析，再落默认或领域实现。"""
         _cancel.clear_flag(self._cancel_flag(job_id, node_name))
         state = self._load(job_id)
         n = state.nodes[node_name]
@@ -355,31 +370,21 @@ class PipelineSchedulerMixin:
         self._save(state)
         self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
-        if (
-            self._engine is not None
-            and state.pipeline_id == "final_preview"
-            and node_name in self._engine_nodes
-            and node_name not in self._LEGACY_ONLY_NODES
-        ):
-            outputs = await self._execute_via_engine(job_id, node_name)
-        elif node_name == "tts":
-            outputs = await self._execute_tts(job_id)
-        elif node_name == "image":
-            outputs = await self._execute_image(job_id)
-        elif node_name == "asr":
-            outputs = await self._execute_asr_collect(job_id)
-        elif node_name == "rw":
-            outputs = await self._execute_rw(job_id)
-        elif node_name == "lines":
-            outputs = await self._execute_lines(job_id)
-        elif node_name == "storyboard":
-            outputs = await self._execute_storyboard(job_id)
-        elif node_name == "preview":
-            outputs = {}
-        elif node_name == "render":
-            outputs = await self._execute_render(job_id)
-        else:
-            raise ValueError(f"unknown runnable node: {node_name}")
+        domain = normalize_domain(state.inputs.get("domain"))
+        strategy = pipeline_strategy(node_name, domain)
+        context = PipelineStrategyContext(
+            runner=self,
+            job_id=job_id,
+            node=node_name,
+            domain=domain,
+            params=dict(state.node_configs.get(node_name) or {}),
+            default_execute=lambda: self._execute_default_node(
+                job_id,
+                node_name,
+                state.pipeline_id,
+            ),
+        )
+        outputs = await strategy.execute_pipeline(context)
 
         state = self._load(job_id)
         n = state.nodes[node_name]
@@ -390,8 +395,29 @@ class PipelineSchedulerMixin:
         self._save(state)
         self._emit(job_id, {"type": "node_status", "job_id": job_id, "node": node_name, "state": asdict(n)})
 
-        if node_name == "asr":
-            self._spawn_asr_enrich(job_id)
+        if strategy.after_pipeline_success is not None:
+            await strategy.after_pipeline_success(context, outputs)
+
+    async def _execute_default_node(
+        self,
+        job_id: str,
+        node_name: str,
+        pipeline_id: str,
+    ) -> dict[str, Any]:
+        """Default adapter preserving the current engine/legacy routing."""
+        if (
+            self._engine is not None
+            and pipeline_id == "final_preview"
+            and node_name in self._engine_nodes
+            and node_name not in self._LEGACY_ONLY_NODES
+        ):
+            return await self._execute_via_engine(job_id, node_name)
+        method_name = self._DEFAULT_NODE_METHODS.get(node_name)
+        if method_name is None:
+            raise ValueError(f"unknown runnable node: {node_name}")
+        # 执行时解析，保留既有 monkeypatch seam，不在 runner 初始化时捕获 bound method。
+        executor = getattr(self, method_name)
+        return await executor(job_id)
 
     def _pipeline_task_meta(self, task_id: str | None) -> Any | None:
         if not task_id:

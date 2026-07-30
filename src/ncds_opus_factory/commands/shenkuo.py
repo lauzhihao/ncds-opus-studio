@@ -27,12 +27,14 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ncds_opus_core.common import cancel
+
 from ncds_opus_factory.common import benchmark_store, capabilities, tikhub_client, works_repo
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -145,6 +147,7 @@ class _CollectPaths:
     wdir: Path
     video: Path
     para: Path
+    timeline: Path
     txt: Path
     clean: Path
     cover: Path
@@ -161,6 +164,7 @@ def _collect_paths(platform: str, aweme_id: str) -> _CollectPaths:
         wdir=wdir,
         video=wdir / "video.mp4",
         para=wdir / "asr.paraformer.json",
+        timeline=wdir / "asr.timeline.json",
         txt=wdir / "asr.txt",
         clean=wdir / "asr.clean.txt",
         cover=wdir / "cover.jpg",
@@ -194,6 +198,126 @@ def _transcript_cache_usable(paths: _CollectPaths, platform: str) -> bool:
 
 def _transcript_result_empty(result: dict[str, Any] | None) -> bool:
     return isinstance(result, dict) and result.get("empty") is True
+
+
+def _timestamp_ms(value: Any, *, seconds: bool = False) -> int:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if seconds:
+        number *= 1000
+    return max(0, int(round(number)))
+
+
+def _normalize_timeline_words(
+    words: Any,
+    *,
+    seconds: bool,
+) -> list[dict[str, Any]]:
+    if not isinstance(words, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+        text = str(
+            word.get("text")
+            or word.get("word")
+            or word.get("label")
+            or ""
+        )
+        if not text:
+            continue
+        start_value = (
+            word.get("start")
+            if seconds
+            else word.get("start_time", word.get("start"))
+        )
+        end_value = (
+            word.get("end")
+            if seconds
+            else word.get("end_time", word.get("end"))
+        )
+        normalized.append({
+            "text": text,
+            "start_ms": _timestamp_ms(start_value, seconds=seconds),
+            "end_ms": _timestamp_ms(end_value, seconds=seconds),
+        })
+    return normalized
+
+
+def normalize_asr_timeline(asr_result: dict[str, Any]) -> dict[str, Any]:
+    """Convert backend-specific Bcut/Whisper results to the stable ASR timeline."""
+    raw = asr_result.get("rawResponse")
+    payload = raw if isinstance(raw, dict) else asr_result
+    backend = str(asr_result.get("backend") or "").strip().lower()
+    source_segments: Any
+    seconds = False
+    if isinstance(payload.get("utterances"), list):
+        source_segments = payload["utterances"]
+    else:
+        source_segments = payload.get("segments") or []
+        seconds = backend == "whisper"
+
+    segments: list[dict[str, Any]] = []
+    duration_ms = 0
+    for source in source_segments:
+        if not isinstance(source, dict):
+            continue
+        text = str(source.get("transcript") or source.get("text") or "").strip()
+        start_value = (
+            source.get("start")
+            if seconds
+            else source.get("start_time", source.get("start"))
+        )
+        end_value = (
+            source.get("end")
+            if seconds
+            else source.get("end_time", source.get("end"))
+        )
+        start_ms = _timestamp_ms(start_value, seconds=seconds)
+        end_ms = max(
+            start_ms,
+            _timestamp_ms(end_value, seconds=seconds),
+        )
+        words = _normalize_timeline_words(
+            source.get("words"),
+            seconds=seconds,
+        )
+        if not text and words:
+            text = "".join(word["text"] for word in words)
+        if not text:
+            continue
+        duration_ms = max(duration_ms, end_ms)
+        segments.append({
+            "id": f"seg_{len(segments) + 1:04d}",
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "text": text,
+            "words": words,
+        })
+
+    timeline: dict[str, Any] = {"version": 1, "segments": segments}
+    if duration_ms > 0:
+        timeline["duration_ms"] = duration_ms
+    return timeline
+
+
+def _ensure_asr_timeline(para_path: Path, timeline_path: Path) -> dict[str, Any] | None:
+    """Generate or refresh the stable timeline, including for cached ASR files."""
+    try:
+        asr_result = json.loads(para_path.read_text(encoding="utf-8"))
+        if not isinstance(asr_result, dict):
+            return None
+        timeline = normalize_asr_timeline(asr_result)
+        timeline_path.write_text(
+            json.dumps(timeline, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return timeline
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
 
 
 def _adopt_collect_legacy(aweme_id: str, author_dir: Path, paths: _CollectPaths) -> None:
@@ -252,6 +376,8 @@ def _merge_collect_manifest(
             "video": entry.get("video"),
             "asr": {
                 "paraformer": _rel(paths.para) if paths.para.exists() else None,
+                "timeline": _rel(paths.timeline) if paths.timeline.exists() else None,
+                "segment_count": entry.get("segment_count"),
                 "txt": _rel(paths.txt) if paths.txt.exists() else None,
                 "clean": _rel(paths.clean) if paths.clean.exists() else None,
                 "text": entry.get("text"),
@@ -359,6 +485,10 @@ class _CollectRun:
                 self.entry["status"]["transcribe"] = f"error:{type(e).__name__}"
         if use_transcript_files and p.para.exists():
             self.entry["paraformer"] = _rel(p.para)
+            timeline = _ensure_asr_timeline(p.para, p.timeline)
+            if timeline is not None:
+                self.entry["timeline"] = _rel(p.timeline)
+                self.entry["segment_count"] = len(timeline["segments"])
         if use_transcript_files and p.txt.exists():
             self.entry["txt"] = _rel(p.txt)
             raw_text = p.txt.read_text(encoding="utf-8").strip()

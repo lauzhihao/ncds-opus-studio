@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from ncds_opus_core.common import cancel as _cancel
-from ncds_opus_factory.server.pipeline_asr_tasks import is_transcript_only_collect
+
+from ncds_opus_factory.server.pipeline_domain_strategies import (
+    guiguzi_strategy,
+    pipeline_strategy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,13 @@ class PipelineAgentTasksMixin:
             state = self._load(job_id)
         except FileNotFoundError:
             return
-        if is_transcript_only_collect(state.inputs):
+        strategy = pipeline_strategy("asr", state.inputs.get("domain"))
+        policy = (
+            strategy.asr_policy(state.inputs)
+            if strategy.asr_policy is not None
+            else None
+        )
+        if policy is None or not policy.enrich:
             self._push_progress(job_id, "asr", "沈括纯文案模式：跳过音轨/抠图后台补齐")
             return
         old = self._enrich_tasks.get(job_id)
@@ -100,7 +110,13 @@ class PipelineAgentTasksMixin:
             state = self._load(job_id)
         except FileNotFoundError as e:
             raise KeyError(job_id) from e
-        if is_transcript_only_collect(state.inputs):
+        strategy = pipeline_strategy("asr", state.inputs.get("domain"))
+        policy = (
+            strategy.asr_policy(state.inputs)
+            if strategy.asr_policy is not None
+            else None
+        )
+        if policy is None or not policy.refresh:
             return False
         asr = state.nodes.get("asr")
         if asr is None or asr.status in ("running", "queued"):
@@ -180,16 +196,18 @@ class PipelineAgentTasksMixin:
             doc = json.loads(p.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return None
+        doc.setdefault("mode", "topic_discovery")
         task = self._guiguzi_tasks.get(job_id)
         if task is None or task.done():
             # 无存活后台任务 → 若是终态（done/analyzed）正常返回，否则删文件
-            if doc.get("status") in ("done", "analyzed"):
+            if doc.get("status") in ("done", "analyzed", "failed"):
                 return doc
             p.unlink(missing_ok=True)
             return None
         return doc
 
     def _write_guiguzi(self, job_id: str, doc: dict[str, Any]) -> None:
+        doc.setdefault("mode", "topic_discovery")
         p = self._guiguzi_path(job_id)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -247,6 +265,19 @@ class PipelineAgentTasksMixin:
         return on_progress
 
     def analyze_guiguzi(self, job_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Resolve the domain policy for Guiguzi's unchanged analyze endpoint."""
+        try:
+            state = self._load(job_id)
+        except FileNotFoundError as exc:
+            raise KeyError(job_id) from exc
+        strategy = guiguzi_strategy(state.inputs.get("domain"))
+        return strategy.processor.analyze(self, job_id, items)
+
+    def _analyze_guiguzi_default(
+        self,
+        job_id: str,
+        items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """第一步：双模型并行反推爆款原因。立即返回 analyzing doc，后台跑，前端轮询取 analyzed。"""
         try:
             self._load(job_id)
@@ -314,6 +345,29 @@ class PipelineAgentTasksMixin:
     def generate_guiguzi(self, job_id: str, items: list[dict[str, Any]],
                          analysis: dict[str, Any] | None, prompt: str | None = None,
                          force: bool = False) -> dict[str, Any]:
+        """Resolve the domain policy for Guiguzi's unchanged topics endpoint."""
+        try:
+            state = self._load(job_id)
+        except FileNotFoundError as exc:
+            raise KeyError(job_id) from exc
+        strategy = guiguzi_strategy(state.inputs.get("domain"))
+        return strategy.processor.topics(
+            self,
+            job_id,
+            items,
+            analysis,
+            prompt=prompt,
+            force=force,
+        )
+
+    def _generate_guiguzi_default(
+        self,
+        job_id: str,
+        items: list[dict[str, Any]],
+        analysis: dict[str, Any] | None,
+        prompt: str | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
         """第二步：以(用户选定/编辑的)analysis 出选题。
 
         prompt 传入(用户编辑后的提示词模板,含 $source)则用它,且按全量重出(自定义 prompt 不做增量)。

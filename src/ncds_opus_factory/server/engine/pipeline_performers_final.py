@@ -28,12 +28,16 @@ from ncds_opus_factory.commands import render_final_preview, shenkuo
 from ncds_opus_factory.common import tikhub_client
 from ncds_opus_factory.server import storyboard_director
 from ncds_opus_factory.server.domain_profiles import get_profile as _get_domain_profile
-from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
+from ncds_opus_factory.server.domain_strategy import (
+    AsrCollectionPolicy,
+    EngineStrategyContext,
+    normalize_domain,
+)
 from ncds_opus_factory.server.pipeline_asr_tasks import (
     collect_entry_error,
-    is_film_domain_collect,
-    is_transcript_only_collect,
 )
+from ncds_opus_factory.server.pipeline_domain_strategies import pipeline_strategy
+from ncds_opus_factory.server.pipeline_image_tasks import PipelineImageRun
 from ncds_opus_factory.server.pipeline_lines_tasks import (
     _build_lines_prompt,
     _episode_from_lines_response,
@@ -104,12 +108,13 @@ def _episode_path(job_dir: Path) -> Path:
 # web 画布的 ASR 节点固定走 legacy fast collect 路径；这里给 /instances 保留同口径 performer，
 # 避免注册了另一套 video_pipeline 转写实现却在主链跑不到。
 # ---------------------------------------------------------------------------
-def run_asr_step(
+def _run_asr_default(
     on_progress: Callable[[str], None],
     *,
     job_dir: str,
     urls: list[str],
     shares: list[dict[str, Any]] | None = None,
+    policy: AsrCollectionPolicy,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """ASR：串行处理每条媒体 URL，产出沈括快采 entry（文案/评论/元数据）。"""
@@ -119,13 +124,8 @@ def run_asr_step(
 
     collect_dir = jd / "01_collect"
     collect_dir.mkdir(parents=True, exist_ok=True)
-    film_domain = is_film_domain_collect(kwargs)
-    transcript_only = is_transcript_only_collect(kwargs)
-    top_comments = 0 if transcript_only else 20
-    if film_domain:
-        on_progress("沈括影视采集模式：跳过评论、抠图和音轨提取")
-    elif transcript_only:
-        on_progress("沈括纯文案模式：跳过评论和抠图，保留音轨采集")
+    if policy.progress_message:
+        on_progress(policy.progress_message)
 
     # shares：InputPanel 解析出的标题/作者，按 URL 对齐（可选）。
     shares_by_url: dict[str, dict[str, Any]] = {}
@@ -174,8 +174,9 @@ def run_asr_step(
             entry = _collect_one(
                 aweme_id, collect_dir,
                 meta=meta, on_progress=item_progress,
-                top_comments=top_comments,
-                do_audio=not film_domain, do_frames=False,
+                top_comments=policy.top_comments,
+                do_audio=policy.do_audio,
+                do_frames=policy.do_frames,
                 platform=platform, source_url=source_url,
             )
             entry["index"] = idx
@@ -202,6 +203,42 @@ def run_asr_step(
     return {"collected": collected, "items": collected, "collect_dir": str(collect_dir)}
 
 
+def run_asr_step(
+    on_progress: Callable[[str], None],
+    *,
+    job_dir: str,
+    urls: list[str],
+    shares: list[dict[str, Any]] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Resolve the shared ASR domain policy for direct InstanceRunner calls."""
+    params = {
+        "job_dir": job_dir,
+        "urls": urls,
+        "shares": shares,
+        **kwargs,
+    }
+    strategy = pipeline_strategy("asr", params.get("domain"))
+    if strategy.asr_policy is None:
+        raise RuntimeError("ASR domain strategy has no collection policy")
+    policy = strategy.asr_policy(params)
+    context = EngineStrategyContext(
+        node="asr",
+        domain=normalize_domain(params.get("domain")),
+        params=params,
+        on_progress=on_progress,
+        default_execute=lambda: _run_asr_default(
+            on_progress,
+            job_dir=job_dir,
+            urls=urls,
+            shares=shares,
+            policy=policy,
+            **kwargs,
+        ),
+    )
+    return strategy.execute_engine(context)
+
+
 # ---------------------------------------------------------------------------
 # RW performer：多模型并行改写（按 MODEL_CANDIDATES），同步包装 asyncio 并发。
 # 忠实复刻 PipelineRunner._execute_rw，做了以下替换：
@@ -214,7 +251,7 @@ def run_asr_step(
 # 同步函数（引擎在 to_thread 里跑）：内部用 asyncio.run() 跑 gather 并发，
 # 不改成串行，保留原版多模型真并发语义。
 # ---------------------------------------------------------------------------
-def run_rw_step(
+def _run_rw_default(
     on_progress: Callable[[str], None],
     *,
     job_dir: str,
@@ -303,6 +340,35 @@ def run_rw_step(
         "candidate_count": len(drafts_out),
         "success_count": success_count,
     }
+
+
+def run_rw_step(
+    on_progress: Callable[[str], None],
+    *,
+    job_dir: str,
+    asr_items: list[dict[str, Any]],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Resolve the shared RW domain policy for direct InstanceRunner calls."""
+    params = {
+        "job_dir": job_dir,
+        "asr_items": asr_items,
+        **kwargs,
+    }
+    strategy = pipeline_strategy("rw", params.get("domain"))
+    context = EngineStrategyContext(
+        node="rw",
+        domain=normalize_domain(params.get("domain")),
+        params=params,
+        on_progress=on_progress,
+        default_execute=lambda: _run_rw_default(
+            on_progress,
+            job_dir=job_dir,
+            asr_items=asr_items,
+            **kwargs,
+        ),
+    )
+    return strategy.execute_engine(context)
 
 
 def run_lines_step(
