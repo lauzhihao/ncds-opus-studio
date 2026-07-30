@@ -1,9 +1,10 @@
 """Offline steps for the authorised ``film_localization`` recipe.
 
-This module only uses the source video uploaded to the job directory.  It does
-not alter watermark/DRM data and does not implement any platform-detection
-evasion.  Every externally supplied path is resolved below the job directory
-before it is passed to ffmpeg or an ASR provider.
+This module imports only the source link recorded on the job, then uses the
+job-local video for all later steps. It does not alter watermark/DRM data and
+does not implement any platform-detection evasion. Every filesystem path is
+resolved below the job directory before it is passed to ffmpeg or an ASR
+provider.
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+from ncds_opus_core.common import cancel
 from ncds_opus_core.common.tts_provider import SynthSpec, get_provider
 
 from ncds_opus_factory.common import capabilities
@@ -29,6 +32,14 @@ _ANALYSIS_DIR = "01_analysis"
 _LOCALIZE_DIR = "02_localize"
 _VOICE_DIR = "03_voice"
 _RENDER_DIR = "04_render"
+_FILM_SOURCE_SUFFIXES = {".mp4", ".mov", ".mkv"}
+_SOURCE_PLATFORMS = {"douyin", "tiktok", "youtube"}
+_SOURCE_HOSTS = {
+    "douyin": ("douyin.com",),
+    "tiktok": ("tiktok.com",),
+    "youtube": ("youtube.com", "youtu.be"),
+}
+_DEFAULT_FILM_MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024
 
 
 def _safe_job_file(job_dir: Path, relpath: str) -> Path:
@@ -47,13 +58,91 @@ def _source_video(job_dir: Path, inputs: dict[str, Any]) -> tuple[Path, str]:
         raise ValueError("rights_confirmed=true is required before film processing")
     relpath = str(inputs.get("source_video") or "").strip()
     if not relpath:
-        raise ValueError("source video missing; upload it before running analyze")
+        raise ValueError("source video missing; import it before running analyze")
     source = _safe_job_file(job_dir, relpath)
     if not source.is_file() or source.parent.name != _SOURCE_DIR:
-        raise ValueError("uploaded source video is unavailable")
-    if source.suffix.lower() not in {".mp4", ".mov", ".mkv"}:
-        raise ValueError("uploaded source video type is not supported")
+        raise ValueError("imported source video is unavailable")
+    if source.suffix.lower() not in _FILM_SOURCE_SUFFIXES:
+        raise ValueError("imported source video type is not supported")
     return source, relpath
+
+
+def _film_max_source_bytes() -> int:
+    raw = os.getenv("NOF_FILM_SOURCE_MAX_BYTES") or os.getenv("NOF_FILM_MAX_UPLOAD_BYTES")
+    if not raw:
+        return _DEFAULT_FILM_MAX_SOURCE_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_FILM_MAX_SOURCE_BYTES
+    return value if value > 0 else _DEFAULT_FILM_MAX_SOURCE_BYTES
+
+
+def _source_reference(inputs: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Validate a resolver-produced public work reference before importing it."""
+    if inputs.get("rights_confirmed") is not True:
+        raise ValueError("rights confirmation is required before film processing")
+    ref = inputs.get("source_ref")
+    if not isinstance(ref, dict):
+        raise ValueError("source reference is missing")
+    platform = str(ref.get("platform") or "").strip().lower()
+    work_id = str(ref.get("work_id") or "").strip()
+    source_url = str(ref.get("source_url") or "").strip()
+    title = str(ref.get("title") or "").strip()
+    if platform not in _SOURCE_PLATFORMS:
+        raise ValueError("source platform is not supported")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", work_id):
+        raise ValueError("source work id is invalid")
+    parsed = urlparse(source_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host or not any(host == suffix or host.endswith(f".{suffix}") for suffix in _SOURCE_HOSTS[platform]):
+        raise ValueError("source URL is not a supported platform link")
+    return platform, work_id, source_url, title
+
+
+def run_import(*, job_dir: str, inputs: dict[str, Any], on_progress: ProgressFn) -> dict[str, Any]:
+    """Import one authorized resolver-produced source into ``00_source``."""
+    root = Path(job_dir)
+    platform, work_id, source_url, title = _source_reference(inputs)
+    source_dir = root / _SOURCE_DIR
+    source_dir.mkdir(parents=True, exist_ok=True)
+    final_path = source_dir / "source.mp4"
+    partial_path = source_dir / "source.download.mp4"
+    if final_path.is_file() and final_path.stat().st_size > 0:
+        size_bytes = final_path.stat().st_size
+        on_progress("Reusing imported source video")
+    else:
+        partial_path.unlink(missing_ok=True)
+        on_progress("Importing source video from share link")
+        capabilities.fetch_and_download(
+            work_id,
+            partial_path,
+            on_progress=on_progress,
+            check=cancel.current(),
+            platform=platform,
+            source_url=source_url,
+        )
+        cancel.checkpoint()
+        if not partial_path.is_file() or partial_path.stat().st_size == 0:
+            raise RuntimeError("source import produced no video")
+        size_bytes = partial_path.stat().st_size
+        max_bytes = _film_max_source_bytes()
+        if size_bytes > max_bytes:
+            partial_path.unlink(missing_ok=True)
+            raise RuntimeError(f"source exceeds configured limit of {max_bytes} bytes")
+        partial_path.replace(final_path)
+    source_relpath = f"{_SOURCE_DIR}/{final_path.name}"
+    source_meta = {
+        "path": source_relpath,
+        "size_bytes": size_bytes,
+        "platform": platform,
+        "work_id": work_id,
+        "source_url": source_url,
+        "title": title,
+        "rights_confirmed": True,
+    }
+    on_progress("Source import complete")
+    return {"source_video": source_relpath, "source": source_meta}
 
 
 def _run_checked(args: list[str], label: str) -> subprocess.CompletedProcess[str]:

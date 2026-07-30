@@ -45,6 +45,35 @@ def _create_film_job(client: TestClient) -> str:
     return response.json()["job_id"]
 
 
+def test_film_localization_link_source_creates_import_ready_job(client: TestClient) -> None:
+    response = client.post(
+        "/jobs",
+        json={
+            "pipeline_id": "film_localization",
+            "title": "链接原片本地化",
+            "inputs": {
+                "profile": "film",
+                "source_language": "zh",
+                "target_language": "en",
+                "rights_confirmed": True,
+                "source_ref": {
+                    "platform": "douyin",
+                    "work_id": "7650894465690766623",
+                    "source_url": "https://www.douyin.com/video/7650894465690766623",
+                    "title": "授权原片",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    job = response.json()
+    assert job["nodes"]["input"]["status"] == "done"
+    assert job["nodes"]["import"]["status"] == "idle"
+    assert job["nodes"]["analyze"]["status"] == "idle"
+    assert job["inputs"]["source_ref"]["source_url"].startswith("https://www.douyin.com/")
+
+
 def test_film_localization_source_upload_persists_authorized_mp4(
     client: TestClient,
     mp4_bytes: bytes,

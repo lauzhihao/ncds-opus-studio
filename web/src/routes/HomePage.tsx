@@ -404,7 +404,7 @@ export function HomePage() {
         <AddTempTaskModal
           onClose={() => setShowAddTemp(false)}
           onCreated={(jobId) => { if (mockMode) void openDemoJob(); else nav(`/jobs/${jobId}`); }}
-          onFilmLocalization={() => { setShowAddTemp(false); nav('/film'); }}
+          onFilmCreated={(jobId) => { setShowAddTemp(false); nav(`/film/${jobId}`); }}
         />
       )}
 
@@ -667,11 +667,11 @@ const MAX_STAGED_WORK = 5; // 一次最多解析 5 个作品
 function AddTempTaskModal({
   onClose,
   onCreated,
-  onFilmLocalization,
+  onFilmCreated,
 }: {
   onClose: () => void;
   onCreated: (jobId: string) => void;
-  onFilmLocalization: () => void;
+  onFilmCreated: (jobId: string) => void;
 }) {
   const { showToast } = useToast();
   const [text, setText] = useState('');
@@ -818,6 +818,47 @@ function AddTempTaskModal({
     }
   }
 
+  async function doCreateFilmLocalization() {
+    if (!allReadyHaveDomain) {
+      setErr('请先选择领域标签，再创建任务');
+      return;
+    }
+    if (ready.length !== 1 || ready[0].domain !== 'film') {
+      setErr('影视本地化一次只能使用一条已选择“影视”的原片');
+      return;
+    }
+    const source = ready[0].work!;
+    setBusy(true);
+    setErr(null);
+    try {
+      const state = await api.createJob({
+        pipeline_id: 'film_localization',
+        title: source.title.trim().slice(0, 60) || '影视本地化',
+        inputs: {
+          profile: 'film',
+          source_language: 'zh',
+          target_language: 'en',
+          rights_confirmed: true,
+          source_ref: {
+            platform: source.platform,
+            work_id: source.aweme_id,
+            source_url: source.share_url,
+            title: source.title,
+          },
+        },
+      });
+      await api.runNode(state.job_id, 'import');
+      void followMarkedAuthors();
+      onFilmCreated(state.job_id);
+    } catch (e: unknown) {
+      console.error('[AddTempTaskModal] create film localization failed', e);
+      setErr('影视原片导入任务创建失败，请稍后重试');
+      showToast('影视原片导入任务创建失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Modal title="用分享链接新建临时任务" onClose={onClose}>
       <div className="modal-form">
@@ -943,7 +984,7 @@ function AddTempTaskModal({
                     ))}
                   </div>
                   {s.domain === 'film' && (
-                    <p className="film-domain-note">影视本地化仅处理你上传并确认授权的原片，分享链接不会导入原视频。</p>
+                    <p className="film-domain-note">影视本地化会直接使用该分享链接对应的原片；点击创建即确认你拥有必要授权。</p>
                   )}
                 </div>
               </div>
@@ -966,11 +1007,11 @@ function AddTempTaskModal({
           <button className="btn ghost sm" onClick={onClose} disabled={busy}>取消</button>
           <button
             className="btn primary sm"
-            onClick={hasFilmDomain ? onFilmLocalization : doCreate}
+            onClick={hasFilmDomain ? doCreateFilmLocalization : doCreate}
             disabled={busy || !allReadyHaveDomain}
           >
             {busy ? <Loader2 size={13} strokeWidth={2} className="spin" /> : <Sparkles size={13} strokeWidth={1.8} />}
-            {busy ? '创建中…' : hasFilmDomain ? '前往上传授权原片' : `新建作品${ready.length ? ` (${ready.length})` : ''}`}
+            {busy ? '创建中…' : hasFilmDomain ? '创建影视本地化' : `新建作品${ready.length ? ` (${ready.length})` : ''}`}
           </button>
         </div>
       </div>

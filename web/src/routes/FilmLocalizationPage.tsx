@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Download, Film, Loader2, Play, Upload } from 'lucide-react';
+import { ArrowLeft, Download, Loader2, Play } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { api } from '../api/client';
@@ -7,6 +7,7 @@ import type { JobState, NodeState } from '../api/types';
 import { useJobStream } from '../hooks/useJobStream';
 
 const STEP_COPY: Record<string, string> = {
+  import: '导入原片',
   analyze: '分析原片',
   localize: '英语本地化',
   voice: '英语配音',
@@ -23,9 +24,6 @@ export function FilmLocalizationPage() {
   const nav = useNavigate();
   const { job: streamJob } = useJobStream(jobId);
   const [fallbackJob, setFallbackJob] = useState<JobState | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState('');
-  const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [localization, setLocalization] = useState('');
@@ -45,25 +43,6 @@ export function FilmLocalizationPage() {
       .then(setLocalization)
       .catch(() => undefined);
   }, [jobId, job?.nodes.localize?.status, localizationDirty]);
-
-  async function createAndUpload() {
-    if (!file || !rightsConfirmed) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await api.createJob({
-        pipeline_id: 'film_localization',
-        title: title.trim() || file.name.replace(/\.[^.]+$/, ''),
-        inputs: { profile: 'film', target_language: 'en', source_language: 'zh' },
-      });
-      await api.uploadFilmSource(created.job_id, file, true);
-      nav(`/film/${created.job_id}`, { replace: true });
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '上传失败，请稍后重试');
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function runStep(step: string) {
     if (!jobId) return;
@@ -98,33 +77,15 @@ export function FilmLocalizationPage() {
         <header className="film-header">
           <div>
             <span className="film-kicker">Film localization MVP</span>
-            <h1>授权原片 · 英语本地化</h1>
-            <p>上传单个中文原片，生成英语配音、双语字幕和竖版成片。CosyVoice 作为当前通用配音占位，后续可替换为你的声音克隆 provider。</p>
+            <h1>原片直入 · 英语本地化</h1>
+            <p>在 Studio 粘贴原片分享链接，选择“影视”并创建任务。系统会导入该原片，生成英语配音、双语字幕和竖版成片。</p>
           </div>
           <button type="button" className="btn ghost sm" onClick={() => nav('/')}><ArrowLeft size={14} /> 返回 Studio</button>
         </header>
         <section className="film-card">
-          <h2>1. 上传授权原片</h2>
-          <p>支持 MP4、MOV、MKV，单文件上限由服务器配置控制。</p>
-          <div className="film-dropzone">
-            <Upload size={28} strokeWidth={1.5} />
-            <input type="file" accept="video/mp4,video/quicktime,video/x-matroska,.mp4,.mov,.mkv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-            {file && <span className="film-file-name">{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MiB</span>}
-          </div>
-          <label className="form-field" style={{ marginTop: 'var(--s-4)' }}>
-            <span>作品名称</span>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="默认使用文件名" />
-          </label>
-          <label className="film-rights">
-            <input type="checkbox" checked={rightsConfirmed} onChange={(e) => setRightsConfirmed(e.target.checked)} />
-            <span>我确认拥有该原片用于本次翻译、本地化、配音与导出的必要授权。</span>
-          </label>
-          <div className="film-actions">
-            <button type="button" className="btn primary" disabled={!file || !rightsConfirmed || busy} onClick={() => void createAndUpload()}>
-              {busy ? <Loader2 size={15} className="spin" /> : <Film size={15} />} 创建并上传
-            </button>
-            {error && <span className="film-error">{error}</span>}
-          </div>
+          <h2>从分享链接创建</h2>
+          <p>返回 Studio 后点击“优质作品”，粘贴原片分享链接；解析完成选择“影视”，即可直接创建并导入原片。</p>
+          <button type="button" className="btn primary" onClick={() => nav('/')}><ArrowLeft size={15} /> 前往 Studio</button>
         </section>
       </main>
     );
@@ -154,7 +115,7 @@ export function FilmLocalizationPage() {
       <div className="film-grid">
         <section className="film-card">
           <h2>原片与成片</h2>
-          {sourceUrl ? <video className="film-preview" src={sourceUrl} controls /> : <p>原片上传后会在这里预览。</p>}
+          {sourceUrl ? <video className="film-preview" src={sourceUrl} controls /> : <p>原片导入完成后会在这里预览。</p>}
           {outputUrl && (
             <>
               <h2 style={{ marginTop: 'var(--s-6)' }}>英语竖版成片</h2>

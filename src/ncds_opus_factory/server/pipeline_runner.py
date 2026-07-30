@@ -205,8 +205,26 @@ class PipelineRunner(
             render_run=render_cmd.run,
         ).run()
 
+    async def _execute_film_import(self, job_id: str) -> dict[str, Any]:
+        """Import one authorized source link into the film job directory."""
+        state = self._load(job_id)
+        outputs = await self._run_in_thread_cancellable(
+            film_localization_tasks.run_import,
+            self._cancel_flag(job_id, "import"),
+            job_dir=str(self.video_jobs_dir / job_id), inputs=state.inputs,
+            on_progress=lambda text: self._push_progress(job_id, "import", text),
+        )
+        state = self._load(job_id)
+        state.inputs.update({
+            "source_video": outputs["source_video"],
+            "source": outputs["source"],
+        })
+        self._save(state)
+        self._emit(job_id, {"type": "job_updated", "job_id": job_id})
+        return outputs
+
     async def _execute_film_analyze(self, job_id: str) -> dict[str, Any]:
-        """Analyze one uploaded authorised source video for film_localization."""
+        """Analyze one imported authorized source video for film_localization."""
         state = self._load(job_id)
         return await self._run_in_thread_cancellable(
             film_localization_tasks.run_analyze,

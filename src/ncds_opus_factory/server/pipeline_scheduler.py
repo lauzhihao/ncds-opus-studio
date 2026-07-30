@@ -382,6 +382,8 @@ class PipelineSchedulerMixin:
                 outputs = await self._execute_film_render(job_id)
             else:
                 outputs = await self._execute_render(job_id)
+        elif node_name == "import":
+            outputs = await self._execute_film_import(job_id)
         elif node_name == "analyze":
             outputs = await self._execute_film_analyze(job_id)
         elif node_name == "localize":
