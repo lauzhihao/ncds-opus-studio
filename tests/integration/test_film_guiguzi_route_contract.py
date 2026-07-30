@@ -1,31 +1,92 @@
-"""Film Guiguzi contract across auth, HTTP routes, runner and disk state."""
+"""Film text revision contracts across auth, HTTP, runner and disk state."""
 
 from __future__ import annotations
 
 import importlib
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+RAW_NARRATION_ONE = "艾米丽找到史坦兹"
+REVISED_NARRATION_ONE = "艾米莉找到斯坦斯。"
+RAW_ORIGINAL_DIALOGUE = "Emily, find Stans."
+RAW_NARRATION_TWO = "艾米莉随后发现斯坦斯的秘蜜"
+REVISED_NARRATION_TWO = "艾米莉随后发现斯坦斯的秘密。"
 
-def test_authenticated_film_guiguzi_routes_classify_timeline_in_one_stage(
+TIMELINE_SEGMENTS = [
+    {
+        "id": "seg-001",
+        "start_ms": 0,
+        "end_ms": 2300,
+        "text": RAW_NARRATION_ONE,
+        "words": [],
+    },
+    {
+        "id": "seg-002",
+        "start_ms": 2300,
+        "end_ms": 4100,
+        "text": RAW_ORIGINAL_DIALOGUE,
+        "words": [],
+    },
+    {
+        "id": "seg-003",
+        "start_ms": 4100,
+        "end_ms": 6500,
+        "text": RAW_NARRATION_TWO,
+        "words": [],
+    },
+]
+
+ENTITY_GLOSSARY = [
+    {
+        "canonical": "艾米莉",
+        "aliases": ["艾米丽"],
+        "category": "character",
+        "note": "影片女主角",
+    },
+    {
+        "canonical": "斯坦斯",
+        "aliases": ["史坦兹"],
+        "category": "character",
+    },
+]
+
+
+@dataclass
+class FilmContractEnvironment:
+    client: TestClient
+    state: Any
+    headers: dict[str, str]
+    jobs_root: Path
+    revision_agent_calls: list[list[dict[str, Any]]]
+    translation_agent_calls: list[dict[str, Any]]
+
+
+@pytest.fixture()
+def film_contract_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Film ignores comments, classifies the ASR timeline, and has no topics stage."""
+) -> FilmContractEnvironment:
+    """Start the assembled API with isolated auth, runner and artifact stores."""
     state_root = tmp_path / "state"
     jobs_root = tmp_path / "video-jobs"
     monkeypatch.setenv("NOF_STATE_DIR", str(state_root / "tasks"))
     monkeypatch.setenv("NOF_VIDEO_JOBS_DIR", str(jobs_root))
     monkeypatch.setenv("NOF_INSTANCES_DIR", str(state_root / "instances"))
     monkeypatch.setenv("NOF_AUTH_DB", str(state_root / "auth.db"))
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "contract-client")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "contract-secret")
-    monkeypatch.setenv("AUTH_SESSION_SECRET", "contract-session-secret")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "film-revision-contract-client")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "film-revision-contract-secret")
+    monkeypatch.setenv(
+        "AUTH_SESSION_SECRET",
+        "film-revision-contract-session-secret",
+    )
 
+    from ncds_opus_factory.commands import film_localization, film_script_split
     from ncds_opus_factory.server import access as access_mod
     from ncds_opus_factory.server import app as app_mod
     from ncds_opus_factory.server import state as state_mod
@@ -38,14 +99,72 @@ def test_authenticated_film_guiguzi_routes_classify_timeline_in_one_stage(
     importlib.reload(pipelines_mod)
     app_mod = importlib.reload(app_mod)
 
+    revision_agent_calls: list[list[dict[str, Any]]] = []
+    translation_agent_calls: list[dict[str, Any]] = []
+
+    def deterministic_revision_agent(
+        narration_segments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        revision_agent_calls.append(
+            [dict(segment) for segment in narration_segments]
+        )
+        return {
+            "entity_glossary": ENTITY_GLOSSARY,
+            "segments": [
+                {
+                    "segment_key": "film-contract-source:seg-001",
+                    "corrected_text": REVISED_NARRATION_ONE,
+                },
+                {
+                    "segment_key": "film-contract-source:seg-003",
+                    "corrected_text": REVISED_NARRATION_TWO,
+                },
+            ],
+        }
+
+    def deterministic_translation_agent(
+        segments: list[dict[str, Any]],
+        target_language: str,
+        entity_glossary: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        translation_agent_calls.append(
+            {
+                "segments": [dict(segment) for segment in segments],
+                "target_language": target_language,
+                "entity_glossary": [
+                    dict(entry) for entry in entity_glossary
+                ],
+            }
+        )
+        return [
+            {
+                "segment_id": str(segment["segment_key"]),
+                "translated_text": (
+                    f"translated:{segment['segment_key']}"
+                ),
+            }
+            for segment in segments
+        ]
+
+    monkeypatch.setattr(
+        film_script_split,
+        "FILM_TEXT_REVISION_AGENT",
+        deterministic_revision_agent,
+    )
+    monkeypatch.setattr(
+        film_localization,
+        "TRANSLATION_AGENT",
+        deterministic_translation_agent,
+    )
+
     user = state_mod.AUTH_STORE.upsert_auth_user(
         provider="google",
-        provider_sub="film-contract-user",
-        email="film-contract@example.com",
-        name="Film Contract",
+        provider_sub="film-revision-contract-user",
+        email="film-revision-contract@example.com",
+        name="Film Revision Contract",
         picture_url=None,
     )
-    session_value = "film-contract-session"
+    session_value = "film-revision-contract-session"
     state_mod.AUTH_STORE.create_auth_session(
         user_id=user.id,
         session_hash=hash_session_token(session_value),
@@ -54,119 +173,316 @@ def test_authenticated_film_guiguzi_routes_classify_timeline_in_one_stage(
     auth_headers = {"Authorization": f"Bearer {session_value}"}
 
     with TestClient(app_mod.app, raise_server_exceptions=False) as client:
-        created = client.post(
-            "/jobs",
+        yield FilmContractEnvironment(
+            client=client,
+            state=state_mod,
             headers=auth_headers,
-            json={
-                "pipeline_id": "final_preview",
-                "title": "film route contract",
-                "inputs": {"domain": "film"},
-            },
+            jobs_root=jobs_root,
+            revision_agent_calls=revision_agent_calls,
+            translation_agent_calls=translation_agent_calls,
         )
-        assert created.status_code == 200, created.text
-        job_id = created.json()["job_id"]
 
-        # 模拟沈括已经完成：film 无评论/无 audio，但必须有 canonical timeline。
-        timeline_path = jobs_root / job_id / "01_collect" / "asr.timeline.json"
-        timeline_path.parent.mkdir(parents=True, exist_ok=True)
-        timeline_path.write_text(
-            json.dumps(
-                {
-                    "version": 1,
-                    "segments": [
-                        {
-                            "id": "seg-001",
-                            "start_ms": 0,
-                            "end_ms": 2300,
-                            "text": "沈括采集的影视解说原稿",
-                            "words": [],
-                        },
-                        {
-                            "id": "seg-002",
-                            "start_ms": 2300,
-                            "end_ms": 4100,
-                            "text": "Don't move.",
-                            "words": [],
-                        },
-                    ],
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+
+def _create_film_job(env: FilmContractEnvironment) -> str:
+    created = env.client.post(
+        "/jobs",
+        headers=env.headers,
+        json={
+            "pipeline_id": "final_preview",
+            "title": "film revision route contract",
+            "inputs": {"domain": "film", "target_language": "en"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    return str(created.json()["job_id"])
+
+
+def _seed_asr_timeline(env: FilmContractEnvironment, job_id: str) -> None:
+    timeline_path = env.jobs_root / job_id / "01_collect" / "asr.timeline.json"
+    timeline_path.parent.mkdir(parents=True, exist_ok=True)
+    timeline_path.write_text(
+        json.dumps(
+            {"version": 1, "segments": TIMELINE_SEGMENTS},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    job = env.state.PIPELINE_RUNNER._load(job_id)
+    job.nodes["asr"].status = "done"
+    job.nodes["asr"].outputs = {
+        "collected": [
+            {
+                "index": 1,
+                "aweme_id": "film-contract-source",
+                "text": " ".join(
+                    str(segment["text"]) for segment in TIMELINE_SEGMENTS
+                ),
+                "timeline": "01_collect/asr.timeline.json",
+                "status": {"download": "ok", "transcribe": "ok"},
+            }
+        ],
+        "timeline_path": "01_collect/asr.timeline.json",
+    }
+    env.state.PIPELINE_RUNNER._save(job)
+
+
+def _poll_guiguzi(
+    env: FilmContractEnvironment,
+    job_id: str,
+) -> dict[str, Any]:
+    last: dict[str, Any] = {}
+    for _ in range(200):
+        response = env.client.get(
+            f"/jobs/{job_id}/guiguzi",
+            headers=env.headers,
         )
-        job = state_mod.PIPELINE_RUNNER._load(job_id)
-        job.nodes["asr"].status = "done"
-        job.nodes["asr"].outputs = {
-            "collected": [
-                {
-                    "index": 1,
-                    "aweme_id": "film-contract-source",
-                    "text": "沈括采集的影视解说原稿",
-                    "timeline": "01_collect/asr.timeline.json",
-                    "status": {"download": "ok", "transcribe": "ok"},
-                }
-            ]
+        if response.status_code == 200:
+            last = response.json()
+            if last.get("status") in {"done", "failed"}:
+                return last
+        time.sleep(0.01)
+    return last
+
+
+def _poll_rw_node(
+    env: FilmContractEnvironment,
+    job_id: str,
+) -> dict[str, Any]:
+    last: dict[str, Any] = {}
+    for _ in range(200):
+        response = env.client.get(f"/jobs/{job_id}", headers=env.headers)
+        assert response.status_code == 200, response.text
+        last = response.json()["nodes"]["rw"]
+        if last["status"] in {"done", "failed"}:
+            return last
+        time.sleep(0.01)
+    return last
+
+
+def test_authenticated_film_flow_revises_narration_before_translation(
+    film_contract_env: FilmContractEnvironment,
+) -> None:
+    """Guiguzi persists raw/revised text; Liuyong consumes the revised contract."""
+    env = film_contract_env
+    job_id = _create_film_job(env)
+    _seed_asr_timeline(env, job_id)
+
+    unauthenticated = env.client.post(
+        f"/jobs/{job_id}/guiguzi/analyze",
+        json={"items": []},
+    )
+    analyze_response = env.client.post(
+        f"/jobs/{job_id}/guiguzi/analyze",
+        headers=env.headers,
+        json={"items": []},
+    )
+
+    assert unauthenticated.status_code == 401
+    assert analyze_response.status_code == 200, analyze_response.text
+    assert analyze_response.json()["status"] == "running"
+
+    terminal = _poll_guiguzi(env, job_id)
+    assert terminal["status"] == "done", terminal
+    assert terminal["mode"] == "film_script_split"
+    assert terminal["revision"] == {
+        "status": "done",
+        "corrected_count": 2,
+        "narration_count": 2,
+    }
+    assert terminal["entity_glossary"] == ENTITY_GLOSSARY
+    assert len(env.revision_agent_calls) == 1
+    assert [
+        segment["segment_key"]
+        for segment in env.revision_agent_calls[0]
+    ] == [
+        "film-contract-source:seg-001",
+        "film-contract-source:seg-003",
+    ]
+
+    segments = terminal["segments"]
+    assert [
+        {
+            "segment_key": segment["segment_key"],
+            "start_ms": segment["start_ms"],
+            "end_ms": segment["end_ms"],
+            "role": segment["role"],
         }
-        state_mod.PIPELINE_RUNNER._save(job)
+        for segment in segments
+    ] == [
+        {
+            "segment_key": "film-contract-source:seg-001",
+            "start_ms": 0,
+            "end_ms": 2300,
+            "role": "replaceable_narration",
+        },
+        {
+            "segment_key": "film-contract-source:seg-002",
+            "start_ms": 2300,
+            "end_ms": 4100,
+            "role": "preserved_original",
+        },
+        {
+            "segment_key": "film-contract-source:seg-003",
+            "start_ms": 4100,
+            "end_ms": 6500,
+            "role": "replaceable_narration",
+        },
+    ]
+    assert [segment["source_text_raw"] for segment in segments] == [
+        RAW_NARRATION_ONE,
+        RAW_ORIGINAL_DIALOGUE,
+        RAW_NARRATION_TWO,
+    ]
+    assert [segment["source_text"] for segment in segments] == [
+        REVISED_NARRATION_ONE,
+        RAW_ORIGINAL_DIALOGUE,
+        REVISED_NARRATION_TWO,
+    ]
+    assert segments[1]["source_text"] == segments[1]["source_text_raw"]
 
-        unauthenticated = client.post(
-            f"/jobs/{job_id}/guiguzi/analyze",
-            json={"items": []},
-        )
-        analyze_response = client.post(
-            f"/jobs/{job_id}/guiguzi/analyze",
-            headers=auth_headers,
-            json={"items": []},
-        )
+    guiguzi_path = env.jobs_root / job_id / "guiguzi.json"
+    persisted_guiguzi = json.loads(
+        guiguzi_path.read_text(encoding="utf-8")
+    )
+    assert persisted_guiguzi["revision"] == terminal["revision"]
+    assert persisted_guiguzi["entity_glossary"] == ENTITY_GLOSSARY
+    assert persisted_guiguzi["segments"] == segments
 
-        assert unauthenticated.status_code == 401
-        assert analyze_response.status_code == 200, analyze_response.text
-        analyze_doc = analyze_response.json()
-        assert analyze_doc["status"] == "running"
-        assert analyze_doc["mode"] == "film_script_split"
-        assert analyze_doc["stage"] == "splitting"
+    topics_response = env.client.post(
+        f"/jobs/{job_id}/guiguzi/topics",
+        headers=env.headers,
+        json={
+            "items": [],
+            "analysis": {},
+            "force": True,
+        },
+    )
+    assert topics_response.status_code == 400, topics_response.text
 
-        guiguzi_path = jobs_root / job_id / "guiguzi.json"
-        terminal: dict[str, object] = {}
-        for _ in range(100):
-            polled = client.get(
-                f"/jobs/{job_id}/guiguzi",
-                headers=auth_headers,
-            )
-            if polled.status_code == 200:
-                terminal = polled.json()
-                if terminal.get("status") in {"done", "failed"}:
-                    break
-            time.sleep(0.01)
+    rw_response = env.client.post(
+        f"/jobs/{job_id}/nodes/rw/run",
+        headers=env.headers,
+        json={"params": {"target_language": "en"}},
+    )
+    assert rw_response.status_code == 200, rw_response.text
 
-        assert terminal["status"] == "done"
-        assert terminal["mode"] == "film_script_split"
-        segments = terminal["segments"]
-        assert [segment["id"] for segment in segments] == [
-            "seg-001",
-            "seg-002",
-        ]
-        assert [segment["role"] for segment in segments] == [
-            "replaceable_narration",
-            "preserved_original",
-        ]
-        assert [segment["source_text"] for segment in segments] == [
-            "沈括采集的影视解说原稿",
-            "Don't move.",
-        ]
-        assert guiguzi_path.is_file()
-        persisted = json.loads(guiguzi_path.read_text(encoding="utf-8"))
-        assert persisted["segments"] == segments
+    rw_node = _poll_rw_node(env, job_id)
+    assert rw_node["status"] == "done", rw_node
+    assert len(env.translation_agent_calls) == 1
+    translation_call = env.translation_agent_calls[0]
+    assert translation_call["target_language"] == "en"
+    assert translation_call["entity_glossary"] == ENTITY_GLOSSARY
+    assert [
+        {
+            "segment_key": segment["segment_key"],
+            "source_text_raw": segment["source_text_raw"],
+            "source_text": segment["source_text"],
+        }
+        for segment in translation_call["segments"]
+    ] == [
+        {
+            "segment_key": "film-contract-source:seg-001",
+            "source_text_raw": RAW_NARRATION_ONE,
+            "source_text": REVISED_NARRATION_ONE,
+        },
+        {
+            "segment_key": "film-contract-source:seg-003",
+            "source_text_raw": RAW_NARRATION_TWO,
+            "source_text": REVISED_NARRATION_TWO,
+        },
+    ]
 
-        topics_response = client.post(
-            f"/jobs/{job_id}/guiguzi/topics",
-            headers=auth_headers,
-            json={
-                "items": [],
-                "analysis": {},
-                "force": True,
+    localized = rw_node["outputs"]["segments"]
+    assert [
+        {
+            "segment_key": segment["segment_key"],
+            "start_ms": segment["start_ms"],
+            "end_ms": segment["end_ms"],
+            "source_text_raw": segment["source_text_raw"],
+            "source_text": segment["source_text"],
+        }
+        for segment in localized
+    ] == [
+        {
+            "segment_key": "film-contract-source:seg-001",
+            "start_ms": 0,
+            "end_ms": 2300,
+            "source_text_raw": RAW_NARRATION_ONE,
+            "source_text": REVISED_NARRATION_ONE,
+        },
+        {
+            "segment_key": "film-contract-source:seg-003",
+            "start_ms": 4100,
+            "end_ms": 6500,
+            "source_text_raw": RAW_NARRATION_TWO,
+            "source_text": REVISED_NARRATION_TWO,
+        },
+    ]
+    assert all(
+        segment["segment_key"] != "film-contract-source:seg-002"
+        for segment in localized
+    )
+
+    localization_path = (
+        env.jobs_root / job_id / "02_rw" / "film_localization.json"
+    )
+    persisted_localization = json.loads(
+        localization_path.read_text(encoding="utf-8")
+    )
+    assert persisted_localization["segments"] == localized
+
+
+def test_film_rw_rejects_legacy_raw_script_without_completed_revision(
+    film_contract_env: FilmContractEnvironment,
+) -> None:
+    """A legacy raw-only Guiguzi artifact cannot silently enter translation."""
+    env = film_contract_env
+    job_id = _create_film_job(env)
+    _seed_asr_timeline(env, job_id)
+    guiguzi_path = env.jobs_root / job_id / "guiguzi.json"
+    guiguzi_path.write_text(
+        json.dumps(
+            {
+                "status": "done",
+                "mode": "film_script_split",
+                "segments": [
+                    {
+                        "id": "seg-001",
+                        "source_segment_id": "seg-001",
+                        "source_work_id": "film-contract-source",
+                        "segment_key": "film-contract-source:seg-001",
+                        "start_ms": 0,
+                        "end_ms": 2300,
+                        "source_text": RAW_NARRATION_ONE,
+                        "language": "zh",
+                        "confidence": 0.99,
+                        "role": "replaceable_narration",
+                    }
+                ],
             },
-        )
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
-        assert topics_response.status_code == 400, topics_response.text
+    unauthenticated = env.client.post(
+        f"/jobs/{job_id}/nodes/rw/run",
+        json={"params": {"target_language": "en"}},
+    )
+    response = env.client.post(
+        f"/jobs/{job_id}/nodes/rw/run",
+        headers=env.headers,
+        json={"params": {"target_language": "en"}},
+    )
+
+    assert unauthenticated.status_code == 401
+    assert response.status_code == 200, response.text
+    rw_node = _poll_rw_node(env, job_id)
+    assert rw_node["status"] == "failed", rw_node
+    assert "revision" in str(rw_node["error"]).lower()
+    assert env.translation_agent_calls == []
+    assert not (
+        env.jobs_root / job_id / "02_rw" / "film_localization.json"
+    ).exists()
