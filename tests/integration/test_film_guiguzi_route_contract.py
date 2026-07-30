@@ -98,6 +98,9 @@ def film_contract_env(
     importlib.reload(access_mod)
     importlib.reload(pipelines_mod)
     app_mod = importlib.reload(app_mod)
+    # 本契约覆盖 API → PipelineRunner → domain strategy → 磁盘边界；
+    # 测试进程不启动独立 nof-worker，显式走 scheduler 的 in-process dev path。
+    state_mod.PIPELINE_RUNNER.attach_task_runner(None)
 
     revision_agent_calls: list[list[dict[str, Any]]] = []
     translation_agent_calls: list[dict[str, Any]] = []

@@ -37,6 +37,7 @@ CLASSIFIED_SEGMENTS = [
         "segment_key": "film-source-1:seg-001",
         "start_ms": 0,
         "end_ms": 3200,
+        "source_text_raw": TIMELINE_SEGMENTS[0]["text"],
         "source_text": TIMELINE_SEGMENTS[0]["text"],
         "language": "zh",
         "confidence": 0.98,
@@ -49,12 +50,20 @@ CLASSIFIED_SEGMENTS = [
         "segment_key": "film-source-1:seg-002",
         "start_ms": 3200,
         "end_ms": 5100,
+        "source_text_raw": TIMELINE_SEGMENTS[1]["text"],
         "source_text": TIMELINE_SEGMENTS[1]["text"],
         "language": "en",
         "confidence": 0.96,
         "role": "preserved_original",
     },
 ]
+
+FILM_ENTITY_GLOSSARY: list[dict[str, Any]] = []
+FILM_REVISION = {
+    "status": "done",
+    "corrected_count": 0,
+    "narration_count": 1,
+}
 
 TRANSLATED_NARRATION = "At the final moment, the detective finally saw the truth."
 
@@ -129,7 +138,11 @@ def contract_env(
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "strategy-contract-secret")
     monkeypatch.setenv("AUTH_SESSION_SECRET", "strategy-contract-session-secret")
 
-    from ncds_opus_factory.commands import film_localization, guiguzi
+    from ncds_opus_factory.commands import (
+        film_localization,
+        film_script_split,
+        guiguzi,
+    )
     from ncds_opus_factory.common import capabilities
     from ncds_opus_factory.server import access as access_mod
     from ncds_opus_factory.server import app as app_mod
@@ -178,11 +191,15 @@ def contract_env(
     def deterministic_translation_agent(
         segments: list[dict[str, Any]],
         target_language: str,
+        entity_glossary: list[dict[str, Any]],
     ) -> list[dict[str, str]]:
         translation_agent_calls.append(
             {
                 "segments": [dict(segment) for segment in segments],
                 "target_language": target_language,
+                "entity_glossary": [
+                    dict(entry) for entry in entity_glossary
+                ],
             }
         )
         return [
@@ -194,6 +211,20 @@ def contract_env(
             }
             for segment in segments
         ]
+
+    def deterministic_revision_agent(
+        narration_segments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "entity_glossary": FILM_ENTITY_GLOSSARY,
+            "segments": [
+                {
+                    "segment_key": segment["segment_key"],
+                    "corrected_text": segment["source_text_raw"],
+                }
+                for segment in narration_segments
+            ],
+        }
 
     def offline_detail(aweme_id: str) -> dict[str, Any]:
         return {
@@ -246,6 +277,11 @@ def contract_env(
         film_localization,
         "TRANSLATION_AGENT",
         deterministic_translation_agent,
+    )
+    monkeypatch.setattr(
+        film_script_split,
+        "FILM_TEXT_REVISION_AGENT",
+        deterministic_revision_agent,
     )
     monkeypatch.setattr(rw_helpers, "_apply_rw_qc", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(performers, "_fetch_one_video_detail", offline_detail)
@@ -489,6 +525,8 @@ def test_film_rw_node_persists_window_preserving_localization(
             {
                 "status": "done",
                 "mode": "film_script_split",
+                "revision": FILM_REVISION,
+                "entity_glossary": FILM_ENTITY_GLOSSARY,
                 "segments": CLASSIFIED_SEGMENTS,
             },
             ensure_ascii=False,
@@ -509,23 +547,28 @@ def test_film_rw_node_persists_window_preserving_localization(
     outputs = rw_node["outputs"]
     assert outputs["mode"] == "film_localization"
     assert outputs["target_language"] == "en"
+    assert outputs["entity_glossary"] == FILM_ENTITY_GLOSSARY
+    assert outputs["source_revision"] == FILM_REVISION
     translated = outputs["segments"]
     assert len(translated) == 1
     assert {
         "segment_id",
         "start_ms",
         "end_ms",
+        "source_text_raw",
         "source_text",
         "translated_text",
     } <= set(translated[0])
     assert translated[0]["segment_id"] == "seg-001"
     assert translated[0]["start_ms"] == TIMELINE_SEGMENTS[0]["start_ms"]
     assert translated[0]["end_ms"] == TIMELINE_SEGMENTS[0]["end_ms"]
+    assert translated[0]["source_text_raw"] == TIMELINE_SEGMENTS[0]["text"]
     assert translated[0]["source_text"] == TIMELINE_SEGMENTS[0]["text"]
     assert translated[0]["translated_text"] == TRANSLATED_NARRATION
     assert all(segment["segment_id"] != "seg-002" for segment in translated)
     assert len(env.translation_agent_calls) == 1
     assert env.translation_agent_calls[0]["target_language"] == "en"
+    assert env.translation_agent_calls[0]["entity_glossary"] == FILM_ENTITY_GLOSSARY
     assert [
         segment["id"]
         for segment in env.translation_agent_calls[0]["segments"]
@@ -758,6 +801,8 @@ def test_instances_film_resolves_strategy_for_every_final_performer(
             {
                 "status": "done",
                 "mode": "film_script_split",
+                "revision": FILM_REVISION,
+                "entity_glossary": FILM_ENTITY_GLOSSARY,
                 "segments": CLASSIFIED_SEGMENTS,
             },
             ensure_ascii=False,
