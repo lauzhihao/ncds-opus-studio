@@ -176,7 +176,6 @@ html, body { overflow-x: hidden; }
     span { min-width: 0; }  /* 取消固定 52px，按内容收缩 */
   }
   .modal-form .resolved-account .resolved-domains {
-    grid-column: 1 / -1;
     flex-wrap: wrap;
   }
   .modal-form .resolved-account .resolved-controls {

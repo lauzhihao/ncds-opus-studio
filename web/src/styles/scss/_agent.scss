@@ -871,10 +871,10 @@
     border-radius: var(--r-2);
     background: var(--bg-surface);
 
-    /* 网格固定各区宽度：头像 | 身份(1fr) | 数据 | 领域 | 删除 —— 跨卡片垂直对齐，整行不换行 */
+    /* 网格固定各区宽度：头像 | 身份（含领域标签） | 数据 | 删除。 */
     .resolved-row {
       display: grid;
-      grid-template-columns: 52px minmax(0, 1fr) auto auto auto;
+      grid-template-columns: 52px minmax(0, 1fr) auto auto;
       align-items: center;
       gap: var(--s-3);
     }
@@ -904,7 +904,7 @@
       border: 1px solid var(--bg-overlay);
     }
 
-    /* 身份块：昵称 + @uid（grid 第 2 列，min-width:0 才能让昵称截断生效） */
+    /* 身份块：昵称 + @uid + 领域标签（grid 第 2 列，min-width:0 才能让昵称截断生效）。 */
     .resolved-meta { min-width: 0; }
     .resolved-name {
       display: flex; align-items: center; gap: var(--s-2); min-width: 0;
@@ -938,6 +938,7 @@
     .resolved-domains {
       display: flex; align-items: center; gap: 8px 0;
       flex-wrap: wrap;
+      margin-top: var(--s-2);
     }
   }
 

@@ -604,26 +604,25 @@ function AddAccountModal({
                     <span className="resolved-nick">{p.nickname || '已解析账号'}</span>
                   </div>
                   <div className="resolved-uid mono">{p.unique_id ? `@${p.unique_id}` : p.sec_uid}</div>
+                  <div className="resolved-domains" role="radiogroup" aria-label="领域">
+                    {DOMAINS.map((d) => (
+                      <button
+                        key={d.key}
+                        type="button"
+                        role="radio"
+                        aria-checked={s.domain === d.key}
+                        className={`domain-pill ${d.colorClass}${s.domain === d.key ? ' is-on' : ''}`}
+                        onClick={() => setDomain(s.id, d.key)}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="resolved-stats">
                   <span><b>{formatCount(p.follower_count)}</b><i>粉丝</i></span>
                   <span><b>{formatCount(p.like_count)}</b><i>获赞</i></span>
                   <span><b>{formatCount(p.works_count)}</b><i>作品</i></span>
-                </div>
-                {/* 领域单选：与数据/删除同行；选中的 profile 决定后续选题/撰稿提示词（占位待填） */}
-                <div className="resolved-domains" role="radiogroup" aria-label="领域">
-                  {DOMAINS.map((d) => (
-                    <button
-                      key={d.key}
-                      type="button"
-                      role="radio"
-                      aria-checked={s.domain === d.key}
-                      className={`domain-pill ${d.colorClass}${s.domain === d.key ? ' is-on' : ''}`}
-                      onClick={() => setDomain(s.id, d.key)}
-                    >
-                      {d.label}
-                    </button>
-                  ))}
                 </div>
                 <div className="resolved-controls">
                   <button
