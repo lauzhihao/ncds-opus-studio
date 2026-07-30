@@ -11,11 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
+def test_authenticated_film_guiguzi_routes_classify_timeline_in_one_stage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """空评论请求走 ASR 原文，并经真实 route/runner 落 guiguzi.json。"""
+    """Film ignores comments, classifies the ASR timeline, and has no topics stage."""
     state_root = tmp_path / "state"
     jobs_root = tmp_path / "video-jobs"
     monkeypatch.setenv("NOF_STATE_DIR", str(state_root / "tasks"))
@@ -28,7 +28,6 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
 
     from ncds_opus_factory.server import access as access_mod
     from ncds_opus_factory.server import app as app_mod
-    from ncds_opus_factory.server import mock as mock_mod
     from ncds_opus_factory.server import state as state_mod
     from ncds_opus_factory.server.auth import hash_session_token
     from ncds_opus_factory.server.routes import pipelines as pipelines_mod
@@ -38,9 +37,6 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
     importlib.reload(access_mod)
     importlib.reload(pipelines_mod)
     app_mod = importlib.reload(app_mod)
-
-    # 唯一模型 seam：使用生产内置 mock performer，但取消展示延迟。
-    monkeypatch.setattr(mock_mod, "mock_delay_seconds", lambda _kind=None: 0.0)
 
     user = state_mod.AUTH_STORE.upsert_auth_user(
         provider="google",
@@ -70,16 +66,44 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
         assert created.status_code == 200, created.text
         job_id = created.json()["job_id"]
 
-        # 模拟沈括已经完成：无评论/无 audio，仅持久化原始转写文案。
+        # 模拟沈括已经完成：film 无评论/无 audio，但必须有 canonical timeline。
+        timeline_path = jobs_root / job_id / "01_collect" / "asr.timeline.json"
+        timeline_path.parent.mkdir(parents=True, exist_ok=True)
+        timeline_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "segments": [
+                        {
+                            "id": "seg-001",
+                            "start_ms": 0,
+                            "end_ms": 2300,
+                            "text": "沈括采集的影视解说原稿",
+                            "words": [],
+                        },
+                        {
+                            "id": "seg-002",
+                            "start_ms": 2300,
+                            "end_ms": 4100,
+                            "text": "Don't move.",
+                            "words": [],
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         job = state_mod.PIPELINE_RUNNER._load(job_id)
-        job.mock = True
         job.nodes["asr"].status = "done"
         job.nodes["asr"].outputs = {
             "collected": [
                 {
                     "index": 1,
-                    "aweme_id": "film-source-1",
+                    "aweme_id": "film-contract-source",
                     "text": "沈括采集的影视解说原稿",
+                    "timeline": "01_collect/asr.timeline.json",
                     "status": {"download": "ok", "transcribe": "ok"},
                 }
             ]
@@ -100,44 +124,10 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
         assert analyze_response.status_code == 200, analyze_response.text
         analyze_doc = analyze_response.json()
         assert analyze_doc["status"] == "running"
-        assert analyze_doc["items"] == [
-            {"text": "沈括采集的影视解说原稿", "comment": ""}
-        ]
+        assert analyze_doc["mode"] == "film_script_split"
+        assert analyze_doc["stage"] == "splitting"
 
         guiguzi_path = jobs_root / job_id / "guiguzi.json"
-        analyzed: dict[str, object] = {}
-        for _ in range(100):
-            polled = client.get(
-                f"/jobs/{job_id}/guiguzi",
-                headers=auth_headers,
-            )
-            if polled.status_code == 200:
-                analyzed = polled.json()
-                if analyzed.get("status") in {"analyzed", "failed"}:
-                    break
-            time.sleep(0.01)
-
-        assert analyzed["status"] == "analyzed"
-        assert guiguzi_path.is_file()
-        persisted = json.loads(guiguzi_path.read_text(encoding="utf-8"))
-        assert persisted["items"] == analyze_doc["items"]
-
-        topics_response = client.post(
-            f"/jobs/{job_id}/guiguzi/topics",
-            headers=auth_headers,
-            json={
-                "items": [],
-                "analysis": analyzed["analysis"],
-                "force": True,
-            },
-        )
-
-        # 合法 body 必须进入 handler，不能因 Request/ForwardRef 绑定错误返回 500。
-        assert topics_response.status_code == 200, topics_response.text
-        topics_doc = topics_response.json()
-        assert topics_doc["status"] == "running"
-        assert topics_doc["items"] == analyze_doc["items"]
-
         terminal: dict[str, object] = {}
         for _ in range(100):
             polled = client.get(
@@ -151,6 +141,32 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
             time.sleep(0.01)
 
         assert terminal["status"] == "done"
+        assert terminal["mode"] == "film_script_split"
+        segments = terminal["segments"]
+        assert [segment["id"] for segment in segments] == [
+            "seg-001",
+            "seg-002",
+        ]
+        assert [segment["role"] for segment in segments] == [
+            "replaceable_narration",
+            "preserved_original",
+        ]
+        assert [segment["source_text"] for segment in segments] == [
+            "沈括采集的影视解说原稿",
+            "Don't move.",
+        ]
+        assert guiguzi_path.is_file()
         persisted = json.loads(guiguzi_path.read_text(encoding="utf-8"))
-        assert persisted["status"] == "done"
-        assert persisted["items"] == analyze_doc["items"]
+        assert persisted["segments"] == segments
+
+        topics_response = client.post(
+            f"/jobs/{job_id}/guiguzi/topics",
+            headers=auth_headers,
+            json={
+                "items": [],
+                "analysis": {},
+                "force": True,
+            },
+        )
+
+        assert topics_response.status_code == 400, topics_response.text
