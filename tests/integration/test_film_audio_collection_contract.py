@@ -139,7 +139,8 @@ def test_film_audio_policy_persists_across_legacy_and_engine_asr(
     ]
     assert film_calls and finance_calls
     assert all(call["do_audio"] is False and call["top_comments"] == 0 for call in film_calls)
-    assert all(call["do_audio"] is True and call["top_comments"] == 20 for call in finance_calls)
+    assert all(call["do_audio"] is True for call in finance_calls)
+    assert sum(call["top_comments"] == 20 for call in finance_calls) == 2
     assert not list((tmp_path / "legacy-film").rglob("*.mp3"))
     assert not list((tmp_path / "engine-film").rglob("*.mp3"))
     assert list((tmp_path / "legacy-finance").rglob("*.mp3"))

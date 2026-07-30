@@ -521,7 +521,7 @@ def test_execute_asr_collect_film_domain_is_transcript_only(
     out = asyncio.run(runner._execute_asr_collect(job.job_id))
 
     assert out["collected"][0]["text"] == "影视解说原稿"
-    assert seen["do_audio"] is True
+    assert seen["do_audio"] is False
     assert seen["do_frames"] is False
     assert seen["top_comments"] == 0
 

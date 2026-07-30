@@ -510,7 +510,7 @@ def test_run_asr_step_normal_two_urls(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_run_asr_step_film_domain_skips_comments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """domain=film → 沈括纯文案模式：不拉评论、不做抠图，保留音轨采集。"""
+    """domain=film → 沈括影视采集模式：不拉评论、不做抠图和音轨提取。"""
     jd = tmp_path / "video-jobs" / "job1"
     seen: dict[str, Any] = {}
 
@@ -527,7 +527,7 @@ def test_run_asr_step_film_domain_skips_comments(tmp_path: Path, monkeypatch: py
     out = perf.run_asr_step(_noop, job_dir=str(jd), urls=["https://example.com/film"], domain="film")
 
     assert out["collected"][0]["text"] == "影视解说原稿"
-    assert seen["do_audio"] is True
+    assert seen["do_audio"] is False
     assert seen["do_frames"] is False
     assert seen["top_comments"] == 0
 
