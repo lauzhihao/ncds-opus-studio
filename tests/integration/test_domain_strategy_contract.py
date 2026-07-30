@@ -214,6 +214,7 @@ def contract_env(
 
     def deterministic_revision_agent(
         narration_segments: list[dict[str, Any]],
+        _on_progress: Any,
     ) -> dict[str, Any]:
         return {
             "entity_glossary": FILM_ENTITY_GLOSSARY,

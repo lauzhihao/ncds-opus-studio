@@ -107,6 +107,7 @@ def film_contract_env(
 
     def deterministic_revision_agent(
         narration_segments: list[dict[str, Any]],
+        _on_progress: Any,
     ) -> dict[str, Any]:
         revision_agent_calls.append(
             [dict(segment) for segment in narration_segments]

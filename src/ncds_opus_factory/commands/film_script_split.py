@@ -20,10 +20,9 @@ _LATIN_RE = re.compile(r"[A-Za-z]")
 ReviewerFn = Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
 ProgressFn = Callable[[str], None]
 FilmTextRevisionAgentFn = Callable[
-    [list[dict[str, Any]]],
+    [list[dict[str, Any]], ProgressFn],
     dict[str, Any],
 ]
-FILM_TEXT_REVISION_BATCH_SIZE = 80
 
 
 def _noop(_text: str) -> None:
@@ -264,28 +263,30 @@ def _parse_json_object(text: str, *, stage: str) -> dict[str, Any]:
     return value
 
 
-def _revision_source_rows(
+def _revision_agent_rows(
     segments: list[dict[str, Any]],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     return [
         {
-            "segment_key": str(segment["segment_key"]),
+            "revision_id": index,
             "source_text_raw": str(segment["source_text_raw"]),
         }
-        for segment in segments
+        for index, segment in enumerate(segments, start=1)
     ]
 
 
 def _call_opus_film_text_revision_agent(
     segments: list[dict[str, Any]],
+    on_progress: ProgressFn,
 ) -> dict[str, Any]:
-    """Build one full-film glossary, then proofread narration in bounded batches."""
+    """Build one full-film glossary, then proofread the full narration once."""
     if not is_opus_available():
         raise RuntimeError(
             "film text revision Agent unavailable: opus launcher is not installed"
         )
 
-    source_rows = _revision_source_rows(segments)
+    source_rows = _revision_agent_rows(segments)
+    on_progress("提取人物术语（Agent 1/2）")
     context_prompt = "\n".join([
         "Analyze the complete Chinese narration transcript of one film work.",
         "The transcript comes from ASR and may contain inconsistent names, "
@@ -300,7 +301,11 @@ def _call_opus_film_text_revision_agent(
         json.dumps(source_rows, ensure_ascii=False),
     ])
     context_doc = _parse_json_object(
-        call_opus(context_prompt, timeout_seconds=1800),
+        call_opus(
+            context_prompt,
+            timeout_seconds=600,
+            effort="medium",
+        ),
         stage="glossary",
     )
     context_summary = str(context_doc.get("context_summary") or "").strip()
@@ -312,45 +317,71 @@ def _call_opus_film_text_revision_agent(
         context_doc.get("entity_glossary")
     )
 
-    corrected_rows: list[dict[str, Any]] = []
-    for offset in range(0, len(segments), FILM_TEXT_REVISION_BATCH_SIZE):
-        batch = segments[offset:offset + FILM_TEXT_REVISION_BATCH_SIZE]
-        context_start = max(0, offset - 8)
-        context_end = min(
-            len(segments),
-            offset + FILM_TEXT_REVISION_BATCH_SIZE + 8,
+    on_progress("校订解说稿（Agent 2/2）")
+    correction_prompt = "\n".join([
+        "Proofread the complete Chinese film narration ASR.",
+        "Return only one JSON object with segments. segments must contain "
+        "every input revision_id exactly once and corrected_text.",
+        "Correct recognition errors, inconsistent character/place names, "
+        "homophones, wording breaks, and punctuation only.",
+        "Keep the narrator's meaning, facts, voice, and segment boundaries. "
+        "Do not summarize, translate, merge, split, or add facts.",
+        "Use the same canonical entity spelling throughout the film.",
+        "Full-film context summary:",
+        context_summary,
+        "Full-film entity glossary:",
+        json.dumps(entity_glossary, ensure_ascii=False),
+        "Complete narration to proofread:",
+        json.dumps(source_rows, ensure_ascii=False),
+    ])
+    correction_doc = _parse_json_object(
+        call_opus(
+            correction_prompt,
+            timeout_seconds=1200,
+            effort="high",
+        ),
+        stage="correction",
+    )
+    rows = correction_doc.get("segments")
+    if not isinstance(rows, list):
+        raise RuntimeError(
+            "film text revision Agent correction response must contain segments"
         )
-        neighboring_rows = source_rows[context_start:context_end]
-        correction_prompt = "\n".join([
-            "Proofread this batch of Chinese film narration ASR.",
-            "Return only one JSON object with segments. segments must contain "
-            "every input segment_key exactly once and corrected_text.",
-            "Correct recognition errors, inconsistent character/place names, "
-            "homophones, wording breaks, and punctuation only.",
-            "Keep the narrator's meaning, facts, voice, and segment boundaries. "
-            "Do not summarize, translate, merge, split, or add facts.",
-            "Use the same canonical entity spelling throughout the film.",
-            "Full-film context summary:",
-            context_summary,
-            "Full-film entity glossary:",
-            json.dumps(entity_glossary, ensure_ascii=False),
-            "Neighboring narration context:",
-            json.dumps(neighboring_rows, ensure_ascii=False),
-            "Batch to proofread:",
-            json.dumps(_revision_source_rows(batch), ensure_ascii=False),
-        ])
-        batch_doc = _parse_json_object(
-            call_opus(correction_prompt, timeout_seconds=1800),
-            stage=f"correction_batch_{offset // FILM_TEXT_REVISION_BATCH_SIZE + 1}",
+    expected_ids = set(range(1, len(segments) + 1))
+    corrected_by_id: dict[int, str] = {}
+    duplicate_ids: list[int] = []
+    extra_ids: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            revision_id = int(row.get("revision_id"))
+        except (TypeError, ValueError):
+            continue
+        corrected_text = str(row.get("corrected_text") or "").strip()
+        if revision_id not in expected_ids:
+            extra_ids.append(revision_id)
+            continue
+        if not corrected_text:
+            continue
+        if revision_id in corrected_by_id:
+            duplicate_ids.append(revision_id)
+            continue
+        corrected_by_id[revision_id] = corrected_text
+    missing_ids = sorted(expected_ids - set(corrected_by_id))
+    if missing_ids or extra_ids or duplicate_ids:
+        raise RuntimeError(
+            "film text revision Agent correction contract mismatch: "
+            f"missing={missing_ids[:5]}, extra={sorted(set(extra_ids))[:5]}, "
+            f"duplicates={sorted(set(duplicate_ids))[:5]}"
         )
-        rows = batch_doc.get("segments")
-        if not isinstance(rows, list):
-            raise RuntimeError(
-                "film text revision Agent correction batch must contain segments"
-            )
-        corrected_rows.extend(
-            row for row in rows if isinstance(row, dict)
-        )
+    corrected_rows = [
+        {
+            "segment_key": str(segment["segment_key"]),
+            "corrected_text": corrected_by_id[index],
+        }
+        for index, segment in enumerate(segments, start=1)
+    ]
 
     return {
         "entity_glossary": entity_glossary,
@@ -599,15 +630,14 @@ def classify_collected_timelines(
         if segment.get("role") == ROLE_NARRATION
     ]
     if narration:
-        on_progress("提取人物术语")
-        revision_doc = FILM_TEXT_REVISION_AGENT([
-            dict(segment) for segment in narration
-        ])
+        revision_doc = FILM_TEXT_REVISION_AGENT(
+            [dict(segment) for segment in narration],
+            on_progress,
+        )
         if not isinstance(revision_doc, dict):
             raise RuntimeError(
                 "film text revision Agent must return a JSON object"
             )
-        on_progress("校订解说稿")
         segments, entity_glossary, revision = _apply_film_text_revision(
             classified,
             revision_doc,
