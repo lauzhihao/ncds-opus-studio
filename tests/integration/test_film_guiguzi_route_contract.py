@@ -520,3 +520,68 @@ def test_deterministic_mixed_role_skips_optional_agent(
     )
 
     assert film_script_split.audit_ambiguous_segments(segments) == segments
+
+
+def test_sparse_revision_output_expands_unchanged_rows_locally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ncds_opus_factory.commands import film_script_split
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_call_opus(prompt: str, **kwargs: Any) -> str:
+        calls.append({"prompt": prompt, **kwargs})
+        if len(calls) == 1:
+            return json.dumps(
+                {
+                    "context_summary": "一部动作电影。",
+                    "entity_glossary": [],
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "reviewed_count": 2,
+                "segments": [
+                    {
+                        "revision_id": 2,
+                        "corrected_text": "校订后的第二句",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(film_script_split, "is_opus_available", lambda: True)
+    monkeypatch.setattr(film_script_split, "call_opus", fake_call_opus)
+
+    progress: list[str] = []
+    result = film_script_split._call_opus_film_text_revision_agent(
+        [
+            {
+                "segment_key": "film:1",
+                "source_text_raw": "第一句无需修改",
+            },
+            {
+                "segment_key": "film:2",
+                "source_text_raw": "第二句有错",
+            },
+        ],
+        progress.append,
+    )
+
+    assert progress == [
+        "提取人物术语（Agent 1/2）",
+        "校订解说稿（Agent 2/2）",
+    ]
+    assert [call["effort"] for call in calls] == ["medium", "medium"]
+    assert result["segments"] == [
+        {
+            "segment_key": "film:1",
+            "corrected_text": "第一句无需修改",
+        },
+        {
+            "segment_key": "film:2",
+            "corrected_text": "校订后的第二句",
+        },
+    ]

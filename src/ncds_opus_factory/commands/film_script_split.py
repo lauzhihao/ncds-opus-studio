@@ -328,8 +328,12 @@ def _call_opus_film_text_revision_agent(
     on_progress("校订解说稿（Agent 2/2）")
     correction_prompt = "\n".join([
         "Proofread the complete Chinese film narration ASR.",
-        "Return only one JSON object with segments. segments must contain "
-        "every input revision_id exactly once and corrected_text.",
+        "Review every input row, then return only one JSON object with "
+        "reviewed_count and segments.",
+        f"reviewed_count must equal {len(source_rows)}.",
+        "segments must contain only rows that require correction; omit rows "
+        "whose text is already correct. Every returned row must contain "
+        "revision_id and the complete corrected_text for that row.",
         "Correct recognition errors, inconsistent character/place names, "
         "homophones, wording breaks, and punctuation only.",
         "Keep the narrator's meaning, facts, voice, and segment boundaries. "
@@ -345,11 +349,20 @@ def _call_opus_film_text_revision_agent(
     correction_doc = _parse_json_object(
         call_opus(
             correction_prompt,
-            timeout_seconds=1200,
-            effort="high",
+            timeout_seconds=600,
+            effort="medium",
         ),
         stage="correction",
     )
+    try:
+        reviewed_count = int(correction_doc.get("reviewed_count"))
+    except (TypeError, ValueError):
+        reviewed_count = -1
+    if reviewed_count != len(segments):
+        raise RuntimeError(
+            "film text revision Agent correction contract mismatch: "
+            f"reviewed_count={reviewed_count}, expected={len(segments)}"
+        )
     rows = correction_doc.get("segments")
     if not isinstance(rows, list):
         raise RuntimeError(
@@ -376,17 +389,19 @@ def _call_opus_film_text_revision_agent(
             duplicate_ids.append(revision_id)
             continue
         corrected_by_id[revision_id] = corrected_text
-    missing_ids = sorted(expected_ids - set(corrected_by_id))
-    if missing_ids or extra_ids or duplicate_ids:
+    if extra_ids or duplicate_ids:
         raise RuntimeError(
             "film text revision Agent correction contract mismatch: "
-            f"missing={missing_ids[:5]}, extra={sorted(set(extra_ids))[:5]}, "
+            f"extra={sorted(set(extra_ids))[:5]}, "
             f"duplicates={sorted(set(duplicate_ids))[:5]}"
         )
     corrected_rows = [
         {
             "segment_key": str(segment["segment_key"]),
-            "corrected_text": corrected_by_id[index],
+            "corrected_text": corrected_by_id.get(
+                index,
+                str(segment["source_text_raw"]).strip(),
+            ),
         }
         for index, segment in enumerate(segments, start=1)
     ]
