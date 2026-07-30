@@ -318,11 +318,26 @@ export interface FilmScriptSegment {
   part_index?: number;
   start_ms: number;
   end_ms: number;
+  source_text_raw?: string;
   source_text: string;
   role: FilmScriptRole;
   language: string;
   confidence: number;
   subtype?: 'dialogue' | 'song' | 'ambience' | 'unknown';
+}
+
+export interface FilmEntityGlossaryEntry {
+  canonical: string;
+  aliases: string[];
+  category: string;
+  note?: string | null;
+}
+
+export interface FilmTextRevision {
+  status: 'running' | 'done' | 'failed';
+  corrected_count: number;
+  narration_count: number;
+  error?: string;
 }
 
 // 鬼谷子两步流结果（per-job guiguzi.json；前端轮询 GET /jobs/{id}/guiguzi）。
@@ -340,6 +355,8 @@ export interface GuiguziResult {
   topics?: GuiguziTopic[] | null;
   segments?: FilmScriptSegment[] | null;
   summary?: Partial<Record<FilmScriptRole, number>> | null;
+  entity_glossary?: FilmEntityGlossaryEntry[] | null;
+  revision?: FilmTextRevision | null;
   error?: string | null;
   progress?: string;
   updated_at?: number;
@@ -355,6 +372,7 @@ export interface FilmLocalizationSegment {
   part_index?: number | null;
   start_ms: number;
   end_ms: number;
+  source_text_raw: string;
   source_text: string;
   translated_text: string;
   target_language: FilmTargetLanguage;

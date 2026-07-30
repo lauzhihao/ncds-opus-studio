@@ -10,6 +10,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -25,12 +26,14 @@ import type {
   GuiguziItem,
   GuiguziResult,
   GuiguziTopic,
+  FilmScriptRole,
   FilmScriptSegment,
   FilmTargetLanguage,
   JobState,
 } from '../../api/types';
 import { guiguziChosenStorageKey, guiguziItemsStorageKey } from '../../config/agents';
 import { GlobalLoading } from '../GlobalLoading';
+import { QuickTip } from '../QuickTip';
 import { useToast } from '../Toast';
 
 interface Props {
@@ -88,6 +91,317 @@ const TARGET_LANGUAGES: { code: FilmTargetLanguage; label: string }[] = [
   { code: 'de', label: 'Deutsch' },
 ];
 
+const FILM_TIMELINE_WINDOW_MS = 20_000;
+const FILM_TIMELINE_TICK_OFFSETS = [0, 5_000, 10_000, 15_000, 20_000];
+const FILM_TIMELINE_MERGE_GAP_MS = 300;
+const FILM_TIMELINE_MAX_RUN_MS = 8_000;
+const FILM_TIMELINE_PRIMARY_ROLES: FilmScriptRole[] = [
+  'replaceable_narration',
+  'preserved_original',
+];
+const FILM_ROLE_META = {
+  replaceable_narration: { label: '可替换解说', shortLabel: '解说' },
+  preserved_original: { label: '电影原声', shortLabel: '原声' },
+  unknown: { label: '待确认', shortLabel: '待确认' },
+} as const;
+
+interface FilmTimelineRun {
+  key: string;
+  role: FilmScriptRole;
+  language: string;
+  startMs: number;
+  endMs: number;
+  sourceText: string;
+  segments: FilmScriptSegment[];
+}
+
+interface FilmTimelineFragment {
+  key: string;
+  run: FilmTimelineRun;
+  clipStartMs: number;
+  clipEndMs: number;
+  leftPercent: number;
+  widthPercent: number;
+}
+
+interface FilmTimelineTrack {
+  role: FilmScriptRole;
+  lanes: FilmTimelineFragment[][];
+}
+
+interface FilmTimelineWindow {
+  index: number;
+  startMs: number;
+  endMs: number;
+  tracks: FilmTimelineTrack[];
+}
+
+interface FilmTimelineGroup {
+  sourceWorkId: string;
+  windows: FilmTimelineWindow[];
+}
+
+interface FilmRoleStat {
+  count: number;
+  durationMs: number;
+}
+
+function packFilmTimelineLanes(
+  fragments: FilmTimelineFragment[],
+): FilmTimelineFragment[][] {
+  const sorted = [...fragments].sort((a, b) => (
+    a.clipStartMs - b.clipStartMs
+    || a.clipEndMs - b.clipEndMs
+  ));
+  const lanes: FilmTimelineFragment[][] = [];
+  const laneEnds: number[] = [];
+
+  sorted.forEach((fragment) => {
+    let laneIndex = laneEnds.findIndex((endMs) => fragment.clipStartMs >= endMs);
+    if (laneIndex < 0) {
+      laneIndex = lanes.length;
+      lanes.push([]);
+      laneEnds.push(0);
+    }
+    lanes[laneIndex].push(fragment);
+    laneEnds[laneIndex] = fragment.clipEndMs;
+  });
+
+  return lanes;
+}
+
+function isValidFilmSegment(segment: FilmScriptSegment): boolean {
+  return (
+    Number.isFinite(segment.start_ms)
+    && Number.isFinite(segment.end_ms)
+    && segment.end_ms > Math.max(0, segment.start_ms)
+    && segment.source_text.trim().length > 0
+  );
+}
+
+function hasSentenceEnding(text: string): boolean {
+  return /[。！？!?；;….]["'”’）)\]】》]*\s*$/.test(text);
+}
+
+function normalizeFilmLanguage(language: string): string {
+  return language.trim().toLowerCase().split(/[-_]/)[0] || 'und';
+}
+
+function joinFilmRunText(language: string, texts: string[]): string {
+  const separator = ['zh', 'ja'].includes(normalizeFilmLanguage(language))
+    ? ''
+    : ' ';
+  return texts.map((text) => text.trim()).filter(Boolean).join(separator);
+}
+
+function buildFilmTimelineRuns(segments: FilmScriptSegment[]): FilmTimelineRun[] {
+  const streams = new Map<string, Array<{
+    segment: FilmScriptSegment;
+    startMs: number;
+    endMs: number;
+  }>>();
+  segments.filter(isValidFilmSegment).forEach((segment) => {
+    const language = normalizeFilmLanguage(segment.language);
+    const key = `${segment.role}:${language}`;
+    const stream = streams.get(key) ?? [];
+    stream.push({
+      segment,
+      startMs: Math.max(0, segment.start_ms),
+      endMs: segment.end_ms,
+    });
+    streams.set(key, stream);
+  });
+  const runs: FilmTimelineRun[] = [];
+
+  streams.forEach((stream) => {
+    const streamRuns: FilmTimelineRun[] = [];
+    stream
+      .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs)
+      .forEach(({ segment, startMs, endMs }) => {
+        const previous = streamRuns[streamRuns.length - 1];
+        const previousTail = previous?.segments[previous.segments.length - 1];
+        const canMerge = Boolean(
+          previous
+          && startMs >= previous.endMs
+          && startMs - previous.endMs <= FILM_TIMELINE_MERGE_GAP_MS
+          && endMs - previous.startMs <= FILM_TIMELINE_MAX_RUN_MS
+          && !hasSentenceEnding(previousTail?.source_text ?? ''),
+        );
+
+        if (canMerge && previous) {
+          previous.endMs = endMs;
+          previous.segments.push(segment);
+          previous.sourceText = joinFilmRunText(
+            previous.language,
+            previous.segments.map((item) => item.source_text),
+          );
+          return;
+        }
+
+        streamRuns.push({
+          key: `${segment.segment_key}:${startMs}`,
+          role: segment.role,
+          language: normalizeFilmLanguage(segment.language),
+          startMs,
+          endMs,
+          sourceText: segment.source_text.trim(),
+          segments: [segment],
+        });
+      });
+    runs.push(...streamRuns);
+  });
+
+  return runs.sort((a, b) => (
+    a.startMs - b.startMs
+    || a.endMs - b.endMs
+    || a.role.localeCompare(b.role)
+  ));
+}
+
+function buildFilmTimelineGroups(
+  segments: FilmScriptSegment[],
+): FilmTimelineGroup[] {
+  const groupedSegments = new Map<string, FilmScriptSegment[]>();
+  segments.forEach((segment) => {
+    const sourceWorkId = segment.source_work_id || 'source';
+    const group = groupedSegments.get(sourceWorkId) ?? [];
+    group.push(segment);
+    groupedSegments.set(sourceWorkId, group);
+  });
+
+  return Array.from(groupedSegments.entries()).flatMap(([sourceWorkId, sourceSegments]) => {
+    const runs = buildFilmTimelineRuns(sourceSegments);
+    if (runs.length === 0) return [];
+    const maxEndMs = runs.reduce(
+      (maxEnd, run) => Math.max(maxEnd, run.endMs),
+      0,
+    );
+    const windowCount = Math.max(1, Math.ceil(maxEndMs / FILM_TIMELINE_WINDOW_MS));
+    const fragmentsByWindow = Array.from(
+      { length: windowCount },
+      () => [] as FilmTimelineFragment[],
+    );
+
+    runs.forEach((run) => {
+      const startMs = run.startMs;
+      const endMs = run.endMs;
+      const firstWindow = Math.floor(startMs / FILM_TIMELINE_WINDOW_MS);
+      const lastWindow = Math.max(
+        firstWindow,
+        Math.ceil(endMs / FILM_TIMELINE_WINDOW_MS) - 1,
+      );
+
+      for (let windowIndex = firstWindow; windowIndex <= lastWindow; windowIndex += 1) {
+        const windowStartMs = windowIndex * FILM_TIMELINE_WINDOW_MS;
+        const windowEndMs = windowStartMs + FILM_TIMELINE_WINDOW_MS;
+        const clipStartMs = Math.max(startMs, windowStartMs);
+        const clipEndMs = Math.min(endMs, windowEndMs);
+        if (clipEndMs <= clipStartMs) continue;
+
+        fragmentsByWindow[windowIndex].push({
+          key: `${run.key}:${windowIndex}:${clipStartMs}`,
+          run,
+          clipStartMs,
+          clipEndMs,
+          leftPercent: (
+            (clipStartMs - windowStartMs) / FILM_TIMELINE_WINDOW_MS
+          ) * 100,
+          widthPercent: (
+            (clipEndMs - clipStartMs) / FILM_TIMELINE_WINDOW_MS
+          ) * 100,
+        });
+      }
+    });
+
+    return [{
+      sourceWorkId,
+      windows: fragmentsByWindow.map((fragments, index) => ({
+        index,
+        startMs: index * FILM_TIMELINE_WINDOW_MS,
+        endMs: (index + 1) * FILM_TIMELINE_WINDOW_MS,
+        tracks: [
+          ...FILM_TIMELINE_PRIMARY_ROLES,
+          ...(fragments.some((fragment) => fragment.run.role === 'unknown')
+            ? ['unknown' as FilmScriptRole]
+            : []),
+        ].map((role) => ({
+          role,
+          lanes: packFilmTimelineLanes(
+            fragments.filter((fragment) => fragment.run.role === role),
+          ),
+        })),
+      })),
+    }];
+  });
+}
+
+function buildFilmRoleStats(
+  segments: FilmScriptSegment[],
+): Record<FilmScriptRole, FilmRoleStat> {
+  const roles: FilmScriptRole[] = [
+    'replaceable_narration',
+    'preserved_original',
+    'unknown',
+  ];
+  return Object.fromEntries(roles.map((role) => {
+    const roleSegments = segments.filter(
+      (segment) => segment.role === role && isValidFilmSegment(segment),
+    );
+    const intervalsBySource = new Map<string, Array<[number, number]>>();
+    roleSegments.forEach((segment) => {
+      const sourceWorkId = segment.source_work_id || 'source';
+      const intervals = intervalsBySource.get(sourceWorkId) ?? [];
+      intervals.push([Math.max(0, segment.start_ms), segment.end_ms]);
+      intervalsBySource.set(sourceWorkId, intervals);
+    });
+
+    let durationMs = 0;
+    intervalsBySource.forEach((intervals) => {
+      const sorted = intervals.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      let currentStart = -1;
+      let currentEnd = -1;
+      sorted.forEach(([startMs, endMs]) => {
+        if (currentStart < 0) {
+          currentStart = startMs;
+          currentEnd = endMs;
+        } else if (startMs <= currentEnd) {
+          currentEnd = Math.max(currentEnd, endMs);
+        } else {
+          durationMs += currentEnd - currentStart;
+          currentStart = startMs;
+          currentEnd = endMs;
+        }
+      });
+      if (currentStart >= 0) durationMs += currentEnd - currentStart;
+    });
+
+    return [role, { count: roleSegments.length, durationMs }];
+  })) as Record<FilmScriptRole, FilmRoleStat>;
+}
+
+function formatFilmTimelineTick(milliseconds: number): string {
+  const totalSeconds = Math.floor(Math.max(0, milliseconds) / 1000);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatFilmDuration(milliseconds: number): string {
+  const totalSeconds = Math.round(Math.max(0, milliseconds) / 1000);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    : `${String(totalMinutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 const GUIguziPanelByDomain: Record<string, ComponentType<Props>> = {
   film: FilmGuiguziPanel,
   film_script_split: FilmGuiguziPanel,
@@ -110,6 +424,9 @@ function FilmGuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
   const asrDone = job.nodes.asr?.status === 'done';
   const running = result?.status === 'running';
   const segments = result?.segments ?? [];
+  const roleStats = useMemo(() => buildFilmRoleStats(segments), [segments]);
+  const revisionReady = result?.revision?.status === 'done';
+  const legacyResult = result?.status === 'done' && segments.length > 0 && !revisionReady;
 
   useEffect(() => {
     api.getGuiguzi(jobId).then(setResult).catch(() => setResult(null));
@@ -165,7 +482,7 @@ function FilmGuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
           <Languages size={14} strokeWidth={1.8} />
           影视声音时间线
           <button
-            className="btn primary sm"
+            className={`btn sm${segments.length === 0 ? ' primary' : ''}`}
             disabled={!asrDone || busy || running}
             onClick={splitTimeline}
           >
@@ -193,15 +510,36 @@ function FilmGuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
       {segments.length > 0 && (
         <>
           <div className="panel-section film-summary">
-            <span>可替换解说 {result?.summary?.replaceable_narration ?? 0}</span>
-            <span>保留原声 {result?.summary?.preserved_original ?? 0}</span>
-            <span>待确认 {result?.summary?.unknown ?? 0}</span>
+            <span className="role-replaceable_narration">
+              <b>可替换解说</b>
+              <small>
+                {roleStats.replaceable_narration.count} 段 ·{' '}
+                {formatFilmDuration(roleStats.replaceable_narration.durationMs)}
+              </small>
+            </span>
+            <span className="role-preserved_original">
+              <b>电影原声</b>
+              <small>
+                {roleStats.preserved_original.count} 段 ·{' '}
+                {formatFilmDuration(roleStats.preserved_original.durationMs)}
+              </small>
+            </span>
+            <span className="role-unknown">
+              <b>待确认</b>
+              <small>{roleStats.unknown.count} 段</small>
+            </span>
           </div>
-          <div className="panel-section film-segment-list">
-            {segments.map((segment) => (
-              <FilmSegmentRow key={segment.segment_key} segment={segment} />
-            ))}
-          </div>
+          {revisionReady ? (
+            <div className="panel-hint panel-hint-info">
+              解说稿已校订 · {result.revision?.corrected_count ?? 0} 段修正 ·{' '}
+              {result.entity_glossary?.length ?? 0} 个统一术语
+            </div>
+          ) : legacyResult ? (
+            <div className="panel-hint panel-hint-error">
+              这是旧版分类结果，请先重新分类完成解说稿校订。
+            </div>
+          ) : null}
+          <FilmTimeline segments={segments} />
           <div className="panel-section film-localization-action">
             <label>
               目标语言
@@ -216,7 +554,11 @@ function FilmGuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
                 ))}
               </select>
             </label>
-            <button className="btn primary sm" disabled={busy} onClick={confirmLocalization}>
+            <button
+              className="btn primary sm"
+              disabled={busy || !revisionReady}
+              onClick={confirmLocalization}
+            >
               <Play size={12} strokeWidth={2} />
               确认并交给柳永
             </button>
@@ -227,20 +569,132 @@ function FilmGuiguziPanel({ jobId, job, onConfirmed, onGotoShenkuo }: Props) {
   );
 }
 
-function FilmSegmentRow({ segment }: { segment: FilmScriptSegment }) {
-  const roleLabel = {
-    replaceable_narration: '可替换解说',
-    preserved_original: '保留原声',
-    unknown: '待确认',
-  }[segment.role];
+function FilmTimeline({ segments }: { segments: FilmScriptSegment[] }) {
+  const groups = useMemo(() => buildFilmTimelineGroups(segments), [segments]);
+  const showGroupHeading = groups.length > 1;
+
   return (
-    <div className={`film-segment role-${segment.role}`}>
-      <div className="film-segment-meta">
-        <span>{(segment.start_ms / 1000).toFixed(1)}s–{(segment.end_ms / 1000).toFixed(1)}s</span>
-        <span>{roleLabel}</span>
-        <span>{segment.language} · {Math.round(segment.confidence * 100)}%</span>
+    <div className="panel-section film-timeline">
+      {groups.map((group, groupIndex) => (
+        <section className="film-timeline-source" key={group.sourceWorkId}>
+          {showGroupHeading && (
+            <div className="film-timeline-source-title">
+              素材 {groupIndex + 1}
+              <span>{group.sourceWorkId}</span>
+            </div>
+          )}
+          {group.windows.map((window) => (
+            <FilmTimelineWindowRow key={window.index} window={window} />
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function FilmTimelineWindowRow({ window }: { window: FilmTimelineWindow }) {
+  return (
+    <div
+      className="film-timeline-window"
+      aria-label={`${formatFilmTimelineTick(window.startMs)} 至 ${formatFilmTimelineTick(window.endMs)}`}
+      data-window-index={window.index}
+      data-window-start-ms={window.startMs}
+      data-window-end-ms={window.endMs}
+    >
+      <div className="film-timeline-ruler">
+        <div aria-hidden="true" />
+        <div className="film-timeline-axis" aria-hidden="true">
+          {FILM_TIMELINE_TICK_OFFSETS.map((offsetMs, tickIndex) => (
+            <span
+              className="film-timeline-tick"
+              data-edge={
+                tickIndex === 0
+                  ? 'start'
+                  : tickIndex === FILM_TIMELINE_TICK_OFFSETS.length - 1
+                    ? 'end'
+                    : undefined
+              }
+              key={offsetMs}
+              style={{ left: `${(offsetMs / FILM_TIMELINE_WINDOW_MS) * 100}%` }}
+            >
+              {formatFilmTimelineTick(window.startMs + offsetMs)}
+            </span>
+          ))}
+        </div>
       </div>
-      <div className="film-segment-text">{segment.source_text}</div>
+      <div className="film-timeline-tracks">
+        {window.tracks.map((track) => {
+          const roleMeta = FILM_ROLE_META[track.role];
+          const lanes = track.lanes.length > 0 ? track.lanes : [[]];
+          return (
+            <div
+              className={`film-timeline-track role-${track.role}`}
+              data-track-role={track.role}
+              key={track.role}
+            >
+              <div className="film-timeline-track-label">{roleMeta.shortLabel}</div>
+              <div className="film-timeline-track-canvas">
+                {lanes.map((lane, laneIndex) => (
+                  <div
+                    className={`film-timeline-lane${lane.length === 0 ? ' is-empty' : ''}`}
+                    key={laneIndex}
+                  >
+                    {lane.map((fragment) => {
+                      const numberedSegments = fragment.run.segments.map(
+                        (segment, index) => `${index + 1}. ${segment.source_text.trim()}`,
+                      );
+                      const segmentMarkers = fragment.run.segments.filter((segment) => (
+                        segment.start_ms > fragment.clipStartMs
+                        && segment.start_ms < fragment.clipEndMs
+                      ));
+                      return (
+                        <QuickTip
+                          aria-label={`${roleMeta.label}：${numberedSegments.join('；')}`}
+                          className={`film-timeline-clip role-${fragment.run.role}`}
+                          data-clip-start-ms={fragment.clipStartMs}
+                          data-clip-end-ms={fragment.clipEndMs}
+                          data-run-start-ms={fragment.run.startMs}
+                          data-run-end-ms={fragment.run.endMs}
+                          data-segment-count={fragment.run.segments.length}
+                          key={fragment.key}
+                          style={{
+                            left: `${fragment.leftPercent}%`,
+                            width: `${fragment.widthPercent}%`,
+                          }}
+                          tip={(
+                            <ol className="film-timeline-tip-list">
+                              {fragment.run.segments.map((segment) => (
+                                <li key={segment.segment_key}>{segment.source_text.trim()}</li>
+                              ))}
+                            </ol>
+                          )}
+                        >
+                          {segmentMarkers.map((segment) => (
+                            <i
+                              aria-hidden="true"
+                              className="film-timeline-segment-mark"
+                              key={segment.segment_key}
+                              style={{
+                                left: `${
+                                  ((segment.start_ms - fragment.clipStartMs)
+                                    / (fragment.clipEndMs - fragment.clipStartMs)) * 100
+                                }%`,
+                              }}
+                            />
+                          ))}
+                          <span className="film-timeline-clip-text">
+                            {fragment.run.sourceText}
+                          </span>
+                        </QuickTip>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

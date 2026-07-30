@@ -1,0 +1,29 @@
+/* 即时 hover/focus 提示：Portal 到 body，避免被 drawer/timeline 的 overflow 裁切。 */
+.quick-tip {
+  position: fixed;
+  z-index: 1200;
+  width: max-content;
+  max-width: min(440px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--r-1);
+  overflow: hidden auto;
+  background: rgba(28, 26, 22, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  color: #fffdf7;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition:
+    opacity 80ms linear,
+    transform 80ms var(--ease-out);
+}
+
+.quick-tip.is-ready {
+  opacity: 1;
+  transform: translateY(0);
+}

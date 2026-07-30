@@ -16,6 +16,7 @@
 @use 'scss/node-panels';
 @use 'scss/agent';
 @use 'scss/features';
+@use 'scss/tooltip';
 @use 'scss/toast';
 /* responsive 放靠后：移动端 @media 覆盖需在等特异性下压过 shell/agent/features 的桌面规则 */
 @use 'scss/responsive';

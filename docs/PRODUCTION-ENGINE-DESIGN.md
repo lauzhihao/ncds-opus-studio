@@ -74,7 +74,10 @@
 **Domain strategy 派发（2026-07-30 已实现）**：所有有执行体的生产节点在 facade 与
 `InstanceRunner` 中统一按 `(node, domain)` 从 `DomainStrategyRegistry` 解析；未知 domain 命中
 `*` default，保持既有生产行为。`film` 当前只覆盖沈括 ASR 采集策略（不提取音轨）、鬼谷子
-timeline 分类 processor、柳永 RW 本地化策略。新增 domain 只需实现并注册 strategy/processor，
+timeline 分类与解说校订 processor、柳永 RW 本地化策略。鬼谷子保留每段 immutable
+`source_text_raw`/时间戳，以全片上下文生成 `entity_glossary`，只改写解说段的展示稿
+`source_text`；柳永拒绝未完成校订的旧 raw 结果，只翻译校订稿并继承同一术语表。新增 domain
+只需实现并注册 strategy/processor，
 不改节点核心分发代码；无 performer 的 input/output/人工 preview 闸门仍按 recipe 状态机处理。
 
 ---
