@@ -907,6 +907,14 @@ function AddTempTaskModal({
                           )}
                         </button>
                       ) : null}
+                      <button
+                        className="btn sm icon-only ghost resolved-work-del"
+                        title="移除该结果"
+                        aria-label="移除"
+                        onClick={() => removeStaged(s.id)}
+                      >
+                        <Trash2 size={14} strokeWidth={1.7} />
+                      </button>
                     </div>
                   )}
                   <div className="resolved-work-stats">
@@ -939,14 +947,16 @@ function AddTempTaskModal({
                   )}
                 </div>
               </div>
-              <button
-                className="btn sm icon-only ghost resolved-work-del"
-                title="移除该结果"
-                aria-label="移除"
-                onClick={() => removeStaged(s.id)}
-              >
-                <Trash2 size={14} strokeWidth={1.7} />
-              </button>
+              {!hasAuthor && (
+                <button
+                  className="btn sm icon-only ghost resolved-work-del"
+                  title="移除该结果"
+                  aria-label="移除"
+                  onClick={() => removeStaged(s.id)}
+                >
+                  <Trash2 size={14} strokeWidth={1.7} />
+                </button>
+              )}
             </div>
           );
         })}

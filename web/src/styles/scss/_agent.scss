@@ -1057,9 +1057,13 @@
       line-height: 1.5;
     }
 
-    /* 删除按钮：图标中心与标题第一行对齐。 */
-    .resolved-work-del {
+    /* 无作者信息时，删除按钮回退到右上角。 */
+    > .resolved-work-del {
       position: absolute; top: calc(var(--s-3) - 3px); right: var(--s-3);
+      &:hover { color: var(--status-failed); border-color: var(--status-failed); }
+    }
+    .resolved-work-author-row .resolved-work-del {
+      position: static;
       &:hover { color: var(--status-failed); border-color: var(--status-failed); }
     }
 
