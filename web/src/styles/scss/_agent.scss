@@ -860,7 +860,8 @@
     &:focus { outline: none; border-color: var(--accent); }
   }
   .modal-err { color: var(--status-failed); font-size: var(--text-sm); }
-  .modal-actions { display: flex; justify-content: flex-end; gap: var(--s-2); }
+  .modal-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2); }
+  .modal-hint { margin-right: auto; color: var(--ink-3); font-size: var(--text-2xs); }
 
   /* 解析出的账号预览卡：单行 —— 头像 | 昵称/uid | 数据 | 频率+删除 */
   .resolved-account {

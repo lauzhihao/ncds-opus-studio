@@ -743,6 +743,7 @@ function AddTempTaskModal({
   }
 
   const ready = staged.filter((s) => s.status === 'done' && s.work);
+  const allReadyHaveDomain = ready.length > 0 && ready.every((s) => s.domain !== null);
   const hasFilmDomain = ready.some((s) => s.domain === 'film');
 
   // 提交时异步触发关注：把标记了 followed 的作者加入对标订阅。
@@ -783,6 +784,11 @@ function AddTempTaskModal({
   // 使其经 instance_runner._run_step 透传到每个 performer 的 params（task-2.2 已打通）。
   async function doCreate() {
     if (ready.length === 0) return;
+    if (!allReadyHaveDomain) {
+      setErr('请先为每个作品选择领域标签，再创建任务');
+      showToast('请选择领域标签');
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -947,11 +953,12 @@ function AddTempTaskModal({
         })}
 
         <div className="modal-actions">
+          {ready.length > 0 && !allReadyHaveDomain && <span className="modal-hint">请选择领域标签后再创建任务</span>}
           <button className="btn ghost sm" onClick={onClose} disabled={busy}>取消</button>
           <button
             className="btn primary sm"
             onClick={hasFilmDomain ? onFilmLocalization : doCreate}
-            disabled={busy || ready.length === 0}
+            disabled={busy || !allReadyHaveDomain}
           >
             {busy ? <Loader2 size={13} strokeWidth={2} className="spin" /> : <Sparkles size={13} strokeWidth={1.8} />}
             {busy ? '创建中…' : hasFilmDomain ? '前往上传授权原片' : `新建作品${ready.length ? ` (${ready.length})` : ''}`}
