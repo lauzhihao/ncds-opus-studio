@@ -65,6 +65,15 @@ def _raise_cancelled(*_a, **_k):
 # --------------------------------------------------------------------------- #
 # _douk_http_download：独立 DouK sidecar HTTP client
 # --------------------------------------------------------------------------- #
+def test_douk_cookie_reads_raw_browser_export(tmp_path, monkeypatch):
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text("msToken=token; passport_csrf_token=csrf; sid_guard=session")
+    monkeypatch.setenv("NOF_DOUK_DOUYIN_COOKIE_FILE", str(cookie_file))
+    monkeypatch.delenv("NOF_DOUK_DOUYIN_COOKIE", raising=False)
+
+    assert download._douk_cookie("douyin") == cookie_file.read_text()
+
+
 def test_douk_http_download_success(tmp_path, monkeypatch):
     """配置 NOF_DOUK_ENDPOINT 后，优先调用 sidecar 并把 artifact 拉回本地。"""
     out = tmp_path / "video.mp4"

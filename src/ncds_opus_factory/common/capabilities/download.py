@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,32 @@ def _douk_platform_value(platform: str, suffix: str) -> str:
     return _repo_env(key).strip() or _repo_env(f"NOF_DOUK_{suffix}").strip()
 
 
+def _douk_cookie(platform: str) -> str:
+    """返回给 DouK 的 Cookie；只从本地配置读取，绝不记录其内容。"""
+    configured = _douk_platform_value(platform, "COOKIE")
+    if configured:
+        return configured
+
+    cookie_file = _douk_platform_value(platform, "COOKIE_FILE")
+    if not cookie_file:
+        return ""
+    try:
+        contents = Path(cookie_file).expanduser().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+    # 兼容浏览器/curl 导出的 `Cookie: a=1; b=2`，也兼容单独粘贴的原始 Cookie 串。
+    header = re.search(r"(?im)\\bcookie\\s*:\\s*([^'\\\"\\r\\n\\\\]+)", contents)
+    if header:
+        return header.group(1).strip()
+    candidates = [
+        line.strip().strip("'\\\"\\\\")
+        for line in contents.splitlines()
+        if line.count("=") >= 3 and line.count(";") >= 2
+    ]
+    return max(candidates, key=len) if candidates else ""
+
+
 def _douk_file_url(endpoint: str, file_url: str) -> str:
     if file_url.startswith(("http://", "https://")):
         return file_url
@@ -105,9 +132,10 @@ def _douk_http_download(
         "source_url": source_url or "",
         "url": source_url or _ytdlp_url(aweme_id, platform=platform, source_url=source_url),
     }
+    cookie = _douk_cookie(platform)
     for key, value in {
         "proxy": _douk_platform_value(platform, "PROXY"),
-        "cookie": _douk_platform_value(platform, "COOKIE"),
+        "cookie": cookie,
         "device_id": _douk_platform_value(platform, "DEVICE_ID") if platform == "tiktok" else "",
     }.items():
         if value:
