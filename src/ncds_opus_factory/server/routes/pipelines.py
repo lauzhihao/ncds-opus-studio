@@ -476,7 +476,11 @@ async def create_jianying_draft(job_id: str, request: Request) -> dict[str, Any]
 # 鬼谷子选题（评论驱动双模型）—— virtual agent，结果落 per-job guiguzi.json，前端轮询
 # ---------------------------------------------------------------------------
 @router.post("/jobs/{job_id}/guiguzi/analyze")
-async def analyze_guiguzi(job_id: str, body: dict[str, request: Request, Any] = Body(...)) -> dict[str, Any]:
+async def analyze_guiguzi(
+    job_id: str,
+    request: Request,
+    body: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
 
     """第一步：双模型反推爆款原因。立即返回 analyzing，后台跑，前端轮询取 analyzed。
 
@@ -494,7 +498,11 @@ async def analyze_guiguzi(job_id: str, body: dict[str, request: Request, Any] = 
 
 
 @router.post("/jobs/{job_id}/guiguzi/topics")
-async def generate_guiguzi(job_id: str, body: dict[str, request: Request, Any] = Body(...)) -> dict[str, Any]:
+async def generate_guiguzi(
+    job_id: str,
+    request: Request,
+    body: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
 
     """第二步：以(用户选定/编辑的)分析为指导出选题。立即返回 generating，后台跑。
 
