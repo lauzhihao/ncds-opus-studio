@@ -60,7 +60,7 @@ def test_film_localization_source_upload_persists_authorized_mp4(
     assert response.status_code == 200, response.text
     stored = response.json()
     assert stored["source"]["filename"] == "licensed-source.mp4"
-    assert stored["source"]["path"] == "00_source/licensed-source.mp4"
+    assert stored["source"]["path"] == "00_source/source.mp4"
     assert stored["source"]["size_bytes"] == len(mp4_bytes)
     assert stored["source"]["rights_confirmed"] is True
 
@@ -77,7 +77,7 @@ def test_film_localization_source_upload_persists_authorized_mp4(
         access.PIPELINE_RUNNER.video_jobs_dir
         / job_id
         / "00_source"
-        / "licensed-source.mp4"
+        / "source.mp4"
     ).read_bytes() == mp4_bytes
 
 

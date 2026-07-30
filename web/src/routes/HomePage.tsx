@@ -4,7 +4,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Check, Link2, Loader2, Menu, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
+import { AlertCircle, Check, Clapperboard, Link2, Loader2, Menu, Plus, Radar, RotateCw, Sparkles, Trash2, UserPlus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { api } from '../api/client';
@@ -324,6 +324,9 @@ export function HomePage() {
           <span className="mark">NCDS Opus Studio</span>
         </div>
         <div className="spacer" />
+        <button type="button" className="btn ghost sm film-entry" onClick={() => nav('/film')}>
+          <Clapperboard size={14} strokeWidth={1.8} /> 影视本地化
+        </button>
         <AppsMenu />
         <ThemeSwitcher />
         <AuthUserMenu />

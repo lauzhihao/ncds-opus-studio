@@ -6,6 +6,7 @@ import { HomePage } from './routes/HomePage';
 import { AccountWorksPage } from './routes/AccountWorksPage';
 import { CanvasPage } from './routes/CanvasPage';
 import { JobCanvasPage } from './routes/JobCanvasPage';
+import { FilmLocalizationPage } from './routes/FilmLocalizationPage';
 import { AuthGate } from './components/AuthGate';
 import { ToastProvider } from './components/Toast';
 import { applyThemeFromStorage } from './hooks/useTheme';
@@ -28,6 +29,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/" element={<HomePage />} />
             <Route path="/accounts/:secUid" element={<AccountWorksPage />} />
             <Route path="/canvas/:mode" element={<CanvasPage />} />
+            <Route path="/film" element={<FilmLocalizationPage />} />
+            <Route path="/film/:jobId" element={<FilmLocalizationPage />} />
             <Route path="/jobs/:jobId" element={<JobCanvasPage />} />
           </Routes>
         </BrowserRouter>
