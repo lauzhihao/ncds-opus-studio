@@ -1015,16 +1015,16 @@
       display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); margin-top: auto;
     }
     .resolved-work-stats {
-      order: 1; flex-shrink: 0;
+      order: 1; flex: 0 0 100%;
       display: flex; flex-wrap: wrap; gap: var(--s-3);
       span { display: inline-flex; align-items: baseline; gap: 3px; }
       b { font-size: var(--text-sm); font-weight: 600; color: var(--ink-1); }
       i { font-style: normal; font-size: var(--text-2xs); color: var(--ink-3); }
     }
-    /* 作者行：作者头像+名称(左) + 关注ta 按钮(右)；桌面端推到 stats 右侧 */
+    /* 作者行：与领域标签同处第二行，靠右显示。 */
     .resolved-work-author-row {
-      order: 2; margin-left: auto;
-      display: flex; align-items: center; gap: var(--s-2); flex-shrink: 0; min-width: 0;
+      order: 4; margin-left: auto;
+      display: flex; align-items: center; gap: var(--s-2); flex: 0 0 auto; min-width: max-content;
       .btn { border-color: var(--border); }
       .btn:hover:not(:disabled) { border-color: var(--border-strong); }
     }
@@ -1039,17 +1039,17 @@
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
     }
-    /* 领域单独占一行；多个选项在这一行内自动换行，不与作者和数据挤在一起。 */
+    /* 领域标签占第二行左侧；作者行占同一行右侧。 */
     .resolved-domains {
       order: 3;
-      flex: 0 0 100%;
-      width: 100%;
+      flex: 1 1 0;
+      min-width: 0;
       flex-wrap: wrap;
       gap: 8px 0;
       margin-top: var(--s-1);
     }
     .film-domain-note {
-      order: 4;
+      order: 5;
       flex: 0 0 100%;
       margin: 0;
       color: var(--ink-3);
