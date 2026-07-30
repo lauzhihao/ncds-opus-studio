@@ -17,7 +17,7 @@ import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { AccountCard, JobCard } from '../components/WorkCards';
 import { GlobalLoading } from '../components/GlobalLoading';
 import { useToast } from '../components/Toast';
-import { DEFAULT_DOMAIN, DOMAINS, domainByKey, type DomainKey } from '../config/domains';
+import { DOMAINS, domainByKey, type DomainKey } from '../config/domains';
 import { formatCount } from '../utils/format';
 import { clearMockJobClientState, isStudioMockMode, withMockQuery } from '../utils/mockMode';
 import { platformBadgeClass, platformDisplayName } from '../utils/platform';
@@ -433,7 +433,7 @@ interface StagedAccount {
   id: string;
   status: 'loading' | 'done';
   profile?: AccountResolveResult;
-  domain: DomainKey;
+  domain: DomainKey | null;
 }
 
 const MAX_STAGED = 5; // 一次最多添加 5 个账号
@@ -470,7 +470,7 @@ function AddAccountModal({
     setErr(null);
     // 立即在列表顶部插入一行 loading（最新在最上面）；updater 内再兜一道硬上限防并发越界。
     // 若被上限挡掉，该 id 不入列，后续完成时按 id 的 map/filter 自然 no-op。
-    setStaged((prev) => (prev.length >= MAX_STAGED ? prev : [{ id, status: 'loading', domain: DEFAULT_DOMAIN }, ...prev]));
+    setStaged((prev) => (prev.length >= MAX_STAGED ? prev : [{ id, status: 'loading', domain: null }, ...prev]));
     try {
       const r = await api.resolveAccount(raw);
       if (existing.some((a) => a.sec_uid === r.sec_uid)) {
@@ -527,7 +527,7 @@ function AddAccountModal({
             note: p.nickname || null,
             enabled: true,
             platform: p.platform,
-            domain: s.domain, // 领域 profile；更新频率不下发，吃后端全局默认 3h
+            ...(s.domain ? { domain: s.domain } : {}),
             // 展示快照：卡片直接用 + 下次 resolve 命中复用
             nickname: p.nickname || null,
             avatar: p.avatar || null,
@@ -659,8 +659,8 @@ interface StagedWork {
   status: 'loading' | 'done';
   work?: WorkResolveResult;
   followed?: boolean; // 已「关注ta」加入对标
-  // 赛道：resolve 响应带已存 domain（继承/之前选的）；无则用 DEFAULT_DOMAIN 展示，但不主动写回
-  domain: DomainKey;
+  // 赛道：resolve 响应带已存 domain（继承/之前选的）；无则不选中任何标签。
+  domain: DomainKey | null;
 }
 
 const MAX_STAGED_WORK = 5; // 一次最多解析 5 个作品
@@ -689,12 +689,12 @@ function AddTempTaskModal({
     const id = String(++idRef.current);
     setText(''); // 清空输入框
     setErr(null);
-    // 立即在列表顶部插入 loading 占位；domain 先给 DEFAULT_DOMAIN，resolve 完后按响应覆盖
-    setStaged((prev) => (prev.length >= MAX_STAGED_WORK ? prev : [{ id, status: 'loading', domain: DEFAULT_DOMAIN }, ...prev]));
+    // 立即在列表顶部插入 loading 占位；domain 不设默认值，resolve 完后仅继承已有选择。
+    setStaged((prev) => (prev.length >= MAX_STAGED_WORK ? prev : [{ id, status: 'loading', domain: null }, ...prev]));
     try {
       const r = await api.resolveWork(raw);
-      // 继承已存 domain（作者采集时写入的），无则前端展示默认值（不主动写回 manifest）
-      const resolvedDomain = (r.domain && domainByKey(r.domain) ? r.domain as DomainKey : DEFAULT_DOMAIN);
+      // 仅继承已存 domain（作者采集时写入的）；新作品保持未选择状态。
+      const resolvedDomain = (r.domain && domainByKey(r.domain) ? r.domain as DomainKey : null);
       setStaged((prev) => {
         // 列表里已有同作品的 done 行 -> 静默丢弃本 loading 行（去重）
         if (prev.some((s) => s.id !== id && s.work?.aweme_id === r.aweme_id)) {
@@ -765,7 +765,6 @@ function AddTempTaskModal({
           note: a.nickname || null,
           enabled: true,
           platform: a.platform || 'douyin',
-          domain: DEFAULT_DOMAIN, // 「关注ta」无领域选择 UI，先给默认 profile，保证每个订阅作者都有领域
           nickname: a.nickname || null,
           avatar: a.avatar || null,
           unique_id: a.unique_id || null,
@@ -791,7 +790,7 @@ function AddTempTaskModal({
         const w = s.work!;
         return { url: w.share_url, title: w.title, author: w.author.nickname, tags: w.hashtags };
       });
-      // 取首条作品的赛道 key 送进引擎 inputs
+      // 仅在用户选择了赛道时送进引擎 inputs。
       const domain = ready[0].domain;
       const firstTitle = ready[0].work!.title?.trim().slice(0, 60);
       const state = await api.createJob({
@@ -800,7 +799,7 @@ function AddTempTaskModal({
           ready.length === 1 && firstTitle
             ? firstTitle
             : `临时任务 ${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`,
-        inputs: { domain }, // 赛道送进 instance inputs，引擎透传到各 performer
+        inputs: domain ? { domain } : {},
       });
       await api.updateInputs(state.job_id, { shares });
       void followMarkedAuthors(); // 关注跟随提交异步触发（不阻塞导航）
