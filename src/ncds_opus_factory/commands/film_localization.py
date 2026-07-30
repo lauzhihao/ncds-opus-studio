@@ -24,7 +24,7 @@ _LANGUAGE_NAMES = {
 
 ProgressFn = Callable[[str], None]
 TranslationAgentFn = Callable[
-    [list[dict[str, Any]], str],
+    [list[dict[str, Any]], str, list[dict[str, Any]]],
     list[dict[str, Any]],
 ]
 TRANSLATION_BATCH_SIZE = 40
@@ -55,6 +55,7 @@ def _parse_json_array(text: str) -> list[dict[str, Any]]:
 def _call_opus_translation_agent(
     segments: list[dict[str, Any]],
     target_language: str,
+    entity_glossary: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     if not is_opus_available():
         raise RuntimeError(
@@ -76,8 +77,14 @@ def _call_opus_translation_agent(
         f"Target language: {_LANGUAGE_NAMES[target_language]} ({target_language}).",
         "Return only a JSON array of objects with segment_id and translated_text.",
         "Keep every segment exactly once. Do not merge, split, omit, summarize, or add facts.",
+        "Translate source_text, which is the proofread narration.",
+        "Use one consistent target-language rendering for each canonical entity "
+        "and all of its aliases in the full-film entity glossary.",
         "At normal narration speed, compress each translation to fit its "
         "available_duration_ms while preserving meaning.",
+        "Full-film entity glossary:",
+        json.dumps(entity_glossary, ensure_ascii=False),
+        "Proofread narration segments:",
         json.dumps(payload, ensure_ascii=False),
     ])
     response = call_opus(prompt, timeout_seconds=1800)
@@ -90,6 +97,7 @@ TRANSLATION_AGENT: TranslationAgentFn = _call_opus_translation_agent
 def _translate_segments(
     segments: list[dict[str, Any]],
     target_language: str,
+    entity_glossary: list[dict[str, Any]],
     on_progress: ProgressFn,
 ) -> dict[str, str]:
     translated: dict[str, str] = {}
@@ -104,7 +112,11 @@ def _translate_segments(
             f"film localization batch {batch_no}/{batch_total}: "
             f"segments={len(batch)}"
         )
-        rows = TRANSLATION_AGENT(batch, target_language)
+        rows = TRANSLATION_AGENT(
+            [dict(segment) for segment in batch],
+            target_language,
+            [dict(entry) for entry in entity_glossary],
+        )
         cancel.checkpoint()
         batch_translated: dict[str, str] = {}
         for row in rows:
@@ -174,6 +186,16 @@ def localize_film_script(
         raise ValueError("film guiguzi.json is invalid") from exc
     if guiguzi_doc.get("mode") != "film_script_split":
         raise ValueError("film Guiguzi classification is not ready")
+    revision = guiguzi_doc.get("revision")
+    if not isinstance(revision, dict) or revision.get("status") != "done":
+        raise ValueError(
+            "film text revision is not complete; rerun Guiguzi classification"
+        )
+    entity_glossary = guiguzi_doc.get("entity_glossary")
+    if not isinstance(entity_glossary, list):
+        raise ValueError(
+            "film entity_glossary is missing; rerun Guiguzi classification"
+        )
     narration = [
         segment for segment in (guiguzi_doc.get("segments") or [])
         if isinstance(segment, dict)
@@ -181,11 +203,28 @@ def localize_film_script(
     ]
     if not narration:
         raise ValueError("film Guiguzi found no replaceable narration")
+    for segment in narration:
+        segment_key = str(segment.get("segment_key") or "")
+        if "source_text_raw" not in segment:
+            raise ValueError(
+                "film revised narration is missing source_text_raw: "
+                f"segment_key={segment_key}"
+            )
+        if not str(segment.get("source_text") or "").strip():
+            raise ValueError(
+                "film revised narration is empty: "
+                f"segment_key={segment_key}"
+            )
 
     on_progress(
         f"film localization start: segments={len(narration)}, target={language}"
     )
-    translations = _translate_segments(narration, language, on_progress)
+    translations = _translate_segments(
+        narration,
+        language,
+        entity_glossary,
+        on_progress,
+    )
     localized: list[dict[str, Any]] = []
     for segment in narration:
         start_ms = int(segment.get("start_ms") or 0)
@@ -204,6 +243,7 @@ def localize_film_script(
             "part_index": segment.get("part_index"),
             "start_ms": start_ms,
             "end_ms": end_ms,
+            "source_text_raw": str(segment.get("source_text_raw") or ""),
             "source_text": str(segment.get("source_text") or ""),
             "translated_text": translated_text,
             "target_language": language,
@@ -225,6 +265,8 @@ def localize_film_script(
         "version": 1,
         "mode": "film_localization",
         "target_language": language,
+        "entity_glossary": entity_glossary,
+        "source_revision": revision,
         "segments": localized,
     }
     rw_root = root / "02_rw"

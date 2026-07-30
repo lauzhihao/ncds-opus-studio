@@ -41,7 +41,7 @@ class DefaultGuiguziProcessor:
 
 
 class FilmGuiguziProcessor:
-    """Single-stage film timeline classification."""
+    """Single-run film timeline classification and narration revision."""
 
     def analyze(
         self,
@@ -71,8 +71,14 @@ class FilmGuiguziProcessor:
             "status": "running",
             "segments": None,
             "summary": None,
+            "entity_glossary": None,
+            "revision": {
+                "status": "running",
+                "corrected_count": 0,
+                "narration_count": 0,
+            },
             "error": None,
-            "progress": "正在按 timeline 分类解说与影视原声…",
+            "progress": "分类解说与原声",
             "updated_at": time.time(),
         }
         runner._write_guiguzi(job_id, doc)
@@ -107,11 +113,13 @@ class FilmGuiguziProcessor:
         )
 
         try:
-            segments = await asyncio.to_thread(
+            split_result = await asyncio.to_thread(
                 classify_collected_timelines,
                 runner.video_jobs_dir / job_id,
                 collected,
+                on_progress=runner._guiguzi_progress(job_id),
             )
+            segments = split_result["segments"]
             if not segments:
                 raise ValueError("沈括未产出可分类的 asr.timeline.json")
             counts = {
@@ -131,6 +139,8 @@ class FilmGuiguziProcessor:
                 "status": "done",
                 "segments": segments,
                 "summary": counts,
+                "entity_glossary": split_result["entity_glossary"],
+                "revision": split_result["revision"],
                 "error": None,
                 "progress": "",
                 "updated_at": time.time(),
@@ -142,6 +152,13 @@ class FilmGuiguziProcessor:
                 "status": "failed",
                 "segments": None,
                 "summary": None,
+                "entity_glossary": None,
+                "revision": {
+                    "status": "failed",
+                    "corrected_count": 0,
+                    "narration_count": 0,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
                 "error": f"{type(exc).__name__}: {exc}",
                 "progress": "",
                 "updated_at": time.time(),
