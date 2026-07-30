@@ -28,7 +28,7 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
 
     from ncds_opus_factory.server import access as access_mod
     from ncds_opus_factory.server import app as app_mod
-    from ncds_opus_factory.server import mock_agents
+    from ncds_opus_factory.server import mock as mock_mod
     from ncds_opus_factory.server import state as state_mod
     from ncds_opus_factory.server.auth import hash_session_token
     from ncds_opus_factory.server.routes import pipelines as pipelines_mod
@@ -40,7 +40,7 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
     app_mod = importlib.reload(app_mod)
 
     # 唯一模型 seam：使用生产内置 mock performer，但取消展示延迟。
-    monkeypatch.setattr(mock_agents, "_mock_delay_seconds", lambda _kind=None: 0.0)
+    monkeypatch.setattr(mock_mod, "mock_delay_seconds", lambda _kind=None: 0.0)
 
     user = state_mod.AUTH_STORE.upsert_auth_user(
         provider="google",
@@ -95,15 +95,6 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
             headers=auth_headers,
             json={"items": []},
         )
-        topics_response = client.post(
-            f"/jobs/{job_id}/guiguzi/topics",
-            headers=auth_headers,
-            json={
-                "items": [],
-                "analysis": {"direction": "按影视原稿拆解悬念"},
-                "force": True,
-            },
-        )
 
         assert unauthenticated.status_code == 401
         assert analyze_response.status_code == 200, analyze_response.text
@@ -114,9 +105,32 @@ def test_authenticated_film_guiguzi_routes_fallback_to_asr_text(
         ]
 
         guiguzi_path = jobs_root / job_id / "guiguzi.json"
+        analyzed: dict[str, object] = {}
+        for _ in range(100):
+            polled = client.get(
+                f"/jobs/{job_id}/guiguzi",
+                headers=auth_headers,
+            )
+            if polled.status_code == 200:
+                analyzed = polled.json()
+                if analyzed.get("status") in {"analyzed", "failed"}:
+                    break
+            time.sleep(0.01)
+
+        assert analyzed["status"] == "analyzed"
         assert guiguzi_path.is_file()
         persisted = json.loads(guiguzi_path.read_text(encoding="utf-8"))
         assert persisted["items"] == analyze_doc["items"]
+
+        topics_response = client.post(
+            f"/jobs/{job_id}/guiguzi/topics",
+            headers=auth_headers,
+            json={
+                "items": [],
+                "analysis": analyzed["analysis"],
+                "force": True,
+            },
+        )
 
         # 合法 body 必须进入 handler，不能因 Request/ForwardRef 绑定错误返回 500。
         assert topics_response.status_code == 200, topics_response.text
