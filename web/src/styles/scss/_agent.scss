@@ -1057,9 +1057,9 @@
       line-height: 1.5;
     }
 
-    /* 无作者信息时，删除按钮回退到右上角。 */
+    /* 无作者信息时，删除按钮回退到右下角。 */
     > .resolved-work-del {
-      position: absolute; top: calc(var(--s-3) - 3px); right: var(--s-3);
+      position: absolute; right: var(--s-3); bottom: var(--s-3);
       &:hover { color: var(--status-failed); border-color: var(--status-failed); }
     }
     .resolved-work-author-row .resolved-work-del {
