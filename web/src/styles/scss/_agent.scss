@@ -1057,9 +1057,9 @@
       line-height: 1.5;
     }
 
-    /* 删除按钮：右上角 */
+    /* 删除按钮：图标中心与标题第一行对齐。 */
     .resolved-work-del {
-      position: absolute; top: var(--s-3); right: var(--s-3);
+      position: absolute; top: calc(var(--s-3) - 3px); right: var(--s-3);
       &:hover { color: var(--status-failed); border-color: var(--status-failed); }
     }
 
