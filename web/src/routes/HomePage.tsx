@@ -401,7 +401,6 @@ export function HomePage() {
         <AddTempTaskModal
           onClose={() => setShowAddTemp(false)}
           onCreated={(jobId) => { if (mockMode) void openDemoJob(); else nav(`/jobs/${jobId}`); }}
-          onFilmCreated={(jobId) => { setShowAddTemp(false); nav(`/film/${jobId}`); }}
         />
       )}
 
@@ -664,11 +663,9 @@ const MAX_STAGED_WORK = 5; // 一次最多解析 5 个作品
 function AddTempTaskModal({
   onClose,
   onCreated,
-  onFilmCreated,
 }: {
   onClose: () => void;
   onCreated: (jobId: string) => void;
-  onFilmCreated: (jobId: string) => void;
 }) {
   const { showToast } = useToast();
   const [text, setText] = useState('');
@@ -740,7 +737,6 @@ function AddTempTaskModal({
 
   const ready = staged.filter((s) => s.status === 'done' && s.work);
   const allReadyHaveDomain = ready.length > 0 && ready.every((s) => s.domain !== null);
-  const hasFilmDomain = ready.some((s) => s.domain === 'film');
 
   // 提交时异步触发关注：把标记了 followed 的作者加入对标订阅。
   // 已在列表的忽略（不报错）；整体 fire-and-forget，不阻塞作品创建/导航。
@@ -804,53 +800,14 @@ function AddTempTaskModal({
         inputs: domain ? { domain } : {},
       });
       await api.updateInputs(state.job_id, { shares });
+      // 影视只复用既有 final_preview 的沈括节点；创建后立即开始采集原片、转写和音轨。
+      if (domain === 'film') await api.runNode(state.job_id, 'asr');
       void followMarkedAuthors(); // 关注跟随提交异步触发（不阻塞导航）
       onCreated(state.job_id);
     } catch (e: unknown) {
       console.error('[AddTempTaskModal] createJob 失败', e);
       setErr('创建失败，请稍后再试');
       showToast('创建临时任务失败，请稍后再试');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function doCreateFilmLocalization() {
-    if (!allReadyHaveDomain) {
-      setErr('请先选择领域标签，再创建任务');
-      return;
-    }
-    if (ready.length !== 1 || ready[0].domain !== 'film') {
-      setErr('影视本地化一次只能使用一条已选择“影视”的原片');
-      return;
-    }
-    const source = ready[0].work!;
-    setBusy(true);
-    setErr(null);
-    try {
-      const state = await api.createJob({
-        pipeline_id: 'film_localization',
-        title: source.title.trim().slice(0, 60) || '影视本地化',
-        inputs: {
-          profile: 'film',
-          source_language: 'zh',
-          target_language: 'en',
-          rights_confirmed: true,
-          source_ref: {
-            platform: source.platform,
-            work_id: source.aweme_id,
-            source_url: source.share_url,
-            title: source.title,
-          },
-        },
-      });
-      await api.runNode(state.job_id, 'import');
-      void followMarkedAuthors();
-      onFilmCreated(state.job_id);
-    } catch (e: unknown) {
-      console.error('[AddTempTaskModal] create film localization failed', e);
-      setErr('影视原片导入任务创建失败，请稍后重试');
-      showToast('影视原片导入任务创建失败');
     } finally {
       setBusy(false);
     }
@@ -1001,11 +958,11 @@ function AddTempTaskModal({
           <button className="btn ghost sm" onClick={onClose} disabled={busy}>取消</button>
           <button
             className="btn primary sm"
-            onClick={hasFilmDomain ? doCreateFilmLocalization : doCreate}
+            onClick={doCreate}
             disabled={busy || !allReadyHaveDomain}
           >
             {busy ? <Loader2 size={13} strokeWidth={2} className="spin" /> : <Sparkles size={13} strokeWidth={1.8} />}
-            {busy ? '创建中…' : hasFilmDomain ? '创建影视本地化' : `新建作品${ready.length ? ` (${ready.length})` : ''}`}
+            {busy ? '创建中…' : `新建作品${ready.length ? ` (${ready.length})` : ''}`}
           </button>
         </div>
       </div>

@@ -13,7 +13,6 @@ from typing import Any
 
 from ncds_opus_core.templates import template_dir as _template_dir
 
-from ncds_opus_factory.server import film_localization_tasks
 from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 from ncds_opus_factory.server import pipeline_rw_helpers as rw_helpers
 from ncds_opus_factory.server.pipeline_agent_tasks import PipelineAgentTasksMixin
@@ -204,59 +203,3 @@ class PipelineRunner(
             job_dir=job_dir,
             render_run=render_cmd.run,
         ).run()
-
-    async def _execute_film_import(self, job_id: str) -> dict[str, Any]:
-        """Import one authorized source link into the film job directory."""
-        state = self._load(job_id)
-        outputs = await self._run_in_thread_cancellable(
-            film_localization_tasks.run_import,
-            self._cancel_flag(job_id, "import"),
-            job_dir=str(self.video_jobs_dir / job_id), inputs=state.inputs,
-            on_progress=lambda text: self._push_progress(job_id, "import", text),
-        )
-        state = self._load(job_id)
-        state.inputs.update({
-            "source_video": outputs["source_video"],
-            "source": outputs["source"],
-        })
-        self._save(state)
-        self._emit(job_id, {"type": "job_updated", "job_id": job_id})
-        return outputs
-
-    async def _execute_film_analyze(self, job_id: str) -> dict[str, Any]:
-        """Analyze one imported authorized source video for film_localization."""
-        state = self._load(job_id)
-        return await self._run_in_thread_cancellable(
-            film_localization_tasks.run_analyze,
-            self._cancel_flag(job_id, "analyze"),
-            job_dir=str(self.video_jobs_dir / job_id), inputs=state.inputs,
-            on_progress=lambda text: self._push_progress(job_id, "analyze", text),
-        )
-
-    async def _execute_film_localize(self, job_id: str) -> dict[str, Any]:
-        """Create an English localization and bilingual subtitle artifact."""
-        return await self._run_in_thread_cancellable(
-            film_localization_tasks.run_localize,
-            self._cancel_flag(job_id, "localize"),
-            job_dir=str(self.video_jobs_dir / job_id),
-            on_progress=lambda text: self._push_progress(job_id, "localize", text),
-        )
-
-    async def _execute_film_voice(self, job_id: str) -> dict[str, Any]:
-        """Generate the temporary CosyVoice English voiceover."""
-        return await self._run_in_thread_cancellable(
-            film_localization_tasks.run_voice,
-            self._cancel_flag(job_id, "voice"),
-            job_dir=str(self.video_jobs_dir / job_id),
-            on_progress=lambda text: self._push_progress(job_id, "voice", text),
-        )
-
-    async def _execute_film_render(self, job_id: str) -> dict[str, Any]:
-        """Render the portrait film localization from job-local trusted artifacts."""
-        state = self._load(job_id)
-        return await self._run_in_thread_cancellable(
-            film_localization_tasks.run_render,
-            self._cancel_flag(job_id, "render"),
-            job_dir=str(self.video_jobs_dir / job_id), inputs=state.inputs,
-            on_progress=lambda text: self._push_progress(job_id, "render", text),
-        )

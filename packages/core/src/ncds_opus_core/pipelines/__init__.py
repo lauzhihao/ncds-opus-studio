@@ -9,9 +9,6 @@ from __future__ import annotations
 from ncds_opus_core.pipelines.final_preview import (
     PIPELINE as FINAL_PREVIEW,
 )
-from ncds_opus_core.pipelines.film_localization import (
-    PIPELINE as FILM_LOCALIZATION,
-)
 from ncds_opus_core.pipelines.types import (
     NodeStatus,
     PipelineDef,
@@ -21,7 +18,6 @@ from ncds_opus_core.pipelines.types import (
 # 单模板：final_preview（scene 整段配音 + 字级时间戳 + 分镜简笔画）
 PIPELINE_REGISTRY: dict[str, PipelineDef] = {
     FINAL_PREVIEW.id: FINAL_PREVIEW,
-    FILM_LOCALIZATION.id: FILM_LOCALIZATION,
 }
 
 

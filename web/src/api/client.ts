@@ -91,18 +91,6 @@ export const api = {
   getJob: (id: string) => get<JobState>(`/jobs/${id}`),
   createJob: (body: { pipeline_id: string; title?: string; inputs: Record<string, unknown> }) =>
     post<JobState>('/jobs', body),
-  uploadFilmSource: async (jobId: string, file: File, rightsConfirmed: boolean): Promise<JobState> => {
-    const body = new FormData();
-    body.append('source', file);
-    body.append('rights_confirmed', String(rightsConfirmed));
-    const r = await fetch(`/jobs/${jobId}/source`, {
-      ...fetchOpts,
-      method: 'POST',
-      body,
-    });
-    if (!r.ok) throw new Error(`POST source -> ${r.status}: ${await r.text()}`);
-    return r.json() as Promise<JobState>;
-  },
   deleteJob: (id: string) => del<{ deleted: string }>(`/jobs/${id}`),
   updateJobTitle: (jobId: string, title: string) =>
     put<{ job_id: string; title: string }>(`/jobs/${jobId}/title`, { title }),
