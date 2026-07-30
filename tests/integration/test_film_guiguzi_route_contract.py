@@ -585,3 +585,45 @@ def test_sparse_revision_output_expands_unchanged_rows_locally(
             "corrected_text": "校订后的第二句",
         },
     ]
+
+
+def test_revision_aliases_are_canonicalized_without_another_agent() -> None:
+    from ncds_opus_factory.commands import film_script_split
+
+    segments, glossary, revision = film_script_split._apply_film_text_revision(
+        [
+            {
+                "segment_key": "film:narration",
+                "source_text_raw": "特勤队立马行动",
+                "source_text": "特勤队立马行动",
+                "role": film_script_split.ROLE_NARRATION,
+            },
+            {
+                "segment_key": "film:original",
+                "source_text_raw": "Secret Service, move.",
+                "source_text": "Secret Service, move.",
+                "role": film_script_split.ROLE_ORIGINAL,
+            },
+        ],
+        {
+            "entity_glossary": [
+                {
+                    "canonical": "特勤局",
+                    "aliases": ["特勤队"],
+                    "category": "organization",
+                }
+            ],
+            "segments": [
+                {
+                    "segment_key": "film:narration",
+                    "corrected_text": "特勤队立马行动",
+                }
+            ],
+        },
+    )
+
+    assert glossary[0]["canonical"] == "特勤局"
+    assert segments[0]["source_text"] == "特勤局立马行动"
+    assert segments[1]["source_text"] == "Secret Service, move."
+    assert revision["corrected_count"] == 1
+    film_script_split._check_revision_consistency(segments, glossary)

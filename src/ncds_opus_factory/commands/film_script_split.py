@@ -507,17 +507,24 @@ def _apply_film_text_revision(
             f"duplicates={sorted(set(duplicate_keys))[:5]}"
         )
 
-    corrected_count = 0
     for segment in segments:
         raw_text = str(segment.get("source_text_raw") or "")
         if segment.get("role") == ROLE_NARRATION:
             corrected_text = corrected_by_key[str(segment["segment_key"])]
             segment["source_text"] = corrected_text
-            if corrected_text != raw_text.strip():
-                corrected_count += 1
         else:
             segment["source_text"] = raw_text
 
+    _canonicalize_revision_aliases(segments, entity_glossary)
+    corrected_count = sum(
+        1
+        for segment in segments
+        if (
+            segment.get("role") == ROLE_NARRATION
+            and str(segment.get("source_text") or "")
+            != str(segment.get("source_text_raw") or "").strip()
+        )
+    )
     revision = {
         "status": "done",
         "corrected_count": corrected_count,
@@ -528,7 +535,7 @@ def _apply_film_text_revision(
 
 def _specific_glossary_aliases(
     entity_glossary: list[dict[str, Any]],
-) -> list[tuple[int, str]]:
+) -> list[tuple[int, str, str]]:
     canonical_values = {
         str(entry["canonical"]).casefold()
         for entry in entity_glossary
@@ -536,6 +543,7 @@ def _specific_glossary_aliases(
     alias_targets: dict[str, set[str]] = {}
     alias_values: dict[str, str] = {}
     alias_indexes: dict[str, int] = {}
+    alias_canonicals: dict[str, str] = {}
     for index, entry in enumerate(entity_glossary):
         canonical = str(entry["canonical"])
         for raw_alias in entry["aliases"]:
@@ -557,11 +565,39 @@ def _specific_glossary_aliases(
             alias_targets.setdefault(alias_key, set()).add(canonical.casefold())
             alias_values[alias_key] = alias
             alias_indexes[alias_key] = index
+            alias_canonicals[alias_key] = canonical
     return [
-        (alias_indexes[alias_key], alias_values[alias_key])
+        (
+            alias_indexes[alias_key],
+            alias_values[alias_key],
+            alias_canonicals[alias_key],
+        )
         for alias_key, targets in alias_targets.items()
         if len(targets) == 1
     ]
+
+
+def _canonicalize_revision_aliases(
+    segments: list[dict[str, Any]],
+    entity_glossary: list[dict[str, Any]],
+) -> None:
+    aliases = sorted(
+        _specific_glossary_aliases(entity_glossary),
+        key=lambda item: len(item[1]),
+        reverse=True,
+    )
+    for segment in segments:
+        if segment.get("role") != ROLE_NARRATION:
+            continue
+        source_text = str(segment.get("source_text") or "")
+        for _index, alias, canonical in aliases:
+            source_text = re.sub(
+                re.escape(alias),
+                lambda _match, value=canonical: value,
+                source_text,
+                flags=re.IGNORECASE,
+            )
+        segment["source_text"] = source_text
 
 
 def _check_revision_consistency(
@@ -594,7 +630,7 @@ def _check_revision_consistency(
         if segment.get("role") != ROLE_NARRATION:
             continue
         source_casefold = source_text.casefold()
-        for glossary_index, alias in aliases:
+        for glossary_index, alias, _canonical in aliases:
             if alias.casefold() in source_casefold:
                 raise RuntimeError(
                     "film revised narration contains a non-canonical glossary "
