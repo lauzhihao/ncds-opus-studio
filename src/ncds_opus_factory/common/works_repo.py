@@ -8,6 +8,7 @@
       manifest.json   # 作品卡(card,works.py 写) + 采集产物清单(products/status,沈括写)
       video.mp4  asr.paraformer.json  asr.timeline.json  asr.txt  asr.clean.txt
       cover.jpg  comments.json  audio/  frames/  cutouts/
+      film_subtitles/raw.json  raw.srt  raw.txt  report.json
 
 manifest 顶层 key 按"产出者"分区、互不重叠：
   - card     : works.py 智能解析的作品卡（标题/话题/四项数据/作者档案）

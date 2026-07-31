@@ -2,7 +2,7 @@
 
 给前端 / app 接手者：端点签名的真源是 `GET /openapi.json` 和 `/docs`（Swagger UI）。本文只补 OpenAPI 表达不了的当前资源边界、SSE 信封、artifact 约定和实际消费者。
 
-## 1. 当前入口关系（2026-06-22）
+## 1. 当前入口关系（2026-07-31）
 
 | 入口 | 当前消费者 | 运行时 | 状态 |
 |---|---|---|---|
@@ -46,6 +46,70 @@
 当前 strangler 行为：`NOF_ENGINE_NODES` 未设置时，`lines/storyboard/tts/image/render` 经 facade 走 engine；`asr` 因需要步内增量与后台 enrich，仍走 legacy `_execute_asr_collect`；`rw` 因需要逐模型实时 `model_progress/drafts`，仍走 legacy `_execute_rw`。
 
 `GET /jobs/{job_id}/events` 推的是画布节点事件；客户端断线后应重新 `GET /jobs/{job_id}` 对齐全量状态。
+
+### film domain 契约
+
+film 仍使用 `/jobs` 画布端点，但 `asr` 节点语义是沈括字幕采集，不是“把混合音频听写成稿”。
+legacy facade 与 `/instances` 的 `final_asr` performer 都调用同一个 collector。每个
+`outputs.collected[]` 成功 entry 必含：
+
+```json
+{
+  "film_source": {
+    "mode": "film_subtitle_source",
+    "version": 1,
+    "video": "state/works/douyin/123/video.mp4",
+    "ocr": {
+      "backend": "rapidocr-onnxruntime-ppocrv6-small",
+      "raw_cues": "state/works/douyin/123/film_subtitles/raw.json",
+      "srt": "state/works/douyin/123/film_subtitles/raw.srt",
+      "txt": "state/works/douyin/123/film_subtitles/raw.txt",
+      "report": "state/works/douyin/123/film_subtitles/report.json",
+      "cue_count": 476,
+      "frame_sampling_fps": 2
+    },
+    "asr_timeline": "state/works/douyin/123/asr.timeline.json"
+  }
+}
+```
+
+`POST /jobs/{job_id}/guiguzi/analyze` 不读 `items` 做选题，而是异步清洗以上 OCR cues。
+`GET /jobs/{job_id}/guiguzi` 最终返回：
+
+```json
+{
+  "mode": "film_commentary",
+  "status": "done",
+  "sources": [],
+  "cues": [{
+    "cue_id": "cue_0001",
+    "source_work_id": "123",
+    "start_ms": 33270,
+    "end_ms": 34470,
+    "ocr_text": "大家好我是阿强",
+    "asr_text": "大家好 我是阿强",
+    "text": "大家好，我是阿强",
+    "kind": "narration",
+    "confidence": 0.98
+  }],
+  "script": {
+    "txt": "film_script/narration.txt",
+    "srt": "film_script/narration.srt",
+    "json": "film_script/narration.json"
+  },
+  "entity_glossary": [],
+  "qa": {
+    "raw_cues": 476,
+    "narration_cues": 460,
+    "dialogue_filtered": 5,
+    "noise_filtered": 11,
+    "needs_review": 1
+  }
+}
+```
+
+film 不支持 `/guiguzi/topics`。柳永的 film `rw` 只接受上述 `film_commentary`，只翻译
+`cues[].kind=narration`；旧 `film_script_split` 会被拒绝。
 
 ## 4. `/tasks`：app 决策视角主路径
 

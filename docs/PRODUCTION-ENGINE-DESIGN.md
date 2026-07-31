@@ -71,12 +71,13 @@
 只写**字符串 key**（`cmd` / `agent` id），引擎通过 **`build_full_registry()`（P1.x 已建：6 core + 8 factory）**
 查表派发。因此引擎对 agents 零静态依赖，core 保持纯净，新增 agent/步骤只是往 registry 加一行。
 
-**Domain strategy 派发（2026-07-30 已实现）**：所有有执行体的生产节点在 facade 与
+**Domain strategy 派发（2026-07-31 已实现）**：所有有执行体的生产节点在 facade 与
 `InstanceRunner` 中统一按 `(node, domain)` 从 `DomainStrategyRegistry` 解析；未知 domain 命中
-`*` default，保持既有生产行为。`film` 当前只覆盖沈括 ASR 采集策略（不提取音轨）、鬼谷子
-timeline 分类与解说校订 processor、柳永 RW 本地化策略。鬼谷子保留每段 immutable
-`source_text_raw`/时间戳，以全片上下文生成 `entity_glossary`，只改写解说段的展示稿
-`source_text`；柳永拒绝未完成校订的旧 raw 结果，只翻译校订稿并继承同一术语表。新增 domain
+`*` default，保持既有生产行为。`film` 的沈括 strategy 复用下载与 ASR sidecar，但以
+2fps 视频抽帧 + 底部字幕 RapidOCR 为真源，legacy 与 engine 走同一个 collector。鬼谷子读取
+immutable `ocr_text`/时间戳，以 ASR 仅作校订证据，产出 `mode=film_commentary`、
+`kind=narration|dialogue|noise` 的 cues、全片 `entity_glossary` 和 QA；柳永只翻译 clean
+narration 并继承 cue 时间轴。旧 `film_script_split`/旧 artifact 不兼容。新增 domain
 只需实现并注册 strategy/processor，
 不改节点核心分发代码；无 performer 的 input/output/人工 preview 闸门仍按 recipe 状态机处理。
 
@@ -157,7 +158,7 @@ RECIPE_REGISTRY: dict[str, Recipe]   # 当前只有 final_preview；figure_talk 
 | 组件 | 裁定 | 说明 |
 |---|---|---|
 | web `_execute_{asr,rw,lines,storyboard,tts,image,render}` | **进引擎** | 全是生产步骤；render 早已共用 `render_final_preview.run`。改成统一 step + 经 registry 派发 |
-| **沈括(采集)** / 鬼谷子(选题) / 柳永/吴道子/伯牙 | **进引擎（作为步骤执行者，全在卧龙麾下）** | 卧龙指挥的五个 agent 就是生产链的步骤 performer；recipe 按 id 晚绑定它们。**沈括 = 统一"外部原料采购"边界**（对标账号→爬取采集 / 作品链接→单链 asr，都走它，对下游屏蔽来源），早期步骤、产物可复用（缓存/共享池，见 §8） |
+| **沈括(采集)** / 鬼谷子(语义清洗或选题) / 柳永/吴道子/伯牙 | **进引擎（作为步骤执行者，全在卧龙麾下）** | 卧龙指挥的五个 agent 就是生产链的步骤 performer；recipe 按 id 晚绑定。沈括统一采购外部原料；film 作品链接由沈括确定性 OCR，鬼谷子再清洗成解说稿，其他 domain 保持文案/评论采集与选题行为 |
 | `TaskStore` / `TaskRunner` / `EventBus`(SSE) | **进引擎** | 是统一 store/调度/事件的底层，扩展而非替换 |
 | `PipelineRunner` + `JobState` + `video-jobs/` | **退役** | final_preview DAG 是一条 recipe 的特例；被 InstanceStore 的 recipe/steps 包容 |
 | **卧龙** | **保留为可插拔 driver** | 掌编排机械（派沈括→鬼谷子→柳永→…→render、状态推进/事件消费），**决策权归人**（走 review 路由→rounds_gate）；与 web 手动 driver 并列 |
@@ -260,16 +261,19 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 两个 driver 调同一套 `InstanceRunner.run_step(instance_id, step_id, inputs)`。这正是"一套 runtime + 可插拔编排策略"。
 
 **沈括 = 统一的"外部原料采购"边界**：凡是"从外面拿原料"都走沈括，他对下游屏蔽来源差异、只交付统一"原料"
-（转写稿/文章/对标数据），鬼谷子/柳永们不关心怎么拿到的。沈括按输入选**采集模式**：
+（转写稿/文章/字幕/对标数据），鬼谷子/柳永们不关心怎么拿到的。沈括按输入选**采集模式**：
 
 | 用户给的输入 | 沈括的模式 | 之后 |
 |---|---|---|
 | **对标账号** | 爬取采集（下载+转写+截帧抠图，落共享池） | →鬼谷子(选题)→柳永→… |
-| **作品链接** | 单链 asr（只转写这一条；即 web final_preview 的 asr 节点收进沈括） | →柳永(改写/编剧)→… |
+| **普通作品链接** | 单链 ASR（只转写这一条） | →柳永(改写/编剧)→… |
+| **film 原片/作品链接** | 下载/缓存 + 2fps 底部字幕 OCR；ASR timeline 仅作辅助 | →鬼谷子(对白/噪声过滤、术语校订)→柳永(只翻译 narration) |
 | **选题/一句话想法** | 无（没有外部原料可采，跳过沈括） | 直接 →柳永(或先鬼谷子提炼) |
 
-> 即"链接→asr"这个裸节点不再独立存在，它是**沈括的单链模式**；底层仍调 core 的 asr 能力，但归属与对外契约
-> 统一在沈括。下游 agent 拿到的永远是"原料"，与来源解耦。
+> 即"链接→asr"这个裸节点不再独立存在，它是**沈括的单链模式**。film 是这一模式的
+> 字幕采集分支：OCR cue 是唯一真源，ASR 不能覆盖 OCR，只能帮助鬼谷子判断同音字和标点。
+> 原始 artifact 固定落 `state/works/{platform}/{id}/film_subtitles/`，clean script 固定落
+> `video-jobs/{job}/film_script/`。
 
 > **沈括的"共享池"性质**：采一个对标账号的数据可复用于很多选题/作品，所以"采集"步骤**缓存感知**
 > （命中已采账号则复用，不重采）。它仍是卧龙麾下的生产步骤，只是产物落共享池（`state/benchmark`），

@@ -41,7 +41,6 @@ web/vite.config.js
 
 # 测试/工具产物
 .coverage
-uv.lock
 /outputs/
 /tmp/
 

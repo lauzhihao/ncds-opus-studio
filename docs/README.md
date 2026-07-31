@@ -45,7 +45,7 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 ```
 日志 `state/map_watchdog.{out,err}.log`、PID/锁 `state/map_project_watchdog.{pid,lock}`（均 gitignored）。若 `.project_map` 比 `src/` 源文件旧 → 看门狗没在跑。
 
-## 当前方向与进度（2026-06-22）
+## 当前方向与进度（2026-07-31）
 **权威设计 = [PRODUCTION-ENGINE-DESIGN.md](PRODUCTION-ENGINE-DESIGN.md)**：把 web（作品/内容视角）与 app
 （agents/决策视角）统一到**一个 agent 驱动的生产实例引擎**之上（取代早先的"core/studio/factory 三包对等拆分"）。
 
@@ -53,6 +53,13 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 - **P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）。
 - **生产引擎后端已存在**：`src/ncds_opus_factory/server/engine/`、`routes/instances.py`、`pipeline_performers_final.py` 已落地；`RECIPE_REGISTRY` 当前只注册 `final_preview`。
 - **web 当前主路径仍是 `/jobs/*`**：`/studio` React 画布调用 `/jobs`、`/pipelines`、`/preview`；`PipelineRunner` 作为 facade 保存 `JobState`，命中节点再转到 engine performer。默认未设 `NOF_ENGINE_NODES` 时，`lines/storyboard/tts/image/render` 走 engine；`asr` 因步内增量与后台 enrich 仍固定走 legacy，`rw` 因逐模型实时 `model_progress/drafts` 面板仍固定走 legacy。
+- **film domain 已切到字幕真源**：沈括复用原片下载/ASR sidecar，但以 2fps 底部区域
+  RapidOCR（PP-OCRv6 small + ONNX Runtime）采集烧录中文字幕；legacy `/jobs` 与 engine
+  performer 调同一个 collector。产物落
+  `state/works/{platform}/{id}/film_subtitles/{raw.json,raw.srt,raw.txt,report.json}`。
+  鬼谷子读取 OCR cue、以 ASR timeline 仅作辅助，输出 `mode=film_commentary` 的
+  narration/dialogue/noise 分类与干净解说稿到 `video-jobs/{job}/film_script/`；柳永只翻译
+  `kind=narration` 并保留 cue 时间轴。旧 film job/result 不兼容，必须从沈括重跑。
 - **app 当前主路径仍是 `/tasks`**：Flutter 决策视角通过 `TaskRunner` / `nof-worker` 消费任务，还没有切到 `/instances`。
 - **`/instances` 是可用的后端 driver API**，目前主要由测试与内部迁移使用，尚未替代 web/app 前端主路径。
 - 测试基线不要沿用历史文档里的 passed 数字；执行任务当天以 `pytest --collect-only` / `pytest` 的真实结果为准。

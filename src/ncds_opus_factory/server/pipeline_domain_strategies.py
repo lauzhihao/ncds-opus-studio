@@ -83,6 +83,56 @@ def _run_default_engine(context: EngineStrategyContext) -> dict[str, Any]:
     return context.default_execute()
 
 
+async def _run_film_asr_pipeline(
+    context: PipelineStrategyContext,
+) -> dict[str, Any]:
+    from ncds_opus_factory.commands.film_subtitles import (
+        collect_film_subtitles,
+    )
+
+    state = context.runner._load(context.job_id)
+    inputs = state.inputs
+    shares = list(inputs.get("shares") or [])
+    urls = [
+        str(value).strip()
+        for value in (inputs.get("urls") or [])
+        if str(value).strip()
+    ]
+    if not urls:
+        urls = [
+            str(share["url"]).strip()
+            for share in shares
+            if isinstance(share, dict)
+            and isinstance(share.get("url"), str)
+            and share["url"].strip()
+        ]
+    return await context.runner._run_in_thread_cancellable(
+        collect_film_subtitles,
+        context.runner._cancel_flag(context.job_id, context.node),
+        context.runner.video_jobs_dir / context.job_id,
+        urls,
+        shares,
+        on_progress=lambda text: context.runner._push_progress(
+            context.job_id,
+            context.node,
+            text,
+        ),
+    )
+
+
+def _run_film_asr_engine(context: EngineStrategyContext) -> dict[str, Any]:
+    from ncds_opus_factory.commands.film_subtitles import (
+        collect_film_subtitles,
+    )
+
+    return collect_film_subtitles(
+        context.params["job_dir"],
+        list(context.params.get("urls") or []),
+        list(context.params.get("shares") or []),
+        on_progress=context.on_progress,
+    )
+
+
 async def _spawn_default_asr_enrich(
     context: PipelineStrategyContext,
     _outputs: dict[str, Any],
@@ -147,15 +197,14 @@ for _node in RUNNABLE_NODES:
         ),
     )
 
-# film 沈括沿用默认执行器，但完成后不启动评论/抠图/音轨 enrich。
+# film 沈括走共享字幕采集器；OCR 是真源，ASR sidecar 仅供鬼谷子对齐。
 DOMAIN_STRATEGIES.register(
     "asr",
     "film",
     PipelineNodeStrategy(
         name="film:asr",
-        execute_pipeline=_run_default_pipeline,
-        execute_engine=_run_default_engine,
-        after_pipeline_success=_spawn_default_asr_enrich,
+        execute_pipeline=_run_film_asr_pipeline,
+        execute_engine=_run_film_asr_engine,
         asr_policy=_film_asr_policy,
     ),
 )

@@ -206,7 +206,7 @@ const modelLabel = (id: string, fallback: string): string => MODEL_LABELS[id] ??
 
 const LiuyongPanelByDomain: Record<string, ComponentType<Props>> = {
   film: FilmLiuyongPanel,
-  film_script_split: FilmLiuyongPanel,
+  film_commentary: FilmLiuyongPanel,
 };
 
 export function LiuyongPanel(props: Props) {
@@ -287,7 +287,7 @@ function FilmLiuyongPanel({ jobId, nodeDef, nodeState }: Props) {
       )}
       <div className="film-translation-list">
         {segments.map((segment) => (
-          <div key={segment.segment_key} className="film-translation-row">
+          <div key={segment.cue_id} className="film-translation-row">
             <div className="film-segment-meta">
               <span>{(segment.start_ms / 1000).toFixed(1)}s–{(segment.end_ms / 1000).toFixed(1)}s</span>
               <span className={segment.duration_fit === 'ok' ? 'fit-ok' : 'fit-too-long'}>

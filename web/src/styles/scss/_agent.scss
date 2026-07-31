@@ -694,7 +694,7 @@
 
 .film-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--s-2);
 
   > span {
@@ -730,9 +730,36 @@
     white-space: nowrap;
   }
 
-  .role-replaceable_narration { border-bottom-color: var(--status-failed); }
-  .role-preserved_original { border-bottom-color: var(--status-done); }
-  .role-unknown { border-bottom-color: var(--status-running); }
+  .kind-narration { border-bottom-color: var(--status-failed); }
+  .kind-dialogue { border-bottom-color: var(--status-done); }
+  .kind-noise { border-bottom-color: var(--status-running); }
+}
+
+.film-cue-comparison {
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.film-cue-row {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-2);
+  padding: 5px 6px;
+  border-left: 3px solid var(--ink-3);
+  background: var(--bg-surface);
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+
+  &.kind-narration { border-left-color: var(--status-failed); }
+  &.kind-dialogue { border-left-color: var(--status-done); }
+  &.kind-noise { border-left-color: var(--status-running); }
+
+  > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
 }
 
 .film-segment-meta {
@@ -860,25 +887,25 @@
 }
 
 .film-timeline-track {
-  --film-role-color: var(--ink-3);
+  --film-kind-color: var(--ink-3);
 }
 
-.film-timeline-track.role-replaceable_narration {
-  --film-role-color: var(--status-failed);
+.film-timeline-track.kind-narration {
+  --film-kind-color: var(--status-failed);
 }
 
-.film-timeline-track.role-preserved_original {
-  --film-role-color: var(--status-done);
+.film-timeline-track.kind-dialogue {
+  --film-kind-color: var(--status-done);
 }
 
-.film-timeline-track.role-unknown {
-  --film-role-color: var(--status-running);
+.film-timeline-track.kind-noise {
+  --film-kind-color: var(--status-running);
 }
 
 .film-timeline-track-label {
   align-self: center;
   padding-right: 2px;
-  color: var(--film-role-color);
+  color: var(--film-kind-color);
   font-size: 10px;
   font-weight: 700;
   text-align: right;
@@ -911,7 +938,7 @@
 .film-timeline-lane.is-empty::after {
   position: absolute;
   inset: 50% 0 auto;
-  border-top: 1px dotted color-mix(in srgb, var(--film-role-color) 22%, transparent);
+  border-top: 1px dotted color-mix(in srgb, var(--film-kind-color) 22%, transparent);
   content: '';
 }
 
@@ -923,9 +950,9 @@
   height: 24px;
   min-width: 0;
   padding: 2px 3px 1px;
-  border-bottom: 3px solid var(--film-role-color);
+  border-bottom: 3px solid var(--film-kind-color);
   border-radius: 0;
-  background: color-mix(in srgb, var(--film-role-color) 9%, var(--bg-surface));
+  background: color-mix(in srgb, var(--film-kind-color) 9%, var(--bg-surface));
   box-sizing: border-box;
   color: var(--ink-1);
   cursor: default;
@@ -936,7 +963,7 @@
 
   &:hover {
     z-index: 2;
-    background: color-mix(in srgb, var(--film-role-color) 16%, var(--bg-surface));
+    background: color-mix(in srgb, var(--film-kind-color) 16%, var(--bg-surface));
   }
 
   .film-timeline-clip-text {
@@ -974,7 +1001,7 @@
   top: 0;
   bottom: 3px;
   width: 1px;
-  background: color-mix(in srgb, var(--film-role-color) 25%, transparent);
+  background: color-mix(in srgb, var(--film-kind-color) 25%, transparent);
   pointer-events: none;
 }
 

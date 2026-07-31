@@ -264,8 +264,25 @@ export interface ShenkuoEntry {
   audio?: Record<string, string>; // original/vocals/bgm 相对路径（后台补）
   frames?: string[];
   cutouts?: string[]; // 抠图相对路径（后台补）
+  film_source?: FilmSubtitleSource;
   status?: Record<string, string>; // download/transcribe/audio/cutout/comments -> ok/cached/error:*
   error?: string | null;
+}
+
+export interface FilmSubtitleSource {
+  mode: 'film_subtitle_source';
+  version: 1;
+  video: string;
+  ocr: {
+    backend: string;
+    raw_cues: string;
+    srt: string;
+    txt: string;
+    report: string;
+    cue_count: number;
+    frame_sampling_fps: 2;
+  };
+  asr_timeline?: string | null;
 }
 
 // 鬼谷子选题种子：一条评论 + 它所属作品的提取文案（前端从沈括面板选出，传给后端逐条锚定）。
@@ -305,25 +322,18 @@ export interface GuiguziAnalysisColumn {
   error?: string | null;
 }
 
-export type FilmScriptRole =
-  | 'replaceable_narration'
-  | 'preserved_original'
-  | 'unknown';
+export type FilmCueKind = 'narration' | 'dialogue' | 'noise';
 
-export interface FilmScriptSegment {
-  id: string;
-  source_segment_id: string;
+export interface FilmCommentaryCue {
+  cue_id: string;
   source_work_id: string;
-  segment_key: string;
-  part_index?: number;
   start_ms: number;
   end_ms: number;
-  source_text_raw?: string;
-  source_text: string;
-  role: FilmScriptRole;
-  language: string;
+  ocr_text: string;
+  asr_text: string;
+  text: string;
+  kind: FilmCueKind;
   confidence: number;
-  subtype?: 'dialogue' | 'song' | 'ambience' | 'unknown';
 }
 
 export interface FilmEntityGlossaryEntry {
@@ -333,30 +343,36 @@ export interface FilmEntityGlossaryEntry {
   note?: string | null;
 }
 
-export interface FilmTextRevision {
-  status: 'running' | 'done' | 'failed';
-  corrected_count: number;
-  narration_count: number;
-  error?: string;
+export interface FilmCommentaryQa {
+  raw_cues: number;
+  narration_cues: number;
+  dialogue_filtered: number;
+  noise_filtered: number;
+  needs_review: number;
 }
 
 // 鬼谷子两步流结果（per-job guiguzi.json；前端轮询 GET /jobs/{id}/guiguzi）。
 //   analyzing → analyzed（用户介入：编辑分析 + 2选1）→ generating → done
 export interface GuiguziResult {
-  mode?: 'topic_discovery' | 'film_script_split';
+  mode?: 'topic_discovery' | 'film_commentary';
   // 粗粒度轮询信号：running(分析/出题中) / analyzed(分析完待用户) / done / failed
   status: 'running' | 'analyzed' | 'done' | 'failed';
-  stage?: 'analyzing' | 'analyzed' | 'generating' | 'splitting' | 'done' | 'failed';
+  stage?: 'analyzing' | 'analyzed' | 'generating' | 'cleaning' | 'done' | 'failed';
   items?: GuiguziItem[];
   analysis?: Record<string, GuiguziAnalysisColumn | undefined> | null; // 第一步多模型
   chosen_analysis?: GuiguziAnalysis | null; // 第二步选定/编辑的那份
   candidates?: Record<string, GuiguziCandidate | undefined> | null; // 第二步多模型选题
   prompt?: string | null; // 本次出选题用的提示词模板（含 $source 占位），供前端回显/编辑
   topics?: GuiguziTopic[] | null;
-  segments?: FilmScriptSegment[] | null;
-  summary?: Partial<Record<FilmScriptRole, number>> | null;
+  sources?: Array<Record<string, unknown>> | null;
+  cues?: FilmCommentaryCue[] | null;
+  script?: {
+    txt: string;
+    srt: string;
+    json: string;
+  } | null;
   entity_glossary?: FilmEntityGlossaryEntry[] | null;
-  revision?: FilmTextRevision | null;
+  qa?: FilmCommentaryQa | null;
   error?: string | null;
   progress?: string;
   updated_at?: number;
@@ -365,14 +381,12 @@ export interface GuiguziResult {
 export type FilmTargetLanguage = 'en' | 'ja' | 'ko' | 'es' | 'fr' | 'de';
 
 export interface FilmLocalizationSegment {
-  segment_id: string;
-  source_segment_id: string;
+  cue_id: string;
   source_work_id: string;
-  segment_key: string;
-  part_index?: number | null;
   start_ms: number;
   end_ms: number;
-  source_text_raw: string;
+  ocr_text: string;
+  asr_text: string;
   source_text: string;
   translated_text: string;
   target_language: FilmTargetLanguage;

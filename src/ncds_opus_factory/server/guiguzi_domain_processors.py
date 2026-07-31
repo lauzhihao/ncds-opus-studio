@@ -41,7 +41,7 @@ class DefaultGuiguziProcessor:
 
 
 class FilmGuiguziProcessor:
-    """Single-run film timeline classification and narration revision."""
+    """Clean Shenkuo OCR cues into a narration-first film commentary."""
 
     def analyze(
         self,
@@ -61,29 +61,33 @@ class FilmGuiguziProcessor:
             asr_outputs.get("collected") or asr_outputs.get("items") or []
         )
         if not collected:
-            raise ValueError("沈括采集结果为空，无法读取 timeline")
+            raise ValueError("沈括采集结果为空，无法读取 film subtitles")
+        if not any(
+            isinstance(entry, dict)
+            and isinstance(entry.get("film_source"), dict)
+            and entry["film_source"].get("mode") == "film_subtitle_source"
+            for entry in collected
+        ):
+            raise ValueError("沈括结果不是 film_subtitle_source，请重新采集")
         old = runner._guiguzi_tasks.get(job_id)
         if old is not None and not old.done():
             old.cancel()
         doc = {
-            "mode": "film_script_split",
-            "stage": "splitting",
+            "mode": "film_commentary",
+            "stage": "cleaning",
             "status": "running",
-            "segments": None,
-            "summary": None,
+            "sources": None,
+            "cues": None,
+            "script": None,
             "entity_glossary": None,
-            "revision": {
-                "status": "running",
-                "corrected_count": 0,
-                "narration_count": 0,
-            },
+            "qa": None,
             "error": None,
-            "progress": "分类解说与原声",
+            "progress": "清洗影视解说字幕",
             "updated_at": time.time(),
         }
         runner._write_guiguzi(job_id, doc)
         runner._guiguzi_tasks[job_id] = asyncio.create_task(
-            self._run_split_background(runner, job_id, collected)
+            self._run_commentary_background(runner, job_id, collected)
         )
         return doc
 
@@ -99,72 +103,49 @@ class FilmGuiguziProcessor:
     ) -> dict[str, Any]:
         del prompt, force
         raise ValueError(
-            "film_script_split 是单阶段分类，不支持 /guiguzi/topics"
+            "film_commentary 是单阶段语义清洗，不支持 /guiguzi/topics"
         )
 
-    async def _run_split_background(
+    async def _run_commentary_background(
         self,
         runner: Any,
         job_id: str,
         collected: list[dict[str, Any]],
     ) -> None:
-        from ncds_opus_factory.commands.film_script_split import (
-            classify_collected_timelines,
+        from ncds_opus_factory.commands.film_commentary import (
+            build_film_commentary,
         )
 
         try:
-            split_result = await asyncio.to_thread(
-                classify_collected_timelines,
+            result = await asyncio.to_thread(
+                build_film_commentary,
                 runner.video_jobs_dir / job_id,
                 collected,
                 on_progress=runner._guiguzi_progress(job_id),
             )
-            segments = split_result["segments"]
-            if not segments:
-                raise ValueError("沈括未产出可分类的 asr.timeline.json")
-            counts = {
-                role: sum(
-                    1 for segment in segments
-                    if segment.get("role") == role
-                )
-                for role in (
-                    "replaceable_narration",
-                    "preserved_original",
-                    "unknown",
-                )
-            }
             doc = {
-                "mode": "film_script_split",
                 "stage": "done",
-                "status": "done",
-                "segments": segments,
-                "summary": counts,
-                "entity_glossary": split_result["entity_glossary"],
-                "revision": split_result["revision"],
+                **result,
                 "error": None,
                 "progress": "",
                 "updated_at": time.time(),
             }
         except Exception as exc:  # noqa: BLE001 - failure is persisted for polling.
             doc = {
-                "mode": "film_script_split",
+                "mode": "film_commentary",
                 "stage": "failed",
                 "status": "failed",
-                "segments": None,
-                "summary": None,
+                "sources": None,
+                "cues": None,
+                "script": None,
                 "entity_glossary": None,
-                "revision": {
-                    "status": "failed",
-                    "corrected_count": 0,
-                    "narration_count": 0,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
+                "qa": None,
                 "error": f"{type(exc).__name__}: {exc}",
                 "progress": "",
                 "updated_at": time.time(),
             }
             logger.warning(
-                "[pipeline] film guiguzi split failed for %s: %s",
+                "[pipeline] film guiguzi commentary failed for %s: %s",
                 job_id,
                 exc,
             )

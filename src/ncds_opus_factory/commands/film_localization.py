@@ -1,4 +1,4 @@
-"""Translate only replaceable film narration while preserving timeline identity."""
+"""Translate only clean film narration while preserving its OCR timeline."""
 
 from __future__ import annotations
 
@@ -63,8 +63,8 @@ def _call_opus_translation_agent(
         )
     payload = [
         {
-            "segment_id": segment["segment_key"],
-            "source_text": segment["source_text"],
+            "cue_id": segment["cue_id"],
+            "source_text": segment["text"],
             "available_duration_ms": (
                 int(segment.get("end_ms") or 0)
                 - int(segment.get("start_ms") or 0)
@@ -75,9 +75,9 @@ def _call_opus_translation_agent(
     prompt = "\n".join([
         "Translate film narration segments.",
         f"Target language: {_LANGUAGE_NAMES[target_language]} ({target_language}).",
-        "Return only a JSON array of objects with segment_id and translated_text.",
+        "Return only a JSON array of objects with cue_id and translated_text.",
         "Keep every segment exactly once. Do not merge, split, omit, summarize, or add facts.",
-        "Translate source_text, which is the proofread narration.",
+        "Translate source_text, which is Guiguzi's clean narration text.",
         "Use one consistent target-language rendering for each canonical entity "
         "and all of its aliases in the full-film entity glossary.",
         "At normal narration speed, compress each translation to fit its "
@@ -122,7 +122,7 @@ def _translate_segments(
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            segment_id = str(row.get("segment_id") or "")
+            segment_id = str(row.get("cue_id") or "")
             translated_text = str(row.get("translated_text") or "").strip()
             if (
                 segment_id
@@ -130,7 +130,7 @@ def _translate_segments(
                 and segment_id not in batch_translated
             ):
                 batch_translated[segment_id] = translated_text
-        expected_batch = {str(segment["segment_key"]) for segment in batch}
+        expected_batch = {str(segment["cue_id"]) for segment in batch}
         if set(batch_translated) != expected_batch:
             missing = sorted(expected_batch - set(batch_translated))
             extra = sorted(set(batch_translated) - expected_batch)
@@ -140,7 +140,7 @@ def _translate_segments(
             )
         translated.update(batch_translated)
 
-    expected = {str(segment["segment_key"]) for segment in segments}
+    expected = {str(segment["cue_id"]) for segment in segments}
     if set(translated) != expected:
         missing = sorted(expected - set(translated))
         extra = sorted(set(translated) - expected)
@@ -184,36 +184,33 @@ def localize_film_script(
         guiguzi_doc = json.loads(guiguzi_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError("film guiguzi.json is invalid") from exc
-    if guiguzi_doc.get("mode") != "film_script_split":
-        raise ValueError("film Guiguzi classification is not ready")
-    revision = guiguzi_doc.get("revision")
-    if not isinstance(revision, dict) or revision.get("status") != "done":
-        raise ValueError(
-            "film text revision is not complete; rerun Guiguzi classification"
-        )
+    if (
+        guiguzi_doc.get("mode") != "film_commentary"
+        or guiguzi_doc.get("status") != "done"
+    ):
+        raise ValueError("film commentary is not ready")
     entity_glossary = guiguzi_doc.get("entity_glossary")
     if not isinstance(entity_glossary, list):
         raise ValueError(
             "film entity_glossary is missing; rerun Guiguzi classification"
         )
     narration = [
-        segment for segment in (guiguzi_doc.get("segments") or [])
+        segment for segment in (guiguzi_doc.get("cues") or [])
         if isinstance(segment, dict)
-        and segment.get("role") == "replaceable_narration"
+        and segment.get("kind") == "narration"
     ]
     if not narration:
-        raise ValueError("film Guiguzi found no replaceable narration")
+        raise ValueError("film commentary contains no narration")
     for segment in narration:
-        segment_key = str(segment.get("segment_key") or "")
-        if "source_text_raw" not in segment:
+        cue_id = str(segment.get("cue_id") or "")
+        if not cue_id:
             raise ValueError(
-                "film revised narration is missing source_text_raw: "
-                f"segment_key={segment_key}"
+                "film commentary narration is missing cue_id"
             )
-        if not str(segment.get("source_text") or "").strip():
+        if not str(segment.get("text") or "").strip():
             raise ValueError(
-                "film revised narration is empty: "
-                f"segment_key={segment_key}"
+                "film commentary narration text is empty: "
+                f"cue_id={cue_id}"
             )
 
     on_progress(
@@ -229,22 +226,20 @@ def localize_film_script(
     for segment in narration:
         start_ms = int(segment.get("start_ms") or 0)
         end_ms = max(start_ms, int(segment.get("end_ms") or start_ms))
-        translated_text = translations[str(segment["segment_key"])]
+        translated_text = translations[str(segment["cue_id"])]
         available_duration_ms = end_ms - start_ms
         estimated_duration_ms = _estimated_duration_ms(
             translated_text,
             language,
         )
         localized.append({
-            "segment_id": segment["id"],
-            "source_segment_id": segment.get("source_segment_id", segment["id"]),
+            "cue_id": segment["cue_id"],
             "source_work_id": segment.get("source_work_id", ""),
-            "segment_key": segment["segment_key"],
-            "part_index": segment.get("part_index"),
             "start_ms": start_ms,
             "end_ms": end_ms,
-            "source_text_raw": str(segment.get("source_text_raw") or ""),
-            "source_text": str(segment.get("source_text") or ""),
+            "ocr_text": str(segment.get("ocr_text") or ""),
+            "asr_text": str(segment.get("asr_text") or ""),
+            "source_text": str(segment.get("text") or ""),
             "translated_text": translated_text,
             "target_language": language,
             "available_duration_ms": available_duration_ms,
@@ -266,7 +261,7 @@ def localize_film_script(
         "mode": "film_localization",
         "target_language": language,
         "entity_glossary": entity_glossary,
-        "source_revision": revision,
+        "source_mode": "film_commentary",
         "segments": localized,
     }
     rw_root = root / "02_rw"
