@@ -180,6 +180,38 @@ def _run_film_rw_engine(context: EngineStrategyContext) -> dict[str, Any]:
     )
 
 
+def _run_film_guiguzi_engine(context: EngineStrategyContext) -> dict[str, Any]:
+    from ncds_opus_factory.server.engine.pipeline_performers_film import (
+        run_film_guiguzi_step,
+    )
+
+    return run_film_guiguzi_step(context.on_progress, **context.params)
+
+
+def _run_film_storyboard_engine(context: EngineStrategyContext) -> dict[str, Any]:
+    from ncds_opus_factory.server.engine.pipeline_performers_film import (
+        run_film_storyboard_step,
+    )
+
+    return run_film_storyboard_step(context.on_progress, **context.params)
+
+
+def _run_film_tts_engine(context: EngineStrategyContext) -> dict[str, Any]:
+    from ncds_opus_factory.server.engine.pipeline_performers_film import (
+        run_film_tts_step,
+    )
+
+    return run_film_tts_step(context.on_progress, **context.params)
+
+
+def _run_film_render_engine(context: EngineStrategyContext) -> dict[str, Any]:
+    from ncds_opus_factory.server.engine.pipeline_performers_film import (
+        run_film_render_step,
+    )
+
+    return run_film_render_step(context.on_progress, **context.params)
+
+
 DOMAIN_STRATEGIES: DomainStrategyRegistry[Any] = DomainStrategyRegistry()
 
 for _node in RUNNABLE_NODES:
@@ -217,6 +249,22 @@ DOMAIN_STRATEGIES.register(
         execute_engine=_run_film_rw_engine,
     ),
 )
+for _node, _engine_execute in (
+    ("storyboard", _run_film_storyboard_engine),
+    ("tts", _run_film_tts_engine),
+    ("render", _run_film_render_engine),
+):
+    DOMAIN_STRATEGIES.register(
+        _node,
+        "film",
+        PipelineNodeStrategy(
+            name=f"film:{_node}",
+            # The legacy /jobs facade keeps its existing implementation.  Only
+            # the new recipes use the frame-first engine performer.
+            execute_pipeline=_run_default_pipeline,
+            execute_engine=_engine_execute,
+        ),
+    )
 DOMAIN_STRATEGIES.register(
     "guiguzi",
     WILDCARD_DOMAIN,
@@ -231,6 +279,7 @@ DOMAIN_STRATEGIES.register(
     GuiguziNodeStrategy(
         name="film:guiguzi",
         processor=FILM_GUIGUZI_PROCESSOR,
+        execute_engine=_run_film_guiguzi_engine,
     ),
 )
 
@@ -247,3 +296,24 @@ def guiguzi_strategy(domain: object) -> GuiguziNodeStrategy:
     if not isinstance(strategy, GuiguziNodeStrategy):
         raise TypeError("registered guiguzi strategy is invalid")
     return strategy
+
+
+def engine_node_strategy(
+    node: str,
+    domain: object,
+) -> Any:
+    """Resolve an engine executor, or return ``None`` for technical steps.
+
+    The registry intentionally contains both legacy pipeline adapters and the
+    Guiguzi route processor.  Returning a callable instead of exposing those
+    adapter types keeps InstanceRunner independent from their route details.
+    """
+    try:
+        strategy = DOMAIN_STRATEGIES.resolve(node, normalize_domain(domain))
+    except KeyError:
+        return None
+    if isinstance(strategy, PipelineNodeStrategy):
+        return strategy.execute_engine
+    if isinstance(strategy, GuiguziNodeStrategy):
+        return strategy.execute_engine
+    return None

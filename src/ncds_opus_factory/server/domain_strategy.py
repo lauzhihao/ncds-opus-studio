@@ -130,3 +130,7 @@ class GuiguziProcessor(Protocol):
 class GuiguziNodeStrategy:
     name: str
     processor: GuiguziProcessor
+    # Guiguzi historically only served the legacy HTTP route.  Film rebuild
+    # promotes it into a synchronous engine step while retaining that route
+    # processor; other domains safely fall back to their recipe performer.
+    execute_engine: EngineExecutor | None = None

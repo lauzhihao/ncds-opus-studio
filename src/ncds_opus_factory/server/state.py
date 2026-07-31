@@ -17,6 +17,7 @@ from ncds_opus_factory.server.auth_store import AuthStore
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
 from ncds_opus_factory.server.engine.pipeline_performers_final import PERFORMERS_FINAL
+from ncds_opus_factory.server.engine.pipeline_performers_film import PERFORMERS_FILM
 from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.mock_agents import maybe_mock_registry
 from ncds_opus_factory.server.pipeline_runner import PipelineRunner
@@ -57,7 +58,11 @@ PIPELINE_RUNNER: PipelineRunner = PipelineRunner(VIDEO_JOBS_DIR)
 INSTANCE_STORE: InstanceStore = InstanceStore(INSTANCES_DIR)
 INSTANCE_RUNNER: InstanceRunner = InstanceRunner(
     INSTANCE_STORE,
-    {**maybe_mock_registry(build_full_registry()), **PERFORMERS_FINAL},
+    {
+        **maybe_mock_registry(build_full_registry()),
+        **PERFORMERS_FINAL,
+        **PERFORMERS_FILM,
+    },
 )
 # 绞杀者（E1-b2 #3）：把引擎注入 PipelineRunner，NOF_ENGINE_NODES 命中的节点执行改走引擎。
 # 在两个 runner 都建好后注入，避免 pipeline_runner ↔ state 的 import 环。

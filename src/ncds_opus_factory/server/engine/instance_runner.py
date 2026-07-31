@@ -37,7 +37,7 @@ from ncds_opus_factory.server.engine.types import (
     StepStatus,
     can_transition,
 )
-from ncds_opus_factory.server.pipeline_domain_strategies import pipeline_strategy
+from ncds_opus_factory.server.pipeline_domain_strategies import engine_node_strategy
 from ncds_opus_factory.server.schemas import Review
 
 logger = logging.getLogger(__name__)
@@ -259,9 +259,13 @@ class InstanceRunner:
                 def _default_execute() -> Any:
                     return run_fn(on_progress=_step_progress, **params)
 
-                if recipe.recipe_id != "final_preview":
+                execute_engine = engine_node_strategy(step_id, params.get("domain"))
+                # source/quality and future technical steps need no domain
+                # policy.  They safely use their recipe performer.  Semantic
+                # steps resolve by (node, domain) for every recipe, rather than
+                # the former final_preview-only special case.
+                if execute_engine is None:
                     return _default_execute()
-                strategy = pipeline_strategy(step_id, params.get("domain"))
                 context = EngineStrategyContext(
                     node=step_id,
                     domain=normalize_domain(params.get("domain")),
@@ -269,7 +273,7 @@ class InstanceRunner:
                     on_progress=_step_progress,
                     default_execute=_default_execute,
                 )
-                return strategy.execute_engine(context)
+                return execute_engine(context)
 
             return _with_cancel(_dispatch, cancel_check)
 
