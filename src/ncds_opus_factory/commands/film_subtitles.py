@@ -736,14 +736,25 @@ def _cleanable_ocr_cues(
     occurrences: dict[str, int] = {}
     for text in texts:
         occurrences[text] = occurrences.get(text, 0) + 1
+    repeated_handles = {
+        text
+        for text, count in occurrences.items()
+        if text.startswith("@")
+        and len(text) <= _HANDLE_WATERMARK_MAX_LENGTH
+        and count >= 3
+    }
+    handle_aliases = set(repeated_handles)
+    for handle in repeated_handles:
+        without_at = handle.removeprefix("@")
+        if without_at:
+            handle_aliases.add(without_at)
+        without_platform = re.sub(r"^@[A-Za-z0-9_]+", "", handle)
+        if len(without_platform) >= 2:
+            handle_aliases.add(without_platform)
     dropped_source_cue_ids: list[str] = []
     cleanable: list[dict[str, Any]] = []
     for cue, text in zip(raw_cues, texts):
-        is_pure_handle_watermark = (
-            text.startswith("@")
-            and len(text) <= _HANDLE_WATERMARK_MAX_LENGTH
-            and occurrences[text] >= 3
-        )
+        is_pure_handle_watermark = text in handle_aliases
         if is_pure_handle_watermark:
             dropped_source_cue_ids.append(str(cue["cue_id"]))
         else:

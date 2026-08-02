@@ -21,6 +21,8 @@ import pytest
 
 TARGET_TEXT = "恐怖分子占领白宫"
 WATERMARK_TEXT = "@DY影视强声"
+WATERMARK_ALIAS_WITH_PLATFORM = "DY影视强声"
+WATERMARK_ALIAS_WITHOUT_PLATFORM = "影视强声"
 WATERMARK_BODY_TEXT = "@DY影视强声另一边总统公布了最新消息"
 CLEAN_WATERMARK_BODY_TEXT = "另一边总统公布了最新消息"
 CURRENT_OCR_BACKEND = "rapidocr-onnxruntime-ppocrv6-tiny"
@@ -678,6 +680,14 @@ def test_film_script_source_v2_drops_repeated_pure_watermark_before_cleaner(
         "",
         "",
         "",
+        WATERMARK_ALIAS_WITH_PLATFORM,
+        "",
+        "",
+        "",
+        WATERMARK_ALIAS_WITHOUT_PLATFORM,
+        "",
+        "",
+        "",
         WATERMARK_BODY_TEXT,
         WATERMARK_BODY_TEXT,
     )
@@ -704,14 +714,16 @@ def test_film_script_source_v2_drops_repeated_pure_watermark_before_cleaner(
         WATERMARK_TEXT,
         WATERMARK_TEXT,
         WATERMARK_TEXT,
+        WATERMARK_ALIAS_WITH_PLATFORM,
+        WATERMARK_ALIAS_WITHOUT_PLATFORM,
         WATERMARK_BODY_TEXT,
     ]
-    dropped_ids = [str(cue["cue_id"]) for cue in raw_cues[:3]]
+    dropped_ids = [str(cue["cue_id"]) for cue in raw_cues[:5]]
 
     clean_cues = _read_json(clean_path)["cues"]
     assert len(clean_cues) == 1
     assert clean_cues[0]["text"] == CLEAN_WATERMARK_BODY_TEXT
-    assert clean_cues[0]["source_cue_ids"] == [str(raw_cues[3]["cue_id"])]
+    assert clean_cues[0]["source_cue_ids"] == [str(raw_cues[5]["cue_id"])]
     clean_text_path = _artifact_path(repo_root, source["clean_script"]["txt"])
     clean_text = clean_text_path.read_text(encoding="utf-8")
     assert clean_text == f"{CLEAN_WATERMARK_BODY_TEXT}\n"
@@ -721,4 +733,4 @@ def test_film_script_source_v2_drops_repeated_pure_watermark_before_cleaner(
     report_path = _artifact_path(repo_root, source["clean_script"]["report"])
     report = _read_json(report_path)
     assert report["dropped_source_cue_ids"] == dropped_ids
-    assert report["dropped_source_cue_count"] == len(dropped_ids) == 3
+    assert report["dropped_source_cue_count"] == len(dropped_ids) == 5
