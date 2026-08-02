@@ -38,14 +38,21 @@ state are generated under pytest's temporary directory; the test never reads
 `test_film_script_source_v2_workflow.py` is an assembled Shenkuo acceptance
 test. It starts a separate Python collector process and uses real
 ffmpeg/ffprobe plus temporary filesystem artifacts; OCR and Chinese correction
-are deterministic dependency seams inside that child process.
+are deterministic dependency seams inside that child process. OCR fixtures run
+with one worker so their ordered observations remain deterministic while the
+production configuration uses the tiny model, 1 fps sampling, and parallel
+workers.
 
 It verifies the v2 `film_script_source` contract: immutable `raw_ocr`, clean
 zh-CN `clean_script` JSON/SRT/TXT/report artifacts, cue provenance, temporal
 merge boundaries, and deterministic `needs_review` fallback when correction is
 unavailable or invalid. It also proves the collected text is exactly the
 complete `clean.txt` content and no legacy `film_commentary` or
-`film_localization` output is produced.
+`film_localization` output is produced. Additional subprocess cases lock down
+local temporal merging when every cleaner is unavailable, same-source raw OCR
+cache reuse (including reuse of legacy small-model/2 fps raw cues by the newer
+tiny-model/1 fps runtime), and retry/split recovery through executable fake
+cleaner CLIs.
 
 Run it with:
 
