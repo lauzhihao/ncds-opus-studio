@@ -20,6 +20,9 @@ from typing import Any
 import pytest
 
 TARGET_TEXT = "恐怖分子占领白宫"
+WATERMARK_TEXT = "@DY影视强声"
+WATERMARK_BODY_TEXT = "@DY影视强声另一边总统公布了最新消息"
+CLEAN_WATERMARK_BODY_TEXT = "另一边总统公布了最新消息"
 CURRENT_OCR_BACKEND = "rapidocr-onnxruntime-ppocrv6-tiny"
 CURRENT_FRAME_SAMPLING_FPS = 1
 LEGACY_OCR_BACKEND = "rapidocr-onnxruntime-ppocrv6-small"
@@ -190,7 +193,11 @@ def deterministic_cleaner(cues, asr_timeline, on_progress):
                 "text": (
                     "The terrorists captured the White House"
                     if cleaner_mode == "english"
-                    else "恐怖分子占领白宫"
+                    else (
+                        "另一边总统公布了最新消息"
+                        if cleaner_mode == "watermark"
+                        else "恐怖分子占领白宫"
+                    )
                 ),
                 "confidence": 0.99,
             }
@@ -649,3 +656,69 @@ def test_real_cleaner_retries_and_splits_failed_batch_in_subprocess(
     assert len(clean_cues) == 70
     assert len({cue["source_cue_ids"][0] for cue in clean_cues}) == 70
     assert any("splitting size=60" in message for message in result["progress"])
+
+
+def test_film_script_source_v2_drops_repeated_pure_watermark_before_cleaner(
+    tmp_path: Path,
+) -> None:
+    """Repeated pure handles remain raw evidence but never reach clean output."""
+    ffmpeg = _require_ffmpeg()
+    repo_root = _repo_root()
+    video = tmp_path / "watermark-film.mp4"
+    frame_texts = (
+        WATERMARK_TEXT,
+        "",
+        "",
+        "",
+        WATERMARK_TEXT,
+        "",
+        "",
+        "",
+        WATERMARK_TEXT,
+        "",
+        "",
+        "",
+        WATERMARK_BODY_TEXT,
+        WATERMARK_BODY_TEXT,
+    )
+    _make_video(ffmpeg, video, duration_seconds=len(frame_texts))
+
+    result = _run_collector_subprocess(
+        repo_root,
+        tmp_path / "watermark",
+        video,
+        cleaner_mode="watermark",
+        frame_texts=frame_texts,
+    )
+    assert result["cleaner_inputs"] == [
+        {
+            "cue_count": 1,
+            "texts": [WATERMARK_BODY_TEXT],
+            "asr_timeline": [],
+        }
+    ]
+
+    entry, source, raw_path, clean_path = _clean_artifacts(result, repo_root)
+    raw_cues = _read_json(raw_path)["cues"]
+    assert [cue["text"] for cue in raw_cues] == [
+        WATERMARK_TEXT,
+        WATERMARK_TEXT,
+        WATERMARK_TEXT,
+        WATERMARK_BODY_TEXT,
+    ]
+    dropped_ids = [str(cue["cue_id"]) for cue in raw_cues[:3]]
+
+    clean_cues = _read_json(clean_path)["cues"]
+    assert len(clean_cues) == 1
+    assert clean_cues[0]["text"] == CLEAN_WATERMARK_BODY_TEXT
+    assert clean_cues[0]["source_cue_ids"] == [str(raw_cues[3]["cue_id"])]
+    clean_text_path = _artifact_path(repo_root, source["clean_script"]["txt"])
+    clean_text = clean_text_path.read_text(encoding="utf-8")
+    assert clean_text == f"{CLEAN_WATERMARK_BODY_TEXT}\n"
+    assert WATERMARK_TEXT not in clean_text
+    assert entry["text"] == clean_text
+
+    report_path = _artifact_path(repo_root, source["clean_script"]["report"])
+    report = _read_json(report_path)
+    assert report["dropped_source_cue_ids"] == dropped_ids
+    assert report["dropped_source_cue_count"] == len(dropped_ids) == 3

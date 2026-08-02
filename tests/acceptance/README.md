@@ -52,7 +52,10 @@ complete `clean.txt` content and no legacy `film_commentary` or
 local temporal merging when every cleaner is unavailable, same-source raw OCR
 cache reuse (including reuse of legacy small-model/2 fps raw cues by the newer
 tiny-model/1 fps runtime), and retry/split recovery through executable fake
-cleaner CLIs.
+cleaner CLIs. A watermark case proves repeated pure `@handle` cues remain in
+immutable raw OCR evidence while being excluded before the cleaner and clean
+artifacts; a cue containing the same handle plus real body text remains
+cleanable and preserves its source provenance.
 
 Run it with:
 
