@@ -216,14 +216,13 @@ def _load_runtime() -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
     from ncds_opus_factory.server.engine.recipes import RECIPE_REGISTRY
 
     recipes = dict(RECIPE_REGISTRY)
-    assert "film_localized_rebuild_v1" in recipes
     assert "film_highlight_v1" in recipes
     registry = {
         **build_full_registry(),
         **PERFORMERS_FINAL,
         **PERFORMERS_FILM,
     }
-    for recipe_id in ("film_localized_rebuild_v1", "film_highlight_v1"):
+    for recipe_id in ("film_highlight_v1",):
         recipe = recipes[recipe_id]
         recipe.validate()
         for step in recipe.steps:

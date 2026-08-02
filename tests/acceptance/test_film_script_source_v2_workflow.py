@@ -76,7 +76,8 @@ def _run_collector_subprocess(
     run_root: Path,
     video_path: Path,
     *,
-    cleaner_available: bool,
+    cleaner_mode: str,
+    frame_texts: tuple[str, ...] = OCR_VARIANTS,
 ) -> dict[str, Any]:
     result_path = run_root / "result.json"
     script = r'''
@@ -86,11 +87,11 @@ from pathlib import Path
 
 from ncds_opus_factory.commands import film_subtitles
 
-variants = json.loads(sys.argv[1])
+frame_texts = json.loads(sys.argv[1])
 video_path = Path(sys.argv[2])
 job_dir = Path(sys.argv[3])
 result_path = Path(sys.argv[4])
-cleaner_available = sys.argv[5] == "1"
+cleaner_mode = sys.argv[5]
 
 
 class FakeOcrResult:
@@ -105,9 +106,9 @@ class FakeOcr:
         self.index = 0
 
     def __call__(self, _path, *, use_cls=False):
-        group = min(self.index // 4, len(variants) - 1)
+        group = min(self.index, len(frame_texts) - 1)
         self.index += 1
-        return FakeOcrResult(variants[group])
+        return FakeOcrResult(frame_texts[group])
 
 
 film_subtitles.OCR_ENGINE_FACTORY = FakeOcr
@@ -124,7 +125,11 @@ def deterministic_cleaner(cues, asr_timeline, on_progress):
     return (
         {
             str(cue["cue_id"]): {
-                "text": "恐怖分子占领白宫",
+                "text": (
+                    "The terrorists captured the White House"
+                    if cleaner_mode == "english"
+                    else "恐怖分子占领白宫"
+                ),
                 "confidence": 0.99,
             }
             for cue in cues
@@ -145,7 +150,7 @@ def unavailable_cleaner(cues, asr_timeline, on_progress):
 
 
 film_subtitles.CLEAN_SCRIPT_AGENT = (
-    deterministic_cleaner if cleaner_available else unavailable_cleaner
+    unavailable_cleaner if cleaner_mode == "unavailable" else deterministic_cleaner
 )
 collected = film_subtitles.collect_film_subtitles(
     job_dir,
@@ -172,11 +177,11 @@ result_path.write_text(
             sys.executable,
             "-c",
             script,
-            json.dumps(OCR_VARIANTS, ensure_ascii=False),
+            json.dumps(frame_texts, ensure_ascii=False),
             str(video_path),
             str(run_root / "video-jobs" / "fixture-job"),
             str(result_path),
-            "1" if cleaner_available else "0",
+            cleaner_mode,
         ],
         cwd=repo_root,
         env=env,
@@ -281,6 +286,14 @@ def _assert_v2_artifacts(
         assert clean_text == f"{expected_text}\n"
 
 
+def _clean_artifacts(result: dict[str, Any], repo_root: Path) -> tuple[dict[str, Any], dict[str, Any], Path, Path]:
+    entry = result["collected"]["collected"][0]
+    source = entry["film_source"]
+    raw_path = _artifact_path(repo_root, source["raw_ocr"]["json"])
+    clean_path = _artifact_path(repo_root, source["clean_script"]["json"])
+    return entry, source, raw_path, clean_path
+
+
 def test_film_script_source_v2_corrects_and_merges_ocr_at_shenkuo_boundary(
     tmp_path: Path,
 ) -> None:
@@ -294,7 +307,10 @@ def test_film_script_source_v2_corrects_and_merges_ocr_at_shenkuo_boundary(
         repo_root,
         tmp_path / "available",
         video,
-        cleaner_available=True,
+        cleaner_mode="deterministic",
+        frame_texts=tuple(
+            text for variant in OCR_VARIANTS for text in (variant,) * 4
+        ),
     )
     assert result["cleaner_inputs"]
     assert result["cleaner_inputs"][0]["cue_count"] == 4
@@ -320,7 +336,10 @@ def test_film_script_source_v2_keeps_deterministic_baseline_when_cleaner_unavail
         repo_root,
         tmp_path / "unavailable",
         video,
-        cleaner_available=False,
+        cleaner_mode="unavailable",
+        frame_texts=tuple(
+            text for variant in OCR_VARIANTS for text in (variant,) * 4
+        ),
     )
     assert result["cleaner_inputs"]
     _assert_v2_artifacts(
@@ -329,3 +348,80 @@ def test_film_script_source_v2_keeps_deterministic_baseline_when_cleaner_unavail
         expected_text=None,
         needs_review=True,
     )
+
+
+def test_film_script_source_v2_does_not_merge_same_clean_text_across_long_gap(
+    tmp_path: Path,
+) -> None:
+    """A subtitle absence longer than one second is a semantic boundary."""
+    ffmpeg = _require_ffmpeg()
+    repo_root = _repo_root()
+    video = tmp_path / "film.mp4"
+    _make_video(ffmpeg, video)
+    frame_texts = (
+        (OCR_VARIANTS[0],) * 4
+        + ("",) * 3
+        + (OCR_VARIANTS[1],) * 7
+    )
+
+    result = _run_collector_subprocess(
+        repo_root,
+        tmp_path / "gap",
+        video,
+        cleaner_mode="deterministic",
+        frame_texts=frame_texts,
+    )
+    assert result["cleaner_inputs"][0]["cue_count"] == 2
+    _entry, _source, _raw_path, clean_path = _clean_artifacts(result, repo_root)
+    clean_cues = _read_json(clean_path)["cues"]
+    assert [cue["text"] for cue in clean_cues] == [TARGET_TEXT, TARGET_TEXT]
+    assert all(len(cue["source_cue_ids"]) == 1 for cue in clean_cues)
+    assert int(clean_cues[1]["start_ms"]) - int(clean_cues[0]["end_ms"]) > 1_000
+
+
+def test_film_script_source_v2_rejects_non_cjk_cleaner_output(
+    tmp_path: Path,
+) -> None:
+    """An English correction cannot replace the OCR-grounded Chinese baseline."""
+    ffmpeg = _require_ffmpeg()
+    repo_root = _repo_root()
+    video = tmp_path / "film.mp4"
+    _make_video(ffmpeg, video)
+    frame_texts = tuple(
+        text for variant in OCR_VARIANTS for text in (variant,) * 4
+    )
+
+    result = _run_collector_subprocess(
+        repo_root,
+        tmp_path / "english",
+        video,
+        cleaner_mode="english",
+        frame_texts=frame_texts,
+    )
+    _assert_v2_artifacts(
+        result,
+        repo_root,
+        expected_text=None,
+        needs_review=True,
+    )
+    _entry, _source, raw_path, clean_path = _clean_artifacts(result, repo_root)
+    raw_by_id = {
+        str(cue["cue_id"]): str(cue["text"])
+        for cue in _read_json(raw_path)["cues"]
+    }
+    clean_cues = _read_json(clean_path)["cues"]
+    assert len(clean_cues) == len(raw_by_id)
+    assert all(len(cue["source_cue_ids"]) == 1 for cue in clean_cues)
+    assert all(
+        cue["text"] == raw_by_id[cue["source_cue_ids"][0]]
+        for cue in clean_cues
+    )
+    assert all(
+        any("\u3400" <= char <= "\u9fff" for char in cue["text"])
+        for cue in clean_cues
+    )
+    clean_text = _artifact_path(
+        repo_root,
+        result["collected"]["collected"][0]["film_source"]["clean_script"]["txt"],
+    ).read_text(encoding="utf-8")
+    assert "The terrorists captured the White House" not in clean_text
