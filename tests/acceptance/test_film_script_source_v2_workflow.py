@@ -27,6 +27,15 @@ OCR_VARIANTS = (
 )
 
 
+def _repo_root() -> Path:
+    return Path(
+        os.environ.get(
+            "NOF_FILM_SCRIPT_SOURCE_V2_ACCEPTANCE_REPO_ROOT",
+            Path(__file__).resolve().parents[2],
+        )
+    ).resolve()
+
+
 def _require_ffmpeg() -> str:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None or shutil.which("ffprobe") is None:
@@ -277,7 +286,7 @@ def test_film_script_source_v2_corrects_and_merges_ocr_at_shenkuo_boundary(
 ) -> None:
     """Four raw OCR variants become one clean, provenance-preserving v2 cue."""
     ffmpeg = _require_ffmpeg()
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = _repo_root()
     video = tmp_path / "film.mp4"
     _make_video(ffmpeg, video)
 
@@ -303,7 +312,7 @@ def test_film_script_source_v2_keeps_deterministic_baseline_when_cleaner_unavail
 ) -> None:
     """Unavailable models leave a reviewable v2 baseline instead of old flows."""
     ffmpeg = _require_ffmpeg()
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = _repo_root()
     video = tmp_path / "film.mp4"
     _make_video(ffmpeg, video)
 
