@@ -33,6 +33,10 @@ logs       tail -n 50 nof-worker stdout and stderr logs
 env:
   PYTHON_BIN  python interpreter used in plist (default: $PROJECT_ROOT/.venv/bin/python3)
 
+proxy env:
+  http_proxy/https_proxy/all_proxy/no_proxy (and uppercase variants) are copied
+  into the launchd plist when present, so model CLIs use the same local proxy.
+
 # 依赖：nof-worker 启动前需 Redis 已就绪(brew services start redis)；KeepAlive 会在 redis 未起时自动重启重试
 EOF
     exit 0
@@ -46,8 +50,33 @@ require_macos() {
   fi
 }
 
+xml_escape() {
+  local value="$1"
+  value="${value//&/&amp;}"
+  value="${value//</&lt;}"
+  value="${value//>/&gt;}"
+  value="${value//\"/&quot;}"
+  value="${value//\'/&apos;}"
+  printf '%s' "$value"
+}
+
+proxy_env_xml() {
+  local name value
+  for name in \
+    http_proxy https_proxy all_proxy no_proxy \
+    HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY; do
+    value="${!name:-}"
+    if [[ -n "$value" ]]; then
+      printf '        <key>%s</key>\n' "$name"
+      printf '        <string>%s</string>\n' "$(xml_escape "$value")"
+    fi
+  done
+}
+
 write_plist() {
   mkdir -p "$PLIST_DIR" "$LOG_DIR"
+  local proxy_xml
+  proxy_xml="$(proxy_env_xml)"
   cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -77,6 +106,7 @@ write_plist() {
     <dict>
         <key>PATH</key>
         <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+$proxy_xml
     </dict>
 </dict>
 </plist>
