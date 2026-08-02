@@ -43,67 +43,6 @@ FINAL_PREVIEW = Recipe(
 )
 
 
-# Film rebuild keeps semantic analysis/localization in the existing agents, then
-# crosses explicit human gates before frame-accurate media work.  TTS in this
-# MVP means ingesting an already generated voice stem; it never calls an online
-# voice service.  The source matcher is deliberately outside this recipe: the
-# storyboard step consumes a caller-supplied, human-approved EDL.
-FILM_LOCALIZED_REBUILD_V1 = Recipe(
-    recipe_id="film_localized_rebuild_v1",
-    name="Film Localized Rebuild V1",
-    description="Clean film master + localized narration -> frame-first rebuilt film",
-    template_renderer="film_rebuild",
-    steps=[
-        RecipeStep(step_id="input", label="START", kind="input", deps=[]),
-        RecipeStep(step_id="source", label="SOURCE", cmd="film_source", deps=["input"]),
-        RecipeStep(step_id="asr", label="SHENKUO", cmd="final_asr", deps=["source"]),
-        RecipeStep(step_id="guiguzi", label="GUIGUZI", cmd="film_guiguzi", deps=["asr"]),
-        RecipeStep(
-            step_id="script_review",
-            label="SCRIPT REVIEW",
-            deps=["guiguzi"],
-            intervention="content_edit",
-        ),
-        RecipeStep(step_id="rw", label="LIUYONG", cmd="final_rw", deps=["script_review"]),
-        RecipeStep(
-            step_id="storyboard",
-            label="FRAME EDL",
-            cmd="film_storyboard",
-            deps=["rw"],
-            material_source="collected",
-        ),
-        RecipeStep(
-            step_id="edl_review",
-            label="EDL REVIEW",
-            deps=["storyboard"],
-            intervention="content_edit",
-        ),
-        RecipeStep(
-            step_id="tts",
-            label="VOICE STEM",
-            cmd="film_tts",
-            deps=["edl_review"],
-            expensive=True,
-        ),
-        RecipeStep(
-            step_id="voice_review",
-            label="VOICE REVIEW",
-            deps=["tts"],
-            intervention="content_edit",
-        ),
-        RecipeStep(
-            step_id="render",
-            label="RENDER",
-            cmd="film_render",
-            deps=["voice_review"],
-            expensive=True,
-        ),
-        RecipeStep(step_id="quality", label="MEDIA QA", cmd="film_quality", deps=["render"]),
-        RecipeStep(step_id="download", label="DOWNLOAD", kind="output", deps=["quality"]),
-    ],
-)
-
-
 FILM_HIGHLIGHT_V1 = Recipe(
     recipe_id="film_highlight_v1",
     name="Film Highlight V1",
@@ -159,7 +98,6 @@ FILM_HIGHLIGHT_V1 = Recipe(
 
 RECIPE_REGISTRY: dict[str, Recipe] = {
     FINAL_PREVIEW.recipe_id: FINAL_PREVIEW,
-    FILM_LOCALIZED_REBUILD_V1.recipe_id: FILM_LOCALIZED_REBUILD_V1,
     FILM_HIGHLIGHT_V1.recipe_id: FILM_HIGHLIGHT_V1,
 }
 
@@ -173,7 +111,6 @@ def get_recipe(recipe_id: str) -> Recipe:
 __all__ = [
     "RECIPE_REGISTRY",
     "FINAL_PREVIEW",
-    "FILM_LOCALIZED_REBUILD_V1",
     "FILM_HIGHLIGHT_V1",
     "get_recipe",
 ]

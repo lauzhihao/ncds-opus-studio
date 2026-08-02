@@ -19,7 +19,6 @@
 ```bash
 .venv/bin/uvicorn ncds_opus_factory.server.app:app --host 0.0.0.0 --port 8810 --reload --reload-dir src
 ```
-
 - `/studio` 是仓库自带 SPA 挂载点：prod 读 `web/dist`，`NOF_DEV=1` 反代 vite。
 - nof-server 在 S3 后只负责 HTTP/SSE/入队/serve；`/tasks` 的离线执行在 `nof-worker`。
 - 常用 env：`NOF_SERVER_HOST` / `NOF_SERVER_PORT` / `NOF_STATE_DIR` / `NOF_VIDEO_JOBS_DIR` / `NOF_ARTIFACTS_ROOT`。
@@ -49,68 +48,22 @@
 
 ### film domain 契约
 
-film 仍使用 `/jobs` 画布端点，但 `asr` 节点语义是沈括字幕采集，不是“把混合音频听写成稿”。
-legacy facade 与 `/instances` 的 `final_asr` performer 都调用同一个 collector。每个
-`outputs.collected[]` 成功 entry 必含：
+film 的默认路径在沈括结束：`asr` 节点对视频做 2fps 底部字幕 OCR、中文语义校正和校正后的时序去重，不进入鬼谷子或柳永。每个成功的 `outputs.collected[]` entry 都使用 `film_script_source.v2`，并且 `text` 与 `clean_script.txt` 完全一致。
+
+`film_source` 固定为：
 
 ```json
 {
-  "film_source": {
-    "mode": "film_subtitle_source",
-    "version": 1,
-    "video": "state/works/douyin/123/video.mp4",
-    "ocr": {
-      "backend": "rapidocr-onnxruntime-ppocrv6-small",
-      "raw_cues": "state/works/douyin/123/film_subtitles/raw.json",
-      "srt": "state/works/douyin/123/film_subtitles/raw.srt",
-      "txt": "state/works/douyin/123/film_subtitles/raw.txt",
-      "report": "state/works/douyin/123/film_subtitles/report.json",
-      "cue_count": 476,
-      "frame_sampling_fps": 2
-    },
-    "asr_timeline": "state/works/douyin/123/asr.timeline.json"
-  }
+  "mode": "film_script_source",
+  "version": 2,
+  "language": "zh-CN",
+  "video": "state/works/douyin/123/video.mp4",
+  "raw_ocr": {"json": ".../raw.json", "srt": ".../raw.srt", "txt": ".../raw.txt", "report": ".../raw.report.json", "cue_count": 476, "backend": "rapidocr-onnxruntime-ppocrv6-small", "frame_sampling_fps": 2},
+  "clean_script": {"json": ".../clean.json", "srt": ".../clean.srt", "txt": ".../clean.txt", "report": ".../clean.report.json", "cue_count": 420, "needs_review": false}
 }
 ```
 
-`POST /jobs/{job_id}/guiguzi/analyze` 不读 `items` 做选题，而是异步清洗以上 OCR cues。
-`GET /jobs/{job_id}/guiguzi` 最终返回：
-
-```json
-{
-  "mode": "film_commentary",
-  "status": "done",
-  "sources": [],
-  "cues": [{
-    "cue_id": "cue_0001",
-    "source_work_id": "123",
-    "start_ms": 33270,
-    "end_ms": 34470,
-    "ocr_text": "大家好我是阿强",
-    "asr_text": "大家好 我是阿强",
-    "text": "大家好，我是阿强",
-    "kind": "narration",
-    "confidence": 0.98
-  }],
-  "script": {
-    "txt": "film_script/narration.txt",
-    "srt": "film_script/narration.srt",
-    "json": "film_script/narration.json"
-  },
-  "entity_glossary": [],
-  "qa": {
-    "raw_cues": 476,
-    "narration_cues": 460,
-    "dialogue_filtered": 5,
-    "noise_filtered": 11,
-    "needs_review": 1
-  }
-}
-```
-
-film 不支持 `/guiguzi/topics`。柳永的 film `rw` 只接受上述 `film_commentary`，只翻译
-`cues[].kind=narration`；旧 `film_script_split` 会被拒绝。
-
+`clean.json` cue 至少有 `cue_id/start_ms/end_ms/text/source_cue_ids/confidence`；`source_cue_ids` 不为空，且相邻 cue 的标准化文本不重复。校正优先 AGY，整批失败后从首批改用 Codex/SCodex，再失败才使用 Opus；全部 backend 不可用时保留确定性 baseline 并标记 `needs_review`。`raw_ocr` 是不可覆盖的观测产物。
 ## 4. `/tasks`：app 决策视角主路径
 
 Flutter app 的 `FactoryClient` 当前围绕 `/tasks` 工作：拉 agent 收件箱、提交任务、看详情、收 SSE、提交审核决定。`/tasks` 不是 `/instances` 的兼容读层；它仍由 `TaskRunner` / `nof-worker` 驱动。
@@ -168,8 +121,7 @@ es.onmessage = (e) => {
 当前 `RECIPE_REGISTRY` 注册：
 
 - `final_preview`：既有 web 成片链。
-- `film_localized_rebuild_v1`：对标字幕清洗/翻译后，用干净原片重建完整版。
-- `film_highlight_v1`：消费人工确认的 highlight plan/EDL，用干净原片生成短版。
+- `film_highlight_v1`：消费人工确认的 highlight plan/EDL，用干净原片生成短版；它独立于影视字幕采集脚本。
 
 两条 film recipe 当前是 backend walking skeleton，尚未接入 web/app UI。driver 必须在
 `script_review`（仅完整版）、`highlight_plan`（仅短版）、`edl_review`、`voice_review`
@@ -257,12 +209,3 @@ await fetch(`/tasks/${id}/review`, {
   body: JSON.stringify({ decision: 'approved', note: '配音再快点' }),
 });
 ```
-
-`decision` 取 `approved | rejected`；再次 POST 会覆盖最后决策。`note_origin=machine` 表示模板生成意见，不冒充人工训练样本。
-
-## 9. 错误与状态码
-
-- `POST /tasks` 未知 cmd → 404；建成功 → 201。
-- `/instances` 状态机冲突 → 409；坏 recipe / body → 400；实例或 step 不存在 → 404。
-- 产物路由：不存在 404；越界或非白名单根 → 403；目录当文件取 → 400。
-- 任务失败：详情接口返回 `status="failed"` + `error`；SSE 也会发 error 事件。

@@ -16,7 +16,6 @@ from ncds_opus_factory.server.domain_strategy import (
 )
 from ncds_opus_factory.server.guiguzi_domain_processors import (
     DEFAULT_GUIGUZI_PROCESSOR,
-    FILM_GUIGUZI_PROCESSOR,
 )
 
 RUNNABLE_NODES = (
@@ -148,46 +147,6 @@ async def _spawn_default_asr_enrich(
         context.runner._spawn_asr_enrich(context.job_id)
 
 
-async def _run_film_rw_pipeline(
-    context: PipelineStrategyContext,
-) -> dict[str, Any]:
-    from ncds_opus_factory.commands.film_localization import localize_film_script
-
-    target_language = str(context.params.get("target_language") or "en").strip().lower()
-    return await context.runner._run_in_thread_cancellable(
-        localize_film_script,
-        context.runner._cancel_flag(context.job_id, context.node),
-        context.runner.video_jobs_dir / context.job_id,
-        target_language=target_language,
-        on_progress=lambda text: context.runner._push_progress(
-            context.job_id,
-            context.node,
-            text,
-        ),
-    )
-
-
-def _run_film_rw_engine(context: EngineStrategyContext) -> dict[str, Any]:
-    from ncds_opus_factory.commands.film_localization import localize_film_script
-
-    target_language = str(
-        context.params.get("target_language") or "en"
-    ).strip().lower()
-    return localize_film_script(
-        context.params["job_dir"],
-        target_language=target_language,
-        on_progress=context.on_progress,
-    )
-
-
-def _run_film_guiguzi_engine(context: EngineStrategyContext) -> dict[str, Any]:
-    from ncds_opus_factory.server.engine.pipeline_performers_film import (
-        run_film_guiguzi_step,
-    )
-
-    return run_film_guiguzi_step(context.on_progress, **context.params)
-
-
 def _run_film_storyboard_engine(context: EngineStrategyContext) -> dict[str, Any]:
     from ncds_opus_factory.server.engine.pipeline_performers_film import (
         run_film_storyboard_step,
@@ -240,15 +199,6 @@ DOMAIN_STRATEGIES.register(
         asr_policy=_film_asr_policy,
     ),
 )
-DOMAIN_STRATEGIES.register(
-    "rw",
-    "film",
-    PipelineNodeStrategy(
-        name="film:rw",
-        execute_pipeline=_run_film_rw_pipeline,
-        execute_engine=_run_film_rw_engine,
-    ),
-)
 for _node, _engine_execute in (
     ("storyboard", _run_film_storyboard_engine),
     ("tts", _run_film_tts_engine),
@@ -273,17 +223,6 @@ DOMAIN_STRATEGIES.register(
         processor=DEFAULT_GUIGUZI_PROCESSOR,
     ),
 )
-DOMAIN_STRATEGIES.register(
-    "guiguzi",
-    "film",
-    GuiguziNodeStrategy(
-        name="film:guiguzi",
-        processor=FILM_GUIGUZI_PROCESSOR,
-        execute_engine=_run_film_guiguzi_engine,
-    ),
-)
-
-
 def pipeline_strategy(node: str, domain: object) -> PipelineNodeStrategy:
     strategy = DOMAIN_STRATEGIES.resolve(node, normalize_domain(domain))
     if not isinstance(strategy, PipelineNodeStrategy):

@@ -8,7 +8,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ncds_opus_factory.commands.film_commentary import build_film_commentary
 from ncds_opus_factory.commands.film_rebuild import (
     build_film_frame_edl,
     prepare_film_sources,
@@ -44,29 +43,6 @@ def run_film_source_step(
         master_audio_stream=master_audio_stream,
         on_progress=on_progress,
     )
-
-
-def run_film_guiguzi_step(
-    on_progress: Callable[[str], None],
-    *,
-    job_dir: str,
-    sources: list[dict[str, Any]] | None = None,
-    collected: list[dict[str, Any]] | None = None,
-    items: list[dict[str, Any]] | None = None,
-    **_: Any,
-) -> dict[str, Any]:
-    """Promote the existing film commentary cleaner into a synchronous step."""
-    source_rows = list(sources or collected or items or [])
-    if not source_rows:
-        raise ValueError("film guiguzi requires Shenkuo collected sources")
-    result = build_film_commentary(
-        job_dir,
-        source_rows,
-        on_progress=on_progress,
-    )
-    path = Path(job_dir) / "guiguzi.json"
-    _write_json(path, result)
-    return {**result, "guiguzi_path": str(path)}
 
 
 def run_film_storyboard_step(
@@ -141,7 +117,6 @@ def run_film_quality_step(
 
 PERFORMERS_FILM: dict[str, Callable[..., dict[str, Any]]] = {
     "film_source": run_film_source_step,
-    "film_guiguzi": run_film_guiguzi_step,
     "film_storyboard": run_film_storyboard_step,
     "film_tts": run_film_tts_step,
     "film_render": run_film_render_step,
@@ -152,7 +127,6 @@ PERFORMERS_FILM: dict[str, Callable[..., dict[str, Any]]] = {
 __all__ = [
     "PERFORMERS_FILM",
     "run_film_source_step",
-    "run_film_guiguzi_step",
     "run_film_storyboard_step",
     "run_film_tts_step",
     "run_film_render_step",

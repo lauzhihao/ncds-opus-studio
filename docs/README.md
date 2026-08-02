@@ -53,18 +53,12 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 - **P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）。
 - **生产引擎后端已存在**：`src/ncds_opus_factory/server/engine/`、`routes/instances.py`、`pipeline_performers_final.py` 已落地；`RECIPE_REGISTRY` 当前只注册 `final_preview`。
 - **web 当前主路径仍是 `/jobs/*`**：`/studio` React 画布调用 `/jobs`、`/pipelines`、`/preview`；`PipelineRunner` 作为 facade 保存 `JobState`，命中节点再转到 engine performer。默认未设 `NOF_ENGINE_NODES` 时，`lines/storyboard/tts/image/render` 走 engine；`asr` 因步内增量与后台 enrich 仍固定走 legacy，`rw` 因逐模型实时 `model_progress/drafts` 面板仍固定走 legacy。
-- **film domain 已切到字幕真源**：沈括复用原片下载/ASR sidecar，但以 2fps 底部区域
-  RapidOCR（PP-OCRv6 small + ONNX Runtime）采集烧录中文字幕；legacy `/jobs` 与 engine
-  performer 调同一个 collector。产物落
-  `state/works/{platform}/{id}/film_subtitles/{raw.json,raw.srt,raw.txt,report.json}`。
-  鬼谷子读取 OCR cue、以 ASR timeline 仅作辅助，输出 `mode=film_commentary` 的
-  narration/dialogue/noise 分类与干净解说稿到 `video-jobs/{job}/film_script/`；柳永只翻译
-  `kind=narration` 并保留 cue 时间轴。film localization 整次 run 按
-  `AGY(gemini-3.5-flash-high) -> Codex/SCodex(gpt-5.6-terra) ->
-  Opus(DEFAULT_OPUS_MODEL)` 顺序 fallback；单个 backend 任一 batch 失败会从第 1 批
-  在下一个 backend 重跑，不混用不同 backend 的批次。`02_rw/film_localization.json`
-  与命令返回值都记录实际 `translation_backend` / `translation_model`。旧 film
-  job/result 不兼容，必须从沈括重跑。
+- **film domain 已切到 `film_script_source.v2`**：沈括复用下载/ASR sidecar，但以 2fps
+  底部 RapidOCR 观测为真源，在 collector 内完成中文语义校正与校正后的时序去重。产物落
+  `state/works/{platform}/{id}/film_subtitles/{raw.*,clean.*}`；`raw_ocr` 永不覆盖，
+  `clean_script` 提供 txt/srt/json/report，且 `collected[].text` 等于 clean.txt 完整内容。
+  校正按 `AGY -> Codex/SCodex -> Opus` 整批 fallback；全部不可用时交付确定性 baseline 并
+  标记 `needs_review`。film 默认在沈括结束，不再调用鬼谷子或柳永。
 - **app 当前主路径仍是 `/tasks`**：Flutter 决策视角通过 `TaskRunner` / `nof-worker` 消费任务，还没有切到 `/instances`。
 - **`/instances` 是可用的后端 driver API**，目前主要由测试与内部迁移使用，尚未替代 web/app 前端主路径。
 - 测试基线不要沿用历史文档里的 passed 数字；执行任务当天以 `pytest --collect-only` / `pytest` 的真实结果为准。

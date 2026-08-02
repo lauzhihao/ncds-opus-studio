@@ -116,6 +116,7 @@ export function ShenkuoCollectPanel({ jobId, nodeState, onAdvanced }: Props) {
   const status = nodeState.status;
   const ok = collected.filter((e) => !e.error);
   const selection = useCommentSelection(jobId);
+  const hasFilmScript = collected.some((entry) => entry.film_source?.mode === 'film_script_source');
 
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
   if (collected.length === 0 && status === 'idle') {
@@ -136,7 +137,7 @@ export function ShenkuoCollectPanel({ jobId, nodeState, onAdvanced }: Props) {
         </div>
       )}
 
-      {collected.length > 0 && (
+      {collected.length > 0 && !hasFilmScript && (
         <div
           className={`section-h${status === 'running' || status === 'queued' ? ' loading' : ''}`}
           style={{ margin: 'var(--s-3) 0' }}
@@ -156,7 +157,7 @@ export function ShenkuoCollectPanel({ jobId, nodeState, onAdvanced }: Props) {
         <EntryCard key={e.aweme_id || e.url || i} entry={e} selection={selection} />
       ))}
 
-      {ok.length > 0 && status === 'done' && onAdvanced && (
+      {ok.length > 0 && status === 'done' && onAdvanced && !hasFilmScript && (
         <div style={{ marginTop: 'var(--s-4)', display: 'flex', justifyContent: 'flex-end' }}>
           <button className="btn primary sm" onClick={onAdvanced} title="完成采集，交鬼谷子选题">
             <Play size={12} strokeWidth={2} fill="currentColor" /> 交鬼谷子选题
@@ -204,6 +205,7 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
   ].filter((r) => audio[r.key]);
   const comments = entry.top_comments ?? [];
   const cutouts = (entry.cutouts ?? []).map(fileUrl).filter(Boolean) as string[];
+  const filmSource = entry.film_source?.mode === 'film_script_source' ? entry.film_source : undefined;
 
   return (
     // 一条作品 = 一组独立卡片：作品信息 / 本地下载视频 / 提取文案 / 声音素材 / 高赞评论 / 抠图
@@ -296,8 +298,10 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
         </article>
       )}
 
+      {filmSource && <FilmScriptCard source={filmSource} text={entry.text ?? ''} />}
+
       {/* 卡片：提取文案 */}
-      {entry.text && (
+      {entry.text && !filmSource && (
         <article className="shenkuo-card" style={cardStyle}>
           <SectionHead
             icon={<Quote size={13} />}
@@ -406,6 +410,34 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
         </article>
       )}
     </div>
+  );
+}
+
+function FilmScriptCard({ source, text }: { source: NonNullable<ShenkuoEntry['film_source']>; text: string }) {
+  const [open, setOpen] = useState(false);
+  const clean = source.clean_script;
+  async function copyText() {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // 浏览器权限不足时仍保留全文供用户手动复制。
+    }
+  }
+  return (
+    <article className="shenkuo-card" style={cardStyle}>
+      <SectionHead
+        icon={<Quote size={13} />}
+        label={`干净中文字幕/解说稿 · ${clean.cue_count} 条${clean.needs_review ? ' · 待复核' : ''}`}
+        right={<CardToggle open={open} onToggle={() => setOpen((value) => !value)} openText="收起" closedText="展开全文" />}
+      />
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8, fontSize: 'var(--text-2xs)' }}>
+        <a href={fileUrl(clean.txt)} download>下载 TXT</a>
+        <a href={fileUrl(clean.srt)} download>下载 SRT</a>
+        <a href={fileUrl(clean.json)} download>下载 JSON</a>
+        <button className="link-btn" onClick={copyText}>复制全文</button>
+      </div>
+      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7, ...(open ? {} : clamp12) }}>{text}</div>
+    </article>
   );
 }
 

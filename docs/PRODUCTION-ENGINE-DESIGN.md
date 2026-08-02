@@ -74,10 +74,9 @@
 **Domain strategy 派发（2026-07-31 已实现）**：所有有执行体的语义生产节点在 facade 与
 `InstanceRunner` 中统一按 `(node, domain)` 从 `DomainStrategyRegistry` 解析；未知 domain 命中
 `*` default，保持既有生产行为。`film` 的沈括 strategy 复用下载与 ASR sidecar，但以
-2fps 视频抽帧 + 底部字幕 RapidOCR 为真源，legacy 与 engine 走同一个 collector。鬼谷子读取
-immutable `ocr_text`/时间戳，以 ASR 仅作校订证据，产出 `mode=film_commentary`、
-`kind=narration|dialogue|noise` 的 cues、全片 `entity_glossary` 和 QA；柳永只翻译 clean
-narration 并继承 cue 时间轴。旧 `film_script_split`/旧 artifact 不兼容。新增 domain
+2fps 视频抽帧 + 底部字幕 RapidOCR 为真源，在 collector 内完成中文校正与校正后时序去重，直接产出
+`film_script_source.v2`。`raw_ocr` immutable，`clean_script` 提供可审核的 zh-CN txt/srt/json；
+默认 film 不进入鬼谷子或柳永。旧 artifact 不兼容，必须从沈括重跑。新增 domain
 只需实现并注册 strategy/processor，不改节点核心分发代码；source/quality 等没有 domain
 strategy 的 technical step 安全回退 recipe performer，无 performer 的 input/output/人工 preview
 闸门仍按 recipe 状态机处理。该派发不再只限于 `final_preview`，film recipe 的
@@ -205,20 +204,12 @@ idle → queued → running → draft_ready
 ## 5. 多配方
 
 - Recipe = 有序 `RecipeStep`，每步绑 `cmd`/`agent`（字符串）、`expensive`、`intervention`、`material_source`。
-- 当前已注册 **final_preview**、**film_localized_rebuild_v1**、**film_highlight_v1**；
+- 当前已注册 **final_preview**、**film_highlight_v1**；
   **figure_talk 剪影**仍是 E3 / cold chain 范围。
 - **素材来源**是步骤内策略：`material_source="generated"`（gpt-image 生图，final_preview）vs `"collected"`（沈括切素材，figure_talk）——不冲突、按 recipe/step 配。
 - 新风格 = 新 recipe + 新 `template_renderer`，不动引擎。
 
 ### 5.1 film frame-first rebuild v1
-
-`film_localized_rebuild_v1`：
-
-```text
-input -> source -> asr -> guiguzi -> script_review -> rw
-      -> storyboard -> edl_review -> tts -> voice_review
-      -> render -> quality -> download
-```
 
 `film_highlight_v1`：
 
@@ -231,7 +222,7 @@ input -> source -> highlight_plan -> storyboard -> edl_review
 
 - `source` 只注册调用方依法提供的对标视频和 clean master，做真实 ffprobe/hash；系统不搜索或下载电影原片。
   多音轨 master 由可选 `master_audio_stream` 选择 audio ordinal，codec/language 与 ordinal 一起固化进 artifact。
-- 沈括/鬼谷子/柳永沿用 OCR 真源、语义分类校订和 narration-only 本地化。
+- 沈括的 `film_script_source.v2` 可作为独立清洁中文脚本输入；highlight 不依赖鬼谷子、柳永或翻译。
 - `storyboard` v1 不做自动视觉匹配，只消费调用方/人工确认的 ms EDL 或 frame EDL，统一输出
   `film_frame_edl.v1` 半开 frame ranges 与 backward/overlap/low-confidence review 诊断。
 - `tts` v1 不调用在线 TTS/voice cloning，只把已生成 voice 规范化成 48 kHz stereo PCM stem，
@@ -245,8 +236,7 @@ input -> source -> highlight_plan -> storyboard -> edl_review
 - `quality` 做真实 ffprobe + full ffmpeg decode，硬校验 expected frame count、CFR/fps、目标时长
   一帧误差、音轨存在与时长。
 
-完整版与 highlight 是两个 recipe，但 highlight 仍直接引用 clean master frame EDL，不能从已渲染
-完整版 MP4 二次裁切。
+highlight 仍直接引用 clean master frame EDL，不能从已渲染 MP4 二次裁切。
 
 ### 5.2 film artifact lineage
 
@@ -316,13 +306,12 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 |---|---|---|
 | **对标账号** | 爬取采集（下载+转写+截帧抠图，落共享池） | →鬼谷子(选题)→柳永→… |
 | **普通作品链接** | 单链 ASR（只转写这一条） | →柳永(改写/编剧)→… |
-| **film 原片/作品链接** | 下载/缓存 + 2fps 底部字幕 OCR；ASR timeline 仅作辅助 | →鬼谷子(对白/噪声过滤、术语校订)→柳永(只翻译 narration) |
+| **film 原片/作品链接** | 下载/缓存 + 2fps 底部字幕 OCR；ASR timeline 仅作辅助 | 沈括内完成中文校正与时序去重，直接交付 clean script |
 | **选题/一句话想法** | 无（没有外部原料可采，跳过沈括） | 直接 →柳永(或先鬼谷子提炼) |
 
 > 即"链接→asr"这个裸节点不再独立存在，它是**沈括的单链模式**。film 是这一模式的
-> 字幕采集分支：OCR cue 是唯一真源，ASR 不能覆盖 OCR，只能帮助鬼谷子判断同音字和标点。
-> 原始 artifact 固定落 `state/works/{platform}/{id}/film_subtitles/`，clean script 固定落
-> `video-jobs/{job}/film_script/`。
+> 字幕采集分支：OCR cue 是唯一真源，ASR 不能覆盖 OCR，只能帮助沈括校正同音字和标点。
+> 原始与 clean artifact 都固定落 `state/works/{platform}/{id}/film_subtitles/`。
 
 > **沈括的"共享池"性质**：采一个对标账号的数据可复用于很多选题/作品，所以"采集"步骤**缓存感知**
 > （命中已采账号则复用，不重采）。它仍是卧龙麾下的生产步骤，只是产物落共享池（`state/benchmark`），

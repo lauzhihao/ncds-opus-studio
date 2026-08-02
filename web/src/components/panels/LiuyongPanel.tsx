@@ -14,14 +14,11 @@ import {
   useEffect,
   useRef,
   useState,
-  type ComponentType,
 } from 'react';
 import { AlertTriangle, CheckCircle2, FileText, Play, RefreshCw, Sparkles, Square } from 'lucide-react';
 
 import { api } from '../../api/client';
 import type {
-  FilmLocalizationSegment,
-  FilmTargetLanguage,
   JobState,
   NodeState,
   PipelineNodeDef,
@@ -41,15 +38,6 @@ interface Props {
 }
 
 const NEXT_NODE = 'lines';
-const FILM_LANGUAGE_LABELS: Record<FilmTargetLanguage, string> = {
-  en: 'English',
-  ja: '日本語',
-  ko: '한국어',
-  es: 'Español',
-  fr: 'Français',
-  de: 'Deutsch',
-};
-
 // 体裁 profile 已废：写作由作品垂类标签(domain)的写作方法独家驱动，柳永不再让用户选体裁。
 
 const RUBRIC_DIMS = ['节奏', '真实性', '精炼度', '直接性', '信任度'];
@@ -204,108 +192,8 @@ const MODEL_LABELS: Record<string, string> = {
 };
 const modelLabel = (id: string, fallback: string): string => MODEL_LABELS[id] ?? fallback;
 
-const LiuyongPanelByDomain: Record<string, ComponentType<Props>> = {
-  film: FilmLiuyongPanel,
-  film_commentary: FilmLiuyongPanel,
-};
-
 export function LiuyongPanel(props: Props) {
-  const domain = String(props.job.inputs.domain ?? '').trim().toLowerCase();
-  const mode = String(props.job.inputs.mode ?? '').trim().toLowerCase();
-  const Panel = LiuyongPanelByDomain[domain]
-    ?? LiuyongPanelByDomain[mode]
-    ?? TopicLiuyongPanel;
-  return <Panel {...props} />;
-}
-
-function FilmLiuyongPanel({ jobId, nodeDef, nodeState }: Props) {
-  const { showToast } = useToast();
-  const [busy, setBusy] = useState(false);
-  const status = nodeState.status;
-  const segments = (
-    nodeState.outputs?.segments as FilmLocalizationSegment[] | undefined
-  ) ?? [];
-  const targetLanguage = (
-    nodeState.outputs?.target_language as FilmTargetLanguage | undefined
-  ) ?? 'en';
-
-  async function runAgain() {
-    setBusy(true);
-    try {
-      await api.runNode(
-        jobId,
-        nodeDef.name,
-        { target_language: targetLanguage },
-        true,
-      );
-    } catch (error) {
-      showToast('启动翻译失败，请稍后再试');
-      console.error('[FilmLiuyongPanel] run failed', error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function cancel() {
-    setBusy(true);
-    try {
-      await api.cancelNode(jobId, nodeDef.name);
-    } catch (error) {
-      showToast('停止失败，请稍后再试');
-      console.error('[FilmLiuyongPanel] cancel failed', error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="rw-panel-root liuyong-panel-root film-localization-panel">
-      <div className="rw-panel-header">
-        <div className="section-h" style={{ margin: 0, flex: 1 }}>
-          解说翻译 · {FILM_LANGUAGE_LABELS[targetLanguage] ?? targetLanguage}
-        </div>
-        {status === 'running' || status === 'queued' ? (
-          <button className="btn primary sm" disabled={busy} onClick={cancel}>
-            <Square size={11} strokeWidth={2.2} fill="currentColor" /> 停止
-          </button>
-        ) : (
-          <button className="btn primary sm" disabled={busy} onClick={runAgain}>
-            <RefreshCw size={12} strokeWidth={1.9} />
-            {status === 'done' ? '重新翻译' : '开始翻译'}
-          </button>
-        )}
-      </div>
-
-      {nodeState.progress && (
-        <div className="panel-hint panel-hint-info">{nodeState.progress}</div>
-      )}
-      {nodeState.error && (
-        <div className="panel-hint panel-hint-error">{nodeState.error}</div>
-      )}
-      {segments.length === 0 && status === 'idle' && (
-        <div className="empty-state">请先在鬼谷子确认时间线分类和目标语言。</div>
-      )}
-      <div className="film-translation-list">
-        {segments.map((segment) => (
-          <div key={segment.cue_id} className="film-translation-row">
-            <div className="film-segment-meta">
-              <span>{(segment.start_ms / 1000).toFixed(1)}s–{(segment.end_ms / 1000).toFixed(1)}s</span>
-              <span className={segment.duration_fit === 'ok' ? 'fit-ok' : 'fit-too-long'}>
-                {segment.duration_fit === 'ok' ? '时长适配' : '预计超时'}
-              </span>
-            </div>
-            <div className="film-translation-source">{segment.source_text}</div>
-            <div className="film-translation-target">{segment.translated_text}</div>
-          </div>
-        ))}
-      </div>
-      {status === 'done' && (
-        <div className="panel-hint panel-hint-info">
-          本轮仅产出翻译与时长评估，film TTS 和原声混合尚未启用。
-        </div>
-      )}
-    </div>
-  );
+  return <TopicLiuyongPanel {...props} />;
 }
 
 function TopicLiuyongPanel({ jobId, nodeDef, nodeState, onAdvanced, onReconnectSSE }: Props) {

@@ -264,23 +264,32 @@ export interface ShenkuoEntry {
   audio?: Record<string, string>; // original/vocals/bgm 相对路径（后台补）
   frames?: string[];
   cutouts?: string[]; // 抠图相对路径（后台补）
-  film_source?: FilmSubtitleSource;
+  film_source?: FilmScriptSource;
   status?: Record<string, string>; // download/transcribe/audio/cutout/comments -> ok/cached/error:*
   error?: string | null;
 }
 
-export interface FilmSubtitleSource {
-  mode: 'film_subtitle_source';
-  version: 1;
+export interface FilmScriptSource {
+  mode: 'film_script_source';
+  version: 2;
+  language: 'zh-CN';
   video: string;
-  ocr: {
+  raw_ocr: {
     backend: string;
-    raw_cues: string;
+    json: string;
     srt: string;
     txt: string;
-    report: string;
+    report?: string;
     cue_count: number;
     frame_sampling_fps: 2;
+  };
+  clean_script: {
+    json: string;
+    srt: string;
+    txt: string;
+    report?: string;
+    cue_count: number;
+    needs_review: boolean;
   };
   asr_timeline?: string | null;
 }
@@ -322,78 +331,22 @@ export interface GuiguziAnalysisColumn {
   error?: string | null;
 }
 
-export type FilmCueKind = 'narration' | 'dialogue' | 'noise';
-
-export interface FilmCommentaryCue {
-  cue_id: string;
-  source_work_id: string;
-  start_ms: number;
-  end_ms: number;
-  ocr_text: string;
-  asr_text: string;
-  text: string;
-  kind: FilmCueKind;
-  confidence: number;
-}
-
-export interface FilmEntityGlossaryEntry {
-  canonical: string;
-  aliases: string[];
-  category: string;
-  note?: string | null;
-}
-
-export interface FilmCommentaryQa {
-  raw_cues: number;
-  narration_cues: number;
-  dialogue_filtered: number;
-  noise_filtered: number;
-  needs_review: number;
-}
-
 // 鬼谷子两步流结果（per-job guiguzi.json；前端轮询 GET /jobs/{id}/guiguzi）。
 //   analyzing → analyzed（用户介入：编辑分析 + 2选1）→ generating → done
 export interface GuiguziResult {
-  mode?: 'topic_discovery' | 'film_commentary';
+  mode?: 'topic_discovery';
   // 粗粒度轮询信号：running(分析/出题中) / analyzed(分析完待用户) / done / failed
   status: 'running' | 'analyzed' | 'done' | 'failed';
-  stage?: 'analyzing' | 'analyzed' | 'generating' | 'cleaning' | 'done' | 'failed';
+  stage?: 'analyzing' | 'analyzed' | 'generating' | 'done' | 'failed';
   items?: GuiguziItem[];
   analysis?: Record<string, GuiguziAnalysisColumn | undefined> | null; // 第一步多模型
   chosen_analysis?: GuiguziAnalysis | null; // 第二步选定/编辑的那份
   candidates?: Record<string, GuiguziCandidate | undefined> | null; // 第二步多模型选题
   prompt?: string | null; // 本次出选题用的提示词模板（含 $source 占位），供前端回显/编辑
   topics?: GuiguziTopic[] | null;
-  sources?: Array<Record<string, unknown>> | null;
-  cues?: FilmCommentaryCue[] | null;
-  script?: {
-    txt: string;
-    srt: string;
-    json: string;
-  } | null;
-  entity_glossary?: FilmEntityGlossaryEntry[] | null;
-  qa?: FilmCommentaryQa | null;
   error?: string | null;
   progress?: string;
   updated_at?: number;
-}
-
-export type FilmTargetLanguage = 'en' | 'ja' | 'ko' | 'es' | 'fr' | 'de';
-
-export interface FilmLocalizationSegment {
-  cue_id: string;
-  source_work_id: string;
-  start_ms: number;
-  end_ms: number;
-  ocr_text: string;
-  asr_text: string;
-  source_text: string;
-  translated_text: string;
-  target_language: FilmTargetLanguage;
-  available_duration_ms: number;
-  estimated_duration_ms: number;
-  duration_fit: 'ok' | 'too_long';
-  duration_ratio?: number | null;
 }
 
 // 前端从抖音分享文本里 regex 解析出的一条作品。
