@@ -204,13 +204,12 @@ Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,Second narration block
 
 def _load_runtime() -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
     """Load the production assembly lazily so this file remains collectable."""
-    from ncds_opus_factory.server.engine.pipeline_performers_film import (
-        PERFORMERS_FILM,
-    )
-
     from ncds_opus_factory.commands import build_full_registry
     from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
     from ncds_opus_factory.server.engine.instance_store import InstanceStore
+    from ncds_opus_factory.server.engine.pipeline_performers_film import (
+        PERFORMERS_FILM,
+    )
     from ncds_opus_factory.server.engine.pipeline_performers_final import (
         PERFORMERS_FINAL,
     )
@@ -577,8 +576,10 @@ def test_film_highlight_recipe_renders_frame_exact_media(
     probe = _probe_output(film_fixture.ffprobe, output)
     video_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "video"]
     audio_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "audio"]
+    data_streams = [stream for stream in probe["streams"] if stream["codec_type"] == "data"]
     assert len(video_streams) == 1
     assert audio_streams
+    assert data_streams == []
     video = video_streams[0]
     assert int(video["nb_read_frames"]) == EXPECTED_OUTPUT_FRAMES
     assert Fraction(video["r_frame_rate"]) == EXPECTED_FPS

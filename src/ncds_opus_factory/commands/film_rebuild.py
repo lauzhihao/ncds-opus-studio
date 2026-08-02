@@ -59,6 +59,21 @@ def _ffmpeg_has_filter(ffmpeg: str, name: str) -> bool:
     return False
 
 
+@lru_cache(maxsize=16)
+def _ffmpeg_has_option(ffmpeg: str, name: str) -> bool:
+    result = subprocess.run(  # noqa: S603 - resolved ffmpeg plus fixed argv.
+        [ffmpeg, "-hide_banner", "-h", "full"],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        return False
+    option = f"-{name}"
+    return any(line.lstrip().startswith(option) for line in result.stdout.splitlines())
+
+
 def _run(
     args: list[str],
     *,
@@ -183,6 +198,8 @@ def _fraction_from_doc(value: Any, *, label: str) -> Fraction:
     if isinstance(value, dict):
         numerator = value.get("numerator", value.get("num"))
         denominator = value.get("denominator", value.get("den"))
+        if numerator is None or denominator is None:
+            raise ValueError(f"{label} is invalid")
         try:
             return _parse_fraction(f"{int(numerator)}/{int(denominator)}", label=label)
         except (TypeError, ValueError) as exc:
@@ -241,7 +258,8 @@ def _media_summary(probe: dict[str, Any]) -> dict[str, Any]:
         video.get("avg_frame_rate") or video.get("r_frame_rate"),
         label="video fps",
     )
-    format_doc = probe.get("format") if isinstance(probe.get("format"), dict) else {}
+    format_value = probe.get("format")
+    format_doc: dict[str, Any] = format_value if isinstance(format_value, dict) else {}
     duration = _float(video.get("duration")) or _float(format_doc.get("duration"))
     if duration <= 0:
         raise ValueError("media duration is unavailable")
@@ -664,7 +682,8 @@ def prepare_film_voice(
     )
     stem_probe = _probe(stem_path)
     stem_audio = _stream(stem_probe, "audio") or {}
-    format_doc = stem_probe.get("format") if isinstance(stem_probe.get("format"), dict) else {}
+    format_value = stem_probe.get("format")
+    format_doc: dict[str, Any] = format_value if isinstance(format_value, dict) else {}
     voice_artifact = _artifact_ref(
         root,
         stem_path,
@@ -858,6 +877,7 @@ def render_film_from_master(
         pass
     render_warnings: list[str] = []
     subtitle_mode = "none"
+    ffmpeg = _required_binary("ffmpeg")
 
     video_filters: list[str] = []
     audio_filters: list[str] = []
@@ -917,7 +937,6 @@ def render_film_from_master(
         ])
     if subtitle_artifact is not None:
         subtitle = _resolve_uri(root, subtitle_artifact["uri"])
-        ffmpeg = _required_binary("ffmpeg")
         if _ffmpeg_has_filter(ffmpeg, "subtitles"):
             visual_filters.append(f"subtitles=filename='{_filter_path(subtitle)}'")
             subtitle_mode = "burned"
@@ -941,7 +960,8 @@ def render_film_from_master(
         f"[beda]volume={bed_volume}[bed]",
         "[bed][voicesc]sidechaincompress=threshold=0.030:ratio=8:attack=5:release=250[ducked]",
         "[ducked][voicemix]amix=inputs=2:duration=first:dropout_transition=0,"
-        f"alimiter=limit=0.95,apad,atrim=duration={expected_duration:.12f}[outa]",
+        "alimiter=limit=0.95,asetpts=PTS-STARTPTS,"
+        f"apad,atrim=duration={expected_duration:.12f}[outa]",
     ])
     output_dir = root / "film_rebuild" / "render"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -949,8 +969,13 @@ def render_film_from_master(
     if not output_name.lower().endswith(".mp4"):
         output_name += ".mp4"
     output_path = output_dir / output_name
+    sync_args = (
+        ["-fps_mode", "cfr"]
+        if _ffmpeg_has_option(ffmpeg, "fps_mode")
+        else ["-vsync", "cfr"]
+    )
     ffmpeg_args = [
-        _required_binary("ffmpeg"),
+        ffmpeg,
         "-y",
         "-v",
         "error",
@@ -964,12 +989,15 @@ def render_film_from_master(
         "[outv]",
         "-map",
         "[outa]",
+        "-map_metadata",
+        "-1",
+        "-map_chapters",
+        "-1",
+        "-sn",
+        "-dn",
         "-r",
         f"{fps.numerator}/{fps.denominator}",
-        "-frames:v",
-        str(expected_frames),
-        "-fps_mode",
-        "cfr",
+        *sync_args,
         *_encoder_args(settings),
         "-c:a",
         str(settings.get("audio_encoder") or settings.get("audio_codec") or "aac"),
@@ -1121,7 +1149,8 @@ def quality_check_film_render(
     )
     audio_duration = _float(audio.get("duration")) if audio is not None else 0.0
     if audio is not None and audio_duration <= 0:
-        format_doc = probe.get("format") if isinstance(probe.get("format"), dict) else {}
+        format_value = probe.get("format")
+        format_doc: dict[str, Any] = format_value if isinstance(format_value, dict) else {}
         audio_duration = _float(format_doc.get("duration"))
     _check(
         checks,

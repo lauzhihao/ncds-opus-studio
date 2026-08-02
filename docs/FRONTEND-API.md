@@ -212,7 +212,8 @@ job 时调用方需保持输入资产的相对布局或重新绑定。render 只
 不会从 `film_reference` 取 bed。多音轨 master 把选中的 audio ordinal/codec/language 固化在
 master artifact metadata，render 严格复用该 ordinal。ASS/SRT 默认尝试烧录；本机 FFmpeg 没有
 libass `subtitles` filter 时保留 subtitle artifact 并返回 warning，调用方可设置
-`render_profile.require_burned_subtitles=true` 将其升级为硬失败。
+`render_profile.require_burned_subtitles=true` 将其升级为硬失败。输出 MP4 只保留成片 video/audio；
+原片 metadata、chapter、subtitle、timecode/data stream 不继承到成片。
 
 ## 6. SSE 信封
 

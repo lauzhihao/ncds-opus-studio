@@ -240,6 +240,8 @@ input -> source -> highlight_plan -> storyboard -> edl_review
   真正不连续的 source cut 添加 10-15 ms fade，然后做 sidechain duck/mix。禁止从 reference
   音轨取 bed，禁止 `tpad=clone` 和无意义 `atempo=1`。ASS/SRT 在 FFmpeg 有 libass filter 时烧录；
   缺少 filter 时默认保留 artifact + warning，严格交付可设 `require_burned_subtitles=true` 硬失败。
+  输出剥离 clean master 的 metadata/chapter/data/subtitle streams；CFR 参数兼容新旧 FFmpeg，且不以
+  `-frames:v` 提前终止 mux，避免旧版 AAC encoder 的尾包未 flush。
 - `quality` 做真实 ffprobe + full ffmpeg decode，硬校验 expected frame count、CFR/fps、目标时长
   一帧误差、音轨存在与时长。
 
