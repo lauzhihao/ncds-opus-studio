@@ -34,12 +34,14 @@ def run_film_source_step(
     job_dir: str,
     reference_path: str,
     master_path: str,
+    master_audio_stream: int = 0,
     **_: Any,
 ) -> dict[str, Any]:
     return prepare_film_sources(
         job_dir,
         reference_path,
         master_path,
+        master_audio_stream=master_audio_stream,
         on_progress=on_progress,
     )
 

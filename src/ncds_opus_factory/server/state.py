@@ -16,8 +16,8 @@ from ncds_opus_factory.server.auth import AuthConfig, load_auth_config
 from ncds_opus_factory.server.auth_store import AuthStore
 from ncds_opus_factory.server.engine.instance_runner import InstanceRunner
 from ncds_opus_factory.server.engine.instance_store import InstanceStore
-from ncds_opus_factory.server.engine.pipeline_performers_final import PERFORMERS_FINAL
 from ncds_opus_factory.server.engine.pipeline_performers_film import PERFORMERS_FILM
+from ncds_opus_factory.server.engine.pipeline_performers_final import PERFORMERS_FINAL
 from ncds_opus_factory.server.label_store import LabelStore
 from ncds_opus_factory.server.mock_agents import maybe_mock_registry
 from ncds_opus_factory.server.pipeline_runner import PipelineRunner

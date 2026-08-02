@@ -16,6 +16,7 @@ import shutil
 import subprocess
 from collections.abc import Callable, Iterable
 from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -40,13 +41,31 @@ def _required_binary(name: str) -> str:
     return value
 
 
+@lru_cache(maxsize=16)
+def _ffmpeg_has_filter(ffmpeg: str, name: str) -> bool:
+    result = subprocess.run(  # noqa: S603 - resolved ffmpeg plus fixed argv.
+        [ffmpeg, "-hide_banner", "-filters"],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[1] == name:
+            return True
+    return False
+
+
 def _run(
     args: list[str],
     *,
     label: str,
     capture_stdout: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - args only; shell is never enabled.
         args,
         check=False,
         text=True,
@@ -117,7 +136,7 @@ def _artifact_ref(
         raise ValueError(f"artifact file is missing: {path}")
     digest = _sha256(path)
     identity = hashlib.sha256(
-        f"{kind}\0{digest}\0{path.name}".encode("utf-8")
+        f"{kind}\0{digest}\0{path.name}".encode()
     ).hexdigest()[:24]
     return {
         "artifact_id": f"a_{identity}",
@@ -206,6 +225,13 @@ def _float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _media_summary(probe: dict[str, Any]) -> dict[str, Any]:
     video = _stream(probe, "video")
     audio = _stream(probe, "audio")
@@ -219,7 +245,7 @@ def _media_summary(probe: dict[str, Any]) -> dict[str, Any]:
     duration = _float(video.get("duration")) or _float(format_doc.get("duration"))
     if duration <= 0:
         raise ValueError("media duration is unavailable")
-    nb_frames = int(video.get("nb_frames") or video.get("nb_read_frames") or 0)
+    nb_frames = _int(video.get("nb_frames")) or _int(video.get("nb_read_frames"))
     estimated_frames = nb_frames or int(math.floor(duration * float(fps) + 1e-6))
     streams = []
     for item in probe.get("streams") or []:
@@ -239,6 +265,11 @@ def _media_summary(probe: dict[str, Any]) -> dict[str, Any]:
             "avg_frame_rate": item.get("avg_frame_rate"),
             "r_frame_rate": item.get("r_frame_rate"),
             "nb_frames": item.get("nb_frames"),
+            "language": (
+                str((item.get("tags") or {}).get("language") or "")
+                if isinstance(item.get("tags"), dict)
+                else ""
+            ),
         })
     return {
         "duration_seconds": duration,
@@ -258,6 +289,7 @@ def prepare_film_sources(
     reference_path: str | Path,
     master_path: str | Path,
     *,
+    master_audio_stream: int = 0,
     on_progress: ProgressFn = _noop,
 ) -> dict[str, Any]:
     """Probe and register the benchmark reference and clean film master."""
@@ -271,6 +303,23 @@ def prepare_film_sources(
     master_summary = _media_summary(_probe(master))
     if not master_summary["has_audio"]:
         raise ValueError("clean film master must contain an audio stream")
+    audio_streams = [
+        item
+        for item in master_summary["streams"]
+        if item.get("codec_type") == "audio"
+    ]
+    audio_ordinal = int(master_audio_stream)
+    if audio_ordinal < 0 or audio_ordinal >= len(audio_streams):
+        raise ValueError(
+            "master_audio_stream is out of range: "
+            f"selected={audio_ordinal} available={len(audio_streams)}"
+        )
+    selected_audio = {
+        "ordinal": audio_ordinal,
+        **audio_streams[audio_ordinal],
+    }
+    master_summary["selected_audio_stream"] = selected_audio
+    master_summary["audio_stream_ordinal"] = audio_ordinal
 
     reference_asset = _artifact_ref(
         root,
@@ -346,6 +395,9 @@ def _normalize_edl_segments(
     for index, value in enumerate(raw, start=1):
         if not isinstance(value, dict):
             raise ValueError(f"film EDL segment {index} must be an object")
+        segment_id = str(
+            value.get("segment_id") or value.get("id") or f"segment-{index:04d}"
+        )
         if schema == "frames":
             try:
                 start = int(value["source_start_frame"])
@@ -363,11 +415,8 @@ def _normalize_edl_segments(
         frame_count = end - start
         if start < 0 or frame_count <= 0:
             raise ValueError(
-                f"film EDL segment {index} must be a positive half-open frame range"
+                f"film EDL segment {segment_id} must be a positive half-open frame range"
             )
-        segment_id = str(
-            value.get("segment_id") or value.get("id") or f"segment-{index:04d}"
-        )
         intentional = _is_intentional(value)
         normalized.append({
             "segment_id": segment_id,
@@ -396,6 +445,7 @@ def build_film_frame_edl(
     root = Path(job_dir).resolve()
     source_manifest = _read_json(Path(source_manifest_path), label="film source manifest")
     master_asset = _manifest_artifact(source_manifest, "film_master")
+    reference_asset = _manifest_artifact(source_manifest, "film_reference")
     master_metadata = master_asset.get("metadata") or {}
     fps = _fraction_from_doc(master_metadata.get("fps"), label="master fps")
     master_frames = int(master_metadata.get("frame_count") or 0)
@@ -485,7 +535,7 @@ def build_film_frame_edl(
         review_reasons.append("low_confidence_match")
     frame_count = sum(segment["frame_count"] for segment in segments)
     qa = {
-        "status": "review" if review_reasons else "passed",
+        "status": "review" if review_reasons else "pass",
         "review_reasons": review_reasons,
         "half_open_ranges": True,
         "segment_count": len(segments),
@@ -517,7 +567,7 @@ def build_film_frame_edl(
         edl_input,
         kind="film_edl_input",
         producer_step="storyboard",
-        input_artifact_ids=[master_asset["artifact_id"]],
+        input_artifact_ids=[reference_asset["artifact_id"], master_asset["artifact_id"]],
         metadata={"source_schema_version": edl_doc.get("schema_version") or edl_doc.get("version")},
     )
     edl_artifact = _artifact_ref(
@@ -525,7 +575,11 @@ def build_film_frame_edl(
         normalized_path,
         kind="film_frame_edl",
         producer_step="storyboard",
-        input_artifact_ids=[master_asset["artifact_id"], input_edl_artifact["artifact_id"]],
+        input_artifact_ids=[
+            reference_asset["artifact_id"],
+            master_asset["artifact_id"],
+            input_edl_artifact["artifact_id"],
+        ],
         metadata={
             "schema_version": FRAME_EDL_SCHEMA_VERSION,
             "fps": _fraction_doc(fps),
@@ -687,7 +741,7 @@ def _render_settings(profile: Any) -> dict[str, Any]:
 
 
 def _encoder_args(profile: dict[str, Any]) -> list[str]:
-    encoder = str(profile.get("encoder") or "libx264").strip()
+    encoder = str(profile.get("encoder") or profile.get("video_codec") or "libx264").strip()
     if not encoder:
         raise ValueError("render encoder is empty")
     if encoder == "libx264":
@@ -721,14 +775,16 @@ def _segment_audio_filter(
     fade_seconds: float,
     fade_in: bool,
     fade_out: bool,
+    audio_ordinal: int,
 ) -> str:
     start = segment["source_start_frame"] / float(fps)
     end = segment["source_end_frame"] / float(fps)
     duration = segment["frame_count"] / float(fps)
     filters = [
-        f"[0:a:0]atrim=start={start:.12f}:end={end:.12f}",
+        f"[0:a:{audio_ordinal}]atrim=start={start:.12f}:end={end:.12f}",
         "asetpts=PTS-STARTPTS",
         "aresample=48000",
+        "aformat=sample_rates=48000:channel_layouts=stereo",
         "apad",
         f"atrim=duration={duration:.12f}",
     ]
@@ -760,6 +816,12 @@ def render_film_from_master(
     edl_artifact = _manifest_artifact(edl_manifest, "film_frame_edl")
     voice_artifact = _manifest_artifact(voice_manifest, "film_voice_stem")
     master = _resolve_uri(root, master_asset["uri"])
+    master_metadata = master_asset.get("metadata")
+    if not isinstance(master_metadata, dict):
+        raise ValueError("film master metadata is missing")
+    audio_ordinal = _int(master_metadata.get("audio_stream_ordinal"), -1)
+    if audio_ordinal < 0:
+        raise ValueError("film master selected audio stream is missing")
     edl_path = _resolve_uri(root, edl_artifact["uri"])
     voice = _resolve_uri(root, voice_artifact["uri"])
     edl = _read_json(edl_path, label="normalized film frame EDL")
@@ -776,6 +838,13 @@ def render_film_from_master(
         raise ValueError("normalized film frame EDL frame_count is inconsistent")
     expected_duration = expected_frames / float(fps)
     settings = _render_settings(render_profile)
+    profile_fps = settings.get("fps")
+    if profile_fps is not None:
+        requested_fps = _fraction_from_doc(profile_fps, label="render profile fps")
+        if requested_fps != fps:
+            raise ValueError(
+                f"render profile fps {requested_fps} does not match EDL fps {fps}"
+            )
     fade_ms = float(settings.get("cut_audio_fade_ms", 12.0))
     if fade_ms < 0 or fade_ms > 100:
         raise ValueError("cut_audio_fade_ms must be between 0 and 100")
@@ -787,6 +856,8 @@ def render_film_from_master(
         subtitle_artifact = _manifest_artifact(voice_manifest, "film_narration_subtitles")
     except ValueError:
         pass
+    render_warnings: list[str] = []
+    subtitle_mode = "none"
 
     video_filters: list[str] = []
     audio_filters: list[str] = []
@@ -817,6 +888,7 @@ def render_film_from_master(
                 fade_seconds=fade_ms / 1000.0,
                 fade_in=fade_in,
                 fade_out=fade_out,
+                audio_ordinal=audio_ordinal,
             )
         )
     video_inputs = "".join(f"[v{index}]" for index in range(len(segments)))
@@ -845,18 +917,31 @@ def render_film_from_master(
         ])
     if subtitle_artifact is not None:
         subtitle = _resolve_uri(root, subtitle_artifact["uri"])
-        visual_filters.append(f"subtitles=filename='{_filter_path(subtitle)}'")
+        ffmpeg = _required_binary("ffmpeg")
+        if _ffmpeg_has_filter(ffmpeg, "subtitles"):
+            visual_filters.append(f"subtitles=filename='{_filter_path(subtitle)}'")
+            subtitle_mode = "burned"
+        elif settings.get("require_burned_subtitles") is True:
+            raise RuntimeError(
+                "render requires the FFmpeg subtitles filter, but this build has no libass support"
+            )
+        else:
+            subtitle_mode = "artifact_only"
+            render_warnings.append(
+                "FFmpeg subtitles filter unavailable; narration subtitle artifact was not burned"
+            )
     visual_filters.append("format=yuv420p")
     filters.append("[cutv]" + ",".join(visual_filters) + "[outv]")
     bed_volume = _db_volume(settings.get("bed_volume_db"), -2.0)
     voice_volume = _db_volume(settings.get("voice_volume_db"), 0.0)
     filters.extend([
         f"[1:a:0]aresample=48000,apad,atrim=duration={expected_duration:.12f},"
-        f"asetpts=PTS-STARTPTS,volume={voice_volume}[voice]",
+        f"asetpts=PTS-STARTPTS,volume={voice_volume}[voicepre]",
+        "[voicepre]asplit=2[voicesc][voicemix]",
         f"[beda]volume={bed_volume}[bed]",
-        "[bed][voice]sidechaincompress=threshold=0.030:ratio=8:attack=5:release=250[ducked]",
-        "[ducked][voice]amix=inputs=2:duration=first:dropout_transition=0,"
-        "alimiter=limit=0.95[outa]",
+        "[bed][voicesc]sidechaincompress=threshold=0.030:ratio=8:attack=5:release=250[ducked]",
+        "[ducked][voicemix]amix=inputs=2:duration=first:dropout_transition=0,"
+        f"alimiter=limit=0.95,apad,atrim=duration={expected_duration:.12f}[outa]",
     ])
     output_dir = root / "film_rebuild" / "render"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -883,9 +968,11 @@ def render_film_from_master(
         f"{fps.numerator}/{fps.denominator}",
         "-frames:v",
         str(expected_frames),
+        "-fps_mode",
+        "cfr",
         *_encoder_args(settings),
         "-c:a",
-        str(settings.get("audio_encoder") or "aac"),
+        str(settings.get("audio_encoder") or settings.get("audio_codec") or "aac"),
         "-b:a",
         str(settings.get("audio_bitrate") or "192k"),
         "-ar",
@@ -917,10 +1004,14 @@ def render_film_from_master(
             "expected_frames": expected_frames,
             "expected_duration_seconds": expected_duration,
             "fps": _fraction_doc(fps),
-            "encoder": str(settings.get("encoder") or "libx264"),
+            "encoder": str(
+                settings.get("encoder") or settings.get("video_codec") or "libx264"
+            ),
             "source_audio_artifact_id": master_asset["artifact_id"],
             "source_audio_role": "clean_master",
+            "source_audio_stream_ordinal": audio_ordinal,
             "cut_audio_fade_ms": fade_ms,
+            "subtitle_mode": subtitle_mode,
         },
     )
     manifest = {
@@ -932,6 +1023,8 @@ def render_film_from_master(
         "fps": _fraction_doc(fps),
         "render_artifact_id": render_artifact["artifact_id"],
         "input_artifact_ids": input_ids,
+        "subtitle_mode": subtitle_mode,
+        "warnings": render_warnings,
         "artifacts": [render_artifact],
     }
     manifest_path = output_dir / "render_manifest.json"
@@ -942,6 +1035,7 @@ def render_film_from_master(
         "render_artifact": render_artifact,
         "output_path": str(output_path),
         "expected_frames": expected_frames,
+        "warnings": render_warnings,
         "artifacts": [render_artifact],
     }
 
@@ -983,7 +1077,11 @@ def quality_check_film_render(
     video = _stream(probe, "video")
     audio = _stream(probe, "audio")
     checks: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    warnings = [
+        str(value)
+        for value in (render_manifest.get("warnings") or [])
+        if str(value).strip()
+    ]
     _check(checks, "video_stream_present", video is not None, expected=True, actual=video is not None)
     _check(checks, "audio_stream_present", audio is not None, expected=True, actual=audio is not None)
     if video is None:
@@ -1033,7 +1131,7 @@ def quality_check_film_render(
         actual=audio_duration,
     )
     on_progress("film quality: full decode")
-    decode = subprocess.run(
+    decode = subprocess.run(  # noqa: S603 - resolved ffmpeg plus fixed argv.
         [
             _required_binary("ffmpeg"),
             "-v",
@@ -1062,7 +1160,7 @@ def quality_check_film_render(
     )
     if decode.stderr.strip():
         warnings.append(decode.stderr.strip()[-1000:])
-    status = "passed" if all(item["status"] == "passed" for item in checks) else "failed"
+    status = "pass" if all(item["status"] == "passed" for item in checks) else "fail"
     report = {
         "schema_version": QA_SCHEMA_VERSION,
         "producer_step": "quality",

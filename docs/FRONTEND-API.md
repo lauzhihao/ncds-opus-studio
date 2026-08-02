@@ -165,7 +165,54 @@ es.onmessage = (e) => {
 | `POST` | `/instances/{iid}/finalize` | 根据步骤终态结算实例 |
 | `GET` | `/instances/{iid}/events?level=meta,step` | 分层 SSE |
 
-当前 `RECIPE_REGISTRY` 只注册 `final_preview`。`figure_talk` 仍是未来 recipe / cold chain，不要在前端当成可选 engine recipe。
+当前 `RECIPE_REGISTRY` 注册：
+
+- `final_preview`：既有 web 成片链。
+- `film_localized_rebuild_v1`：对标字幕清洗/翻译后，用干净原片重建完整版。
+- `film_highlight_v1`：消费人工确认的 highlight plan/EDL，用干净原片生成短版。
+
+两条 film recipe 当前是 backend walking skeleton，尚未接入 web/app UI。driver 必须在
+`script_review`（仅完整版）、`highlight_plan`（仅短版）、`edl_review`、`voice_review`
+处调用 approve；自动原片视觉匹配、在线 TTS/voice cloning、远端 GPU 调度不在 v1。
+
+### film rebuild step 契约
+
+| step | 必填 `step_inputs` | 关键输出 |
+|---|---|---|
+| `source` | `job_dir, reference_path, master_path`；可选 `master_audio_stream`（audio ordinal，默认 0） | `source_manifest_path, reference_asset, master_asset, artifacts` |
+| `storyboard` | `job_dir, source_manifest_path, edl_path`；可选 `profile` | `edl_manifest_path, edl_artifact, frame_count, duration_seconds, qa` |
+| `tts` | `job_dir, voice_path, edl_manifest_path`；可选 `subtitle_path` | `voice_manifest_path, voice_artifact, subtitle_artifact` |
+| `render` | `job_dir, source_manifest_path, edl_manifest_path, voice_manifest_path`；可选 `render_profile` | `render_manifest_path, render_artifact, output_path, expected_frames` |
+| `quality` | `job_dir, render_manifest_path` | `qa_report_path, qa_artifact, status, checks, warnings` |
+
+`storyboard` 接受旧 `edit_decision_list[].source_{start,end}_ms` 或
+`segments[].source_{start,end}_frame`，统一写成 `film_frame_edl.v1`：fps 使用
+`{numerator, denominator}`，帧区间严格为半开 `[start, end)`。非单调剧情剪辑不会被一概拒绝；
+没有 `intentional` 标记的 backward/overlap、低置信匹配及超过 profile 的单段会进入 `qa.status=review`。
+
+每个 film artifact ref 至少包含：
+
+```json
+{
+  "artifact_id": "a_...",
+  "kind": "film_frame_edl",
+  "schema_version": "artifact_ref.v1",
+  "uri": "film_rebuild/storyboard/frame_edl.json",
+  "sha256": "...",
+  "size_bytes": 1234,
+  "producer_step": "storyboard",
+  "producer_version": "film_rebuild_mvp.v1",
+  "input_artifact_ids": ["a_reference", "a_master", "a_edl_input"],
+  "metadata": {}
+}
+```
+
+`uri` 相对 `job_dir`，manifest 可随 job 目录重定位；source 输入在 job 外时保存相对引用，迁移
+job 时调用方需保持输入资产的相对布局或重新绑定。render 只从 `film_master` 取画面和原声音轨，
+不会从 `film_reference` 取 bed。多音轨 master 把选中的 audio ordinal/codec/language 固化在
+master artifact metadata，render 严格复用该 ordinal。ASS/SRT 默认尝试烧录；本机 FFmpeg 没有
+libass `subtitles` filter 时保留 subtitle artifact 并返回 warning，调用方可设置
+`render_profile.require_burned_subtitles=true` 将其升级为硬失败。
 
 ## 6. SSE 信封
 

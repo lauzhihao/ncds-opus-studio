@@ -71,15 +71,17 @@
 只写**字符串 key**（`cmd` / `agent` id），引擎通过 **`build_full_registry()`（P1.x 已建：6 core + 8 factory）**
 查表派发。因此引擎对 agents 零静态依赖，core 保持纯净，新增 agent/步骤只是往 registry 加一行。
 
-**Domain strategy 派发（2026-07-31 已实现）**：所有有执行体的生产节点在 facade 与
+**Domain strategy 派发（2026-07-31 已实现）**：所有有执行体的语义生产节点在 facade 与
 `InstanceRunner` 中统一按 `(node, domain)` 从 `DomainStrategyRegistry` 解析；未知 domain 命中
 `*` default，保持既有生产行为。`film` 的沈括 strategy 复用下载与 ASR sidecar，但以
 2fps 视频抽帧 + 底部字幕 RapidOCR 为真源，legacy 与 engine 走同一个 collector。鬼谷子读取
 immutable `ocr_text`/时间戳，以 ASR 仅作校订证据，产出 `mode=film_commentary`、
 `kind=narration|dialogue|noise` 的 cues、全片 `entity_glossary` 和 QA；柳永只翻译 clean
 narration 并继承 cue 时间轴。旧 `film_script_split`/旧 artifact 不兼容。新增 domain
-只需实现并注册 strategy/processor，
-不改节点核心分发代码；无 performer 的 input/output/人工 preview 闸门仍按 recipe 状态机处理。
+只需实现并注册 strategy/processor，不改节点核心分发代码；source/quality 等没有 domain
+strategy 的 technical step 安全回退 recipe performer，无 performer 的 input/output/人工 preview
+闸门仍按 recipe 状态机处理。该派发不再只限于 `final_preview`，film recipe 的
+storyboard/tts/render 同样走 `(node, film)` strategy。
 
 ---
 
@@ -148,7 +150,7 @@ class Recipe(BaseModel):
     steps: list[RecipeStep]       # 有序
     template_renderer: str        # "final_preview"/"figure_talk"/"stickman"
 
-RECIPE_REGISTRY: dict[str, Recipe]   # 当前只有 final_preview；figure_talk 等后续入册
+RECIPE_REGISTRY: dict[str, Recipe]   # final_preview + film rebuild/highlight；figure_talk 等后续入册
 ```
 
 ---
@@ -203,9 +205,54 @@ idle → queued → running → draft_ready
 ## 5. 多配方
 
 - Recipe = 有序 `RecipeStep`，每步绑 `cmd`/`agent`（字符串）、`expensive`、`intervention`、`material_source`。
-- 当前已注册 **final_preview**；**figure_talk 剪影**是目标 recipe，仍在 E3 / cold chain 范围。
+- 当前已注册 **final_preview**、**film_localized_rebuild_v1**、**film_highlight_v1**；
+  **figure_talk 剪影**仍是 E3 / cold chain 范围。
 - **素材来源**是步骤内策略：`material_source="generated"`（gpt-image 生图，final_preview）vs `"collected"`（沈括切素材，figure_talk）——不冲突、按 recipe/step 配。
 - 新风格 = 新 recipe + 新 `template_renderer`，不动引擎。
+
+### 5.1 film frame-first rebuild v1
+
+`film_localized_rebuild_v1`：
+
+```text
+input -> source -> asr -> guiguzi -> script_review -> rw
+      -> storyboard -> edl_review -> tts -> voice_review
+      -> render -> quality -> download
+```
+
+`film_highlight_v1`：
+
+```text
+input -> source -> highlight_plan -> storyboard -> edl_review
+      -> tts -> voice_review -> render -> quality -> download
+```
+
+节点边界：
+
+- `source` 只注册调用方依法提供的对标视频和 clean master，做真实 ffprobe/hash；系统不搜索或下载电影原片。
+  多音轨 master 由可选 `master_audio_stream` 选择 audio ordinal，codec/language 与 ordinal 一起固化进 artifact。
+- 沈括/鬼谷子/柳永沿用 OCR 真源、语义分类校订和 narration-only 本地化。
+- `storyboard` v1 不做自动视觉匹配，只消费调用方/人工确认的 ms EDL 或 frame EDL，统一输出
+  `film_frame_edl.v1` 半开 frame ranges 与 backward/overlap/low-confidence review 诊断。
+- `tts` v1 不调用在线 TTS/voice cloning，只把已生成 voice 规范化成 48 kHz stereo PCM stem，
+  并可注册 narration ASS/SRT。
+- `render` 始终按 clean master global frames 直接 trim；原片 bed 也按相同 frame time 裁切，只有
+  真正不连续的 source cut 添加 10-15 ms fade，然后做 sidechain duck/mix。禁止从 reference
+  音轨取 bed，禁止 `tpad=clone` 和无意义 `atempo=1`。ASS/SRT 在 FFmpeg 有 libass filter 时烧录；
+  缺少 filter 时默认保留 artifact + warning，严格交付可设 `require_burned_subtitles=true` 硬失败。
+- `quality` 做真实 ffprobe + full ffmpeg decode，硬校验 expected frame count、CFR/fps、目标时长
+  一帧误差、音轨存在与时长。
+
+完整版与 highlight 是两个 recipe，但 highlight 仍直接引用 clean master frame EDL，不能从已渲染
+完整版 MP4 二次裁切。
+
+### 5.2 film artifact lineage
+
+film v1 每步 manifest 固定落 `job_dir/film_rebuild/{source,storyboard,voice,render,quality}/`。
+artifact ref 至少有 `artifact_id/kind/schema_version/uri/sha256/size_bytes/producer_step/`
+`producer_version/input_artifact_ids/metadata`；`uri` 相对 `job_dir`，下游只通过 manifest 解析，
+不靠约定绝对路径猜文件。render manifest 顶层再次钉住 master/EDL/voice/subtitle 的 artifact IDs；
+QA report 反向钉住 render artifact ID，形成可复现 lineage。
 
 ---
 
