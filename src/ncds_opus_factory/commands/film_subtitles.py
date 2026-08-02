@@ -452,13 +452,19 @@ def _render_srt(cues: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks) + ("\n" if blocks else "")
 
 
-def _temporal_merge_clean_cues(cues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _temporal_merge_clean_cues(
+    cues: list[dict[str, Any]],
+    *,
+    frame_sampling_fps: int = FRAME_SAMPLING_FPS,
+) -> list[dict[str, Any]]:
     """Merge post-correction adjacent repeats without mutating raw OCR cues."""
+    max_gap_ms = int(round(2_000 / max(1, frame_sampling_fps)))
     merged: list[dict[str, Any]] = []
     for cue in cues:
         if (
             merged
             and _text_key(str(merged[-1]["text"])) == _text_key(str(cue["text"]))
+            and int(cue["start_ms"]) - int(merged[-1]["end_ms"]) <= max_gap_ms
         ):
             previous = merged[-1]
             previous["end_ms"] = max(int(previous["end_ms"]), int(cue["end_ms"]))
@@ -489,7 +495,11 @@ def _build_clean_cues(
     for raw_cue in raw_cues:
         cue_id = str(raw_cue["cue_id"])
         corrected_row = corrected.get(cue_id, {})
-        text = str(corrected_row.get("text") or raw_cue["text"]).strip()
+        candidate_text = str(corrected_row.get("text") or "").strip()
+        invalid_correction = bool(corrected_row) and not _CJK_RE.search(candidate_text)
+        text = candidate_text or str(raw_cue["text"]).strip()
+        if invalid_correction:
+            text = str(raw_cue["text"]).strip()
         confidence = min(
             float(raw_cue.get("confidence") or 0.0),
             float(corrected_row.get("confidence") or 0.55),
@@ -501,7 +511,7 @@ def _build_clean_cues(
             "text": text,
             "source_cue_ids": [cue_id],
             "confidence": round(max(0.0, min(1.0, confidence)), 4),
-            "needs_review": needs_review or confidence < 0.75,
+            "needs_review": needs_review or invalid_correction or confidence < 0.75,
         })
     return _temporal_merge_clean_cues(provisional), backend, failures
 

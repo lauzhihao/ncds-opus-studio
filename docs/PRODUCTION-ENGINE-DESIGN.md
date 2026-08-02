@@ -159,7 +159,7 @@ RECIPE_REGISTRY: dict[str, Recipe]   # final_preview + film rebuild/highlight；
 | 组件 | 裁定 | 说明 |
 |---|---|---|
 | web `_execute_{asr,rw,lines,storyboard,tts,image,render}` | **进引擎** | 全是生产步骤；render 早已共用 `render_final_preview.run`。改成统一 step + 经 registry 派发 |
-| **沈括(采集)** / 鬼谷子(语义清洗或选题) / 柳永/吴道子/伯牙 | **进引擎（作为步骤执行者，全在卧龙麾下）** | 卧龙指挥的五个 agent 就是生产链的步骤 performer；recipe 按 id 晚绑定。沈括统一采购外部原料；film 作品链接由沈括确定性 OCR，鬼谷子再清洗成解说稿，其他 domain 保持文案/评论采集与选题行为 |
+| **沈括(采集)** / 鬼谷子(选题) / 柳永/吴道子/伯牙 | **进引擎（作为步骤执行者，全在卧龙麾下）** | 卧龙指挥的五个 agent 就是生产链的步骤 performer；recipe 按 id 晚绑定。沈括统一采购外部原料；film 作品链接由沈括完成 OCR、中文校正和时序去重，其他 domain 保持文案/评论采集与选题行为。 |
 | `TaskStore` / `TaskRunner` / `EventBus`(SSE) | **进引擎** | 是统一 store/调度/事件的底层，扩展而非替换 |
 | `PipelineRunner` + `JobState` + `video-jobs/` | **退役** | final_preview DAG 是一条 recipe 的特例；被 InstanceStore 的 recipe/steps 包容 |
 | **卧龙** | **保留为可插拔 driver** | 掌编排机械（派沈括→鬼谷子→柳永→…→render、状态推进/事件消费），**决策权归人**（走 review 路由→rounds_gate）；与 web 手动 driver 并列 |

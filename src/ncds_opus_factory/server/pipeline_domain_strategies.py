@@ -188,7 +188,7 @@ for _node in RUNNABLE_NODES:
         ),
     )
 
-# film 沈括走共享字幕采集器；OCR 是真源，ASR sidecar 仅供鬼谷子对齐。
+# film 沈括走共享字幕采集器；OCR 是真源，ASR sidecar 仅辅助 collector 中文校正。
 DOMAIN_STRATEGIES.register(
     "asr",
     "film",

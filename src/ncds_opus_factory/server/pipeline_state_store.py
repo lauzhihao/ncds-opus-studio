@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ncds_opus_core.pipelines import PIPELINE_REGISTRY, get_pipeline
+
 from ncds_opus_factory.server import pipeline_media_helpers as media_helpers
 from ncds_opus_factory.server.pipeline_models import JobState, NodeState
 
@@ -132,6 +133,7 @@ class PipelineStateStoreMixin:
                     "running": running_node is not None,
                     "running_node": running_node,
                     "node_status": node_status,
+                    "domain": (data.get("inputs") or {}).get("domain"),
                     "owner_id": data.get("owner_id"),
                 })
             except Exception as exc:

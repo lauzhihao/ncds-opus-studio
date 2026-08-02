@@ -33,10 +33,10 @@ import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { GlobalLoading } from '../components/GlobalLoading';
 import {
   AGENTS,
-  agentIndex,
   agentProgressText,
   agentStatus,
   guiguziChosenStorageKey,
+  type AgentDef,
   type AgentId,
 } from '../config/agents';
 import {
@@ -51,9 +51,9 @@ import { parseTitleTags } from '../utils/title';
 const ROW = 400;
 const COL_OFFSET = 240;
 const AGENT_LAYOUT_VERSION = 3;
-function computeAgentLayout(): Record<string, { x: number; y: number }> {
+function computeAgentLayout(agents: AgentDef[]): Record<string, { x: number; y: number }> {
   const result: Record<string, { x: number; y: number }> = {};
-  AGENTS.forEach((a, i) => {
+  agents.forEach((a, i) => {
     result[a.id] = { x: i % 2 === 0 ? -COL_OFFSET : COL_OFFSET, y: i * ROW };
   });
   return result;
@@ -74,6 +74,15 @@ export function JobCanvasPage() {
   // 选题确认的本地脉冲：解耦后选定选题不再触发 rw 的 SSE，靠它让 angleConfirmed 立即重算翻鬼谷子 DONE。
   const [angleTick, setAngleTick] = useState(0);
   const { job, connected, reconnect } = useJobStream(jobId);
+  const visibleAgents = useMemo(
+    () => String(job?.inputs.domain ?? '').trim().toLowerCase() === 'film'
+      ? AGENTS.filter((agent) => agent.id === 'shenkuo')
+      : AGENTS,
+    [job?.inputs.domain],
+  );
+  const openAgentDef = openAgent
+    ? visibleAgents.find((agent) => agent.id === openAgent)
+    : undefined;
 
   const [nodes, setNodes, onNodesChange] = useNodesState<AgentCardData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -82,6 +91,11 @@ export function JobCanvasPage() {
   const nodeTypesRef = useRef({ card: AgentCard });
   const edgeTypesRef = useRef({ pulse: PulseEdge });
   const mockRedirecting = useRef(false);
+
+  useEffect(() => {
+    initialized.current = false;
+    setOpenAgent(null);
+  }, [jobId]);
 
   useEffect(() => {
     if (!mockMode || !jobId || jobId === STUDIO_MOCK_JOB_ID || mockRedirecting.current) return;
@@ -155,13 +169,13 @@ export function JobCanvasPage() {
     if (!job || initialized.current) return;
     initialized.current = true;
 
-    const layout = computeAgentLayout();
+    const layout = computeAgentLayout(visibleAgents);
     let saved: Record<string, { x: number; y: number }> = {};
     try {
       saved = JSON.parse(localStorage.getItem(agentPosKey(jobId!)) || '{}');
     } catch { /* ignore */ }
 
-    const newNodes: Node<AgentCardData>[] = AGENTS.map((a, i) => ({
+    const newNodes: Node<AgentCardData>[] = visibleAgents.map((a, i) => ({
       id: a.id,
       type: 'card',
       position: saved[a.id] ?? layout[a.id] ?? { x: 0, y: i * ROW },
@@ -171,18 +185,18 @@ export function JobCanvasPage() {
         progress: agentProgressText(a, job.nodes),
         index: i,
         isFirst: i === 0,
-        isLast: i === AGENTS.length - 1,
+        isLast: i === visibleAgents.length - 1,
         onOpen: () => setOpenAgent(a.id),
       },
       draggable: true,
     }));
 
     const newEdges: Edge[] = [];
-    for (let i = 1; i < AGENTS.length; i++) {
+    for (let i = 1; i < visibleAgents.length; i++) {
       newEdges.push({
-        id: `${AGENTS[i - 1].id}__${AGENTS[i].id}`,
-        source: AGENTS[i - 1].id,
-        target: AGENTS[i].id,
+        id: `${visibleAgents[i - 1].id}__${visibleAgents[i].id}`,
+        source: visibleAgents[i - 1].id,
+        target: visibleAgents[i].id,
         type: 'pulse',
         animated: false,
         style: { stroke: 'url(#opus-gradient)' },
@@ -190,7 +204,7 @@ export function JobCanvasPage() {
     }
     setNodes(newNodes);
     requestAnimationFrame(() => setEdges(newEdges));
-  }, [job, jobId, angleConfirmed, setNodes, setEdges]);
+  }, [job, jobId, angleConfirmed, visibleAgents, setNodes, setEdges]);
 
   // —— fitView 收进视口
   useEffect(() => {
@@ -206,7 +220,7 @@ export function JobCanvasPage() {
     if (!job || !initialized.current) return;
     setNodes((cur) =>
       cur.map((n) => {
-        const a = AGENTS.find((x) => x.id === n.id);
+        const a = visibleAgents.find((x) => x.id === n.id);
         if (!a) return n;
         return {
           ...n,
@@ -220,12 +234,12 @@ export function JobCanvasPage() {
     );
     setEdges((cur) =>
       cur.map((e) => {
-        const a = AGENTS.find((x) => x.id === e.target);
+        const a = visibleAgents.find((x) => x.id === e.target);
         const st = a ? agentStatus(a, job.nodes, { angleConfirmed }) : 'idle';
         return { ...e, animated: st === 'running' || st === 'queued', style: { stroke: 'url(#opus-gradient)' } };
       }),
     );
-  }, [job, angleConfirmed, setNodes, setEdges]);
+  }, [job, angleConfirmed, visibleAgents, setNodes, setEdges]);
 
   // —— 拖动写 localStorage（agent id 不是 engine 节点，不走后端 position 接口）
   const onNodeDragStop: NodeMouseHandler = useCallback(
@@ -309,11 +323,11 @@ export function JobCanvasPage() {
         </ReactFlow>
       </div>
 
-      {openAgent && job && pipeline && (
+      {openAgentDef && job && pipeline && (
         <AgentDrawer
           key={openAgent}
           jobId={jobId}
-          agent={AGENTS[agentIndex(openAgent)]}
+          agent={openAgentDef}
           job={job}
           pipeline={pipeline}
           angleConfirmed={angleConfirmed}

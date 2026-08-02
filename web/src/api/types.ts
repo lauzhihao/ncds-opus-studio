@@ -85,6 +85,7 @@ export interface JobSummary {
   running_node?: string | null;
   // 各底层节点 status（节点名→status），供作品列表算 agent 级进度灯
   node_status?: Record<string, NodeStatus>;
+  domain?: string | null;
 }
 
 // 柳永质检：ai_taste（AI 味）报告，对齐后端 ai_taste.scan（打回重写后的终判）。
