@@ -2,7 +2,7 @@
 
 The film domain treats burned-in subtitles as the source of truth. Existing
 Shenkuo download and ASR artifacts are reused, while OCR is performed from the
-cached video at a fixed 2 fps. ASR remains optional alignment context for the
+cached video at a fixed 1 fps. ASR remains optional alignment context for the
 collector's own Chinese script correction.
 """
 
@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Event
 from typing import Any
 
 from ncds_opus_core.common import cancel
@@ -27,8 +31,17 @@ from ncds_opus_factory.common.agy_cli import call_agy
 from ncds_opus_factory.common.opus_cli import DEFAULT_OPUS_MODEL, call_opus
 from ncds_opus_factory.common.scodex_cli import DEFAULT_CODEX_MODEL, call_scodex
 
-FRAME_SAMPLING_FPS = 2
-OCR_BACKEND = "rapidocr-onnxruntime-ppocrv6-small"
+FRAME_SAMPLING_FPS = 1
+OCR_BACKEND = "rapidocr-onnxruntime-ppocrv6-tiny"
+_LEGACY_SMALL_OCR_BACKEND = "rapidocr-onnxruntime-ppocrv6-small"
+_DEFAULT_OCR_WORKER_COUNT = 4
+_OCR_CROP = {
+    "x": 0.0,
+    "y": 0.48,
+    "width": 1.0,
+    "height": 0.45,
+}
+_OCR_SCALE = {"width": 960, "height": -2}
 ProgressFn = Callable[[str], None]
 CleanScriptAgentFn = Callable[
     [list[dict[str, Any]], list[dict[str, Any]], ProgressFn],
@@ -48,6 +61,36 @@ CORRECTION_BACKENDS: tuple[dict[str, str], ...] = (
 _ROOT = Path(__file__).resolve().parents[3]
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _configured_ocr_worker_count() -> int:
+    """Allow integration acceptance to constrain OCR to one worker."""
+    try:
+        return max(
+            1,
+            int(
+                os.environ.get(
+                    "NOF_FILM_OCR_WORKERS",
+                    _DEFAULT_OCR_WORKER_COUNT,
+                )
+            ),
+        )
+    except ValueError:
+        return _DEFAULT_OCR_WORKER_COUNT
+
+
+OCR_WORKER_COUNT = _configured_ocr_worker_count()
+
+
+def _ocr_algorithm_signature() -> dict[str, Any]:
+    """Cache key for the tiny OCR algorithm, excluding parallelism only."""
+    return {
+        "version": 1,
+        "backend": OCR_BACKEND,
+        "frame_sampling_fps": FRAME_SAMPLING_FPS,
+        "crop": dict(_OCR_CROP),
+        "scale": dict(_OCR_SCALE),
+    }
 
 
 class _CleanerBatchError(RuntimeError):
@@ -114,7 +157,8 @@ def _extract_subtitle_frames(video_path: Path, output_dir: Path) -> list[Path]:
     # live, while excluding the bottom UI/watermark strip.
     video_filter = (
         f"fps={FRAME_SAMPLING_FPS},"
-        "crop=iw:floor(ih*0.45):0:floor(ih*0.48)"
+        "crop=iw:floor(ih*0.45):0:floor(ih*0.48),"
+        "scale=960:-2"
     )
     subprocess.run(  # noqa: S603 - argv list with a resolved executable.
         [
@@ -145,13 +189,15 @@ def _new_ocr_engine() -> Any:
         ) from exc
     return RapidOCR(
         params={
+            "EngineConfig.onnxruntime.intra_op_num_threads": 1,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
             "Det.engine_type": EngineType.ONNXRUNTIME,
             "Det.lang_type": "ch",
-            "Det.model_type": ModelType.SMALL,
+            "Det.model_type": ModelType.TINY,
             "Det.ocr_version": OCRVersion.PPOCRV6,
             "Rec.engine_type": EngineType.ONNXRUNTIME,
             "Rec.lang_type": "ch",
-            "Rec.model_type": ModelType.SMALL,
+            "Rec.model_type": ModelType.TINY,
             "Rec.ocr_version": OCRVersion.PPOCRV6,
         }
     )
@@ -221,6 +267,59 @@ def _ocr_frame(engine: Any, frame_path: Path) -> tuple[str, float]:
     return "".join(lines), (
         sum(confidences) / len(confidences) if confidences else 0.0
     )
+
+
+def _ocr_frames_parallel(
+    frames: list[Path],
+    on_progress: ProgressFn,
+) -> list[dict[str, Any]]:
+    """Run independent OCR engines concurrently and restore frame order."""
+    worker_count = min(OCR_WORKER_COUNT, len(frames))
+    if worker_count < 1:
+        return []
+    completions: Queue[tuple[int, str, float, BaseException | None]] = Queue()
+    stop = Event()
+
+    def worker(worker_number: int) -> None:
+        try:
+            engine = OCR_ENGINE_FACTORY()
+            for index in range(worker_number, len(frames), worker_count):
+                if stop.is_set():
+                    return
+                cancel.checkpoint()
+                text, confidence = _ocr_frame(engine, frames[index])
+                completions.put((index, text, confidence, None))
+        except BaseException as exc:  # Propagate worker and cancellation errors.
+            stop.set()
+            completions.put((-1, "", 0.0, exc))
+
+    observations: dict[int, dict[str, Any]] = {}
+    completed = 0
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(worker, number) for number in range(worker_count)]
+        try:
+            while completed < len(frames):
+                cancel.checkpoint()
+                try:
+                    index, text, confidence, error = completions.get(timeout=0.1)
+                except Empty:
+                    continue
+                if error is not None:
+                    raise error
+                observations[index] = {
+                    "time_ms": int(round(index * 1000 / FRAME_SAMPLING_FPS)),
+                    "text": text,
+                    "confidence": round(confidence, 4),
+                }
+                completed += 1
+                if completed == 1 or completed % 50 == 0 or completed == len(frames):
+                    on_progress(f"Film OCR: frames {completed}/{len(frames)} complete")
+        finally:
+            stop.set()
+            for future in futures:
+                future.cancel()
+
+    return [observations[index] for index in range(len(frames))]
 
 
 def _text_key(text: str) -> str:
@@ -582,7 +681,9 @@ def _temporal_merge_clean_cues(
     fuzzy_baseline: bool = False,
 ) -> list[dict[str, Any]]:
     """Merge post-correction adjacent repeats without mutating raw OCR cues."""
-    max_gap_ms = int(round(2_000 / max(1, frame_sampling_fps)))
+    # The semantic boundary is one second, not a changing number of frames.
+    del frame_sampling_fps
+    max_gap_ms = 1_000
     merged: list[dict[str, Any]] = []
     for cue in cues:
         if (
@@ -677,8 +778,8 @@ def _load_reusable_raw_ocr(
     work_id: str,
     platform: str,
     duration_ms: int,
-) -> list[dict[str, Any]] | None:
-    """Reuse raw OCR only when it is bound to this exact collection input."""
+) -> tuple[list[dict[str, Any]], str, int] | None:
+    """Reuse exact current OCR or a verified higher-quality legacy raw OCR."""
     if not raw_path.is_file() or not raw_report_path.is_file():
         return None
     try:
@@ -690,23 +791,37 @@ def _load_reusable_raw_ocr(
         return None
     try:
         report_duration_ms = int(report.get("duration_ms") or -1)
+        raw_fps = int(raw_doc.get("frame_sampling_fps") or -1)
+        report_fps = int(report.get("frame_sampling_fps") or -1)
     except (TypeError, ValueError):
         return None
+    raw_backend = raw_doc.get("backend")
+    report_backend = report.get("backend")
+    if not isinstance(raw_backend, str) or not isinstance(report_backend, str):
+        return None
+    is_current_algorithm = (
+        raw_backend == OCR_BACKEND
+        and raw_fps == FRAME_SAMPLING_FPS
+        and report.get("algorithm") == _ocr_algorithm_signature()
+    )
+    is_higher_quality_legacy = (
+        raw_backend == _LEGACY_SMALL_OCR_BACKEND
+        and raw_fps >= FRAME_SAMPLING_FPS
+    )
     if (
         raw_doc.get("video") != _artifact_ref(video)
         or raw_doc.get("source_work_id") != work_id
         or raw_doc.get("platform") != platform
-        or raw_doc.get("backend") != OCR_BACKEND
-        or raw_doc.get("frame_sampling_fps") != FRAME_SAMPLING_FPS
-        or report.get("backend") != OCR_BACKEND
-        or report.get("frame_sampling_fps") != FRAME_SAMPLING_FPS
+        or report_backend != raw_backend
+        or report_fps != raw_fps
         or report_duration_ms != duration_ms
+        or not (is_current_algorithm or is_higher_quality_legacy)
     ):
         return None
     cues = raw_doc.get("cues")
     if not isinstance(cues, list) or not cues or not all(isinstance(cue, dict) for cue in cues):
         return None
-    return [dict(cue) for cue in cues]
+    return [dict(cue) for cue in cues], raw_backend, raw_fps
 
 
 def extract_video_subtitles(
@@ -736,7 +851,7 @@ def extract_video_subtitles(
 
     on_progress("Film OCR: probing video")
     duration_ms = _video_duration_ms(video)
-    cues = _load_reusable_raw_ocr(
+    reusable_raw_ocr = _load_reusable_raw_ocr(
         raw_path,
         raw_report_path,
         video=video,
@@ -744,7 +859,8 @@ def extract_video_subtitles(
         platform=platform,
         duration_ms=duration_ms,
     )
-    if cues is not None:
+    if reusable_raw_ocr is not None:
+        cues, raw_ocr_backend, raw_ocr_fps = reusable_raw_ocr
         on_progress(f"Film OCR: reusing raw OCR cues={len(cues)}")
         if not raw_srt_path.is_file():
             raw_srt_path.write_text(_render_srt(cues), encoding="utf-8")
@@ -760,41 +876,29 @@ def extract_video_subtitles(
             frames = _extract_subtitle_frames(video, frame_dir)
             if not frames:
                 raise RuntimeError("film subtitle frame extraction produced no frames")
-            engine = OCR_ENGINE_FACTORY()
-            observations: list[dict[str, Any]] = []
-            for index, frame_path in enumerate(frames):
-                cancel.checkpoint()
-                text, confidence = _ocr_frame(engine, frame_path)
-                observations.append({
-                    "time_ms": int(round(index * 1000 / FRAME_SAMPLING_FPS)),
-                    "text": text,
-                    "confidence": round(confidence, 4),
-                })
-                if index == 0 or (index + 1) % 50 == 0 or index + 1 == len(frames):
-                    on_progress(f"Film OCR: frames {index + 1}/{len(frames)}")
+            observations = _ocr_frames_parallel(frames, on_progress)
 
         cues = _consensus_cues(observations, duration_ms=duration_ms)
         if not cues:
             raise RuntimeError("film subtitle OCR found no Chinese subtitle cues")
+        raw_ocr_backend = OCR_BACKEND
+        raw_ocr_fps = FRAME_SAMPLING_FPS
         raw_doc = {
             "version": 1,
             "source_work_id": work_id,
             "platform": platform,
             "video": _artifact_ref(video),
-            "backend": OCR_BACKEND,
-            "frame_sampling_fps": FRAME_SAMPLING_FPS,
+            "backend": raw_ocr_backend,
+            "frame_sampling_fps": raw_ocr_fps,
             "cues": cues,
         }
         raw_report = {
             "version": 1,
-            "backend": OCR_BACKEND,
-            "frame_sampling_fps": FRAME_SAMPLING_FPS,
-            "crop": {
-                "x": 0.0,
-                "y": 0.48,
-                "width": 1.0,
-                "height": 0.45,
-            },
+            "backend": raw_ocr_backend,
+            "frame_sampling_fps": raw_ocr_fps,
+            "algorithm": _ocr_algorithm_signature(),
+            "crop": dict(_OCR_CROP),
+            "scale": dict(_OCR_SCALE),
             "duration_ms": duration_ms,
             "sampled_frames": len(observations),
             "frames_with_chinese_text": sum(
@@ -863,13 +967,13 @@ def extract_video_subtitles(
         "language": "zh-CN",
         "video": _artifact_ref(video),
         "raw_ocr": {
-            "backend": OCR_BACKEND,
+            "backend": raw_ocr_backend,
             "json": _artifact_ref(raw_path),
             "srt": _artifact_ref(raw_srt_path),
             "txt": _artifact_ref(raw_txt_path),
             "report": _artifact_ref(raw_report_path),
             "cue_count": len(cues),
-            "frame_sampling_fps": FRAME_SAMPLING_FPS,
+            "frame_sampling_fps": raw_ocr_fps,
         },
         "clean_script": {
             "json": _artifact_ref(clean_path),
