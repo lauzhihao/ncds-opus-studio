@@ -61,6 +61,7 @@ CORRECTION_BACKENDS: tuple[dict[str, str], ...] = (
 _ROOT = Path(__file__).resolve().parents[3]
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_HANDLE_WATERMARK_MAX_LENGTH = 32
 
 
 def _configured_ocr_worker_count() -> int:
@@ -395,6 +396,7 @@ def _cleaner_prompt(batch: list[dict[str, Any]], timeline: list[dict[str, Any]])
         "Each item must contain cue_id, text, confidence (0..1).",
         "text must be clean zh-CN Chinese. Correct OCR typos, homophones and punctuation only.",
         "OCR is the evidence; ASR is optional context. Do not translate, summarize, classify, merge, split, or invent facts.",
+        "Remove creator/platform watermark fragments, but preserve adjacent Chinese subtitle body in the same cue. text must never be empty; pure watermark-only cues were filtered before this request.",
         json.dumps(rows, ensure_ascii=False),
     ])
 
@@ -726,17 +728,44 @@ def _temporal_merge_clean_cues(
     return merged
 
 
+def _cleanable_ocr_cues(
+    raw_cues: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Drop only repeated, short standalone handles from the clean candidate set."""
+    texts = [str(cue.get("text") or "").strip() for cue in raw_cues]
+    occurrences: dict[str, int] = {}
+    for text in texts:
+        occurrences[text] = occurrences.get(text, 0) + 1
+    dropped_source_cue_ids: list[str] = []
+    cleanable: list[dict[str, Any]] = []
+    for cue, text in zip(raw_cues, texts):
+        is_pure_handle_watermark = (
+            text.startswith("@")
+            and len(text) <= _HANDLE_WATERMARK_MAX_LENGTH
+            and occurrences[text] >= 3
+        )
+        if is_pure_handle_watermark:
+            dropped_source_cue_ids.append(str(cue["cue_id"]))
+        else:
+            cleanable.append(cue)
+    return cleanable, dropped_source_cue_ids
+
+
 def _build_clean_cues(
     raw_cues: list[dict[str, Any]],
     timeline: list[dict[str, Any]],
     on_progress: ProgressFn,
-) -> tuple[list[dict[str, Any]], str | None, list[str]]:
+) -> tuple[list[dict[str, Any]], str | None, list[str], list[str]]:
+    cleanable_cues, dropped_source_cue_ids = _cleanable_ocr_cues(raw_cues)
+    if not cleanable_cues:
+        on_progress("Film script cleaner: no cleanable cues after watermark filter")
+        return [], None, [], dropped_source_cue_ids
     corrected, backend, failures = CLEAN_SCRIPT_AGENT(
-        [dict(cue) for cue in raw_cues], timeline, on_progress
+        [dict(cue) for cue in cleanable_cues], timeline, on_progress
     )
     needs_review = backend is None
     provisional: list[dict[str, Any]] = []
-    for raw_cue in raw_cues:
+    for raw_cue in cleanable_cues:
         cue_id = str(raw_cue["cue_id"])
         corrected_row = corrected.get(cue_id, {})
         candidate_text = str(corrected_row.get("text") or "").strip()
@@ -757,10 +786,15 @@ def _build_clean_cues(
             "confidence": round(max(0.0, min(1.0, confidence)), 4),
             "needs_review": needs_review or invalid_correction or confidence < 0.75,
         })
-    return _temporal_merge_clean_cues(
-        provisional,
-        fuzzy_baseline=backend is None,
-    ), backend, failures
+    return (
+        _temporal_merge_clean_cues(
+            provisional,
+            fuzzy_baseline=backend is None,
+        ),
+        backend,
+        failures,
+        dropped_source_cue_ids,
+    )
 
 
 def _resolve_optional_timeline(value: str | Path | None) -> Path | None:
@@ -931,9 +965,12 @@ def extract_video_subtitles(
         except (OSError, json.JSONDecodeError):
             on_progress("Film script cleaner: ASR context unavailable; using OCR only")
     on_progress("Film script cleaner: correcting Chinese OCR")
-    clean_cues, correction_backend, correction_failures = _build_clean_cues(
-        cues, timeline, on_progress
-    )
+    (
+        clean_cues,
+        correction_backend,
+        correction_failures,
+        dropped_source_cue_ids,
+    ) = _build_clean_cues(cues, timeline, on_progress)
     clean_needs_review = any(bool(cue["needs_review"]) for cue in clean_cues)
     clean_doc = {
         "version": 2,
@@ -949,6 +986,8 @@ def extract_video_subtitles(
         "correction_failures": correction_failures,
         "raw_cue_count": len(cues),
         "clean_cue_count": len(clean_cues),
+        "dropped_source_cue_ids": dropped_source_cue_ids,
+        "dropped_source_cue_count": len(dropped_source_cue_ids),
         "needs_review": clean_needs_review,
         "review_cue_ids": [cue["cue_id"] for cue in clean_cues if cue["needs_review"]],
     }
