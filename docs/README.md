@@ -59,7 +59,12 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
   `state/works/{platform}/{id}/film_subtitles/{raw.json,raw.srt,raw.txt,report.json}`。
   鬼谷子读取 OCR cue、以 ASR timeline 仅作辅助，输出 `mode=film_commentary` 的
   narration/dialogue/noise 分类与干净解说稿到 `video-jobs/{job}/film_script/`；柳永只翻译
-  `kind=narration` 并保留 cue 时间轴。旧 film job/result 不兼容，必须从沈括重跑。
+  `kind=narration` 并保留 cue 时间轴。film localization 整次 run 按
+  `AGY(gemini-3.5-flash-high) -> Codex/SCodex(gpt-5.6-terra) ->
+  Opus(DEFAULT_OPUS_MODEL)` 顺序 fallback；单个 backend 任一 batch 失败会从第 1 批
+  在下一个 backend 重跑，不混用不同 backend 的批次。`02_rw/film_localization.json`
+  与命令返回值都记录实际 `translation_backend` / `translation_model`。旧 film
+  job/result 不兼容，必须从沈括重跑。
 - **app 当前主路径仍是 `/tasks`**：Flutter 决策视角通过 `TaskRunner` / `nof-worker` 消费任务，还没有切到 `/instances`。
 - **`/instances` 是可用的后端 driver API**，目前主要由测试与内部迁移使用，尚未替代 web/app 前端主路径。
 - 测试基线不要沿用历史文档里的 passed 数字；执行任务当天以 `pytest --collect-only` / `pytest` 的真实结果为准。

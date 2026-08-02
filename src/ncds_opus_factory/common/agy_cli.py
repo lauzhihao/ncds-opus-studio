@@ -104,7 +104,7 @@ def call_agy(
     - 临时隐藏 GEMINI.md（线程安全），解除角色硬约束，用后自动恢复。
     - 设 cwd=$HOME，防止 agy 扫描项目目录下的 CLAUDE.md 等上下文文件。
     - 输出过滤：丢弃 ————END———— 记忆更新块（与 g.sh --safe 一致）。
-    - 可指定 model（如 gemini-3.5-flash），不传则用 agy CLI 默认模型。
+    - 可指定 model（如 gemini-3.5-flash-high），不传则用 agy CLI 默认模型。
     stdin=/dev/null，防止 agy 在非 TTY 环境下死锁等待 EOF。
     """
     _recover_orphaned_disabled()

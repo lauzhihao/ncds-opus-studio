@@ -5,25 +5,26 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from ncds_opus_factory.server.pipeline_rw_helpers import (
     DEFAULT_OPUS_MODEL_ID,
-    _ModelUnavailable,
     _build_codex_user_prompt,
     _call_agy_for_rw,
     _call_deepseek_for_rw,
     _call_opus_for_rw,
     _call_scodex_for_rw,
     _check_model_available,
+    _ModelUnavailable,
 )
 
 logger = logging.getLogger(__name__)
 
 JSON_MODEL_FALLBACKS: list[dict[str, str]] = [
-    {"id": "agy", "label": "AGY", "runner": "agy", "model": "gemini-3.5-flash"},
+    {"id": "agy", "label": "AGY", "runner": "agy", "model": "gemini-3.5-flash-high"},
     {"id": "ds", "label": "DeepSeek", "runner": "deepseek", "model": "deepseek-v4-pro"},
-    {"id": "scodex", "label": "SCodex", "runner": "scodex", "model": "gpt-5.5-codex"},
+    {"id": "scodex", "label": "SCodex", "runner": "scodex", "model": "gpt-5.6-terra"},
     {"id": "opus", "label": "Opus", "runner": "opus", "model": DEFAULT_OPUS_MODEL_ID},
 ]
 

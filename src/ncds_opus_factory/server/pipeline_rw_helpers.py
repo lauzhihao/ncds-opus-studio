@@ -5,14 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ncds_opus_factory.common.agy_cli import agy_unavailable_reason
 from ncds_opus_factory.common.opus_cli import DEFAULT_OPUS_MODEL, call_opus, is_opus_available
+from ncds_opus_factory.common.scodex_cli import call_scodex, is_scodex_available
 
 DEFAULT_OPUS_MODEL_ID = DEFAULT_OPUS_MODEL
 RW_LLM_TIMEOUT_SEC = int(os.getenv("NOF_RW_LLM_TIMEOUT", "900"))
@@ -20,8 +19,8 @@ RW_LLM_TIMEOUT_SEC = int(os.getenv("NOF_RW_LLM_TIMEOUT", "900"))
 MODEL_CANDIDATES: list[dict[str, str]] = [
     {"id": "opus",         "label": "改写方案 A",  "runner": "opus",         "model": DEFAULT_OPUS_MODEL_ID},
     {"id": "deepseek",     "label": "改写方案 B",  "runner": "deepseek",     "model": "deepseek-v4-pro"},
-    {"id": "agy",          "label": "改写方案 C",  "runner": "agy",          "model": "gemini-3.5-flash"},
-    {"id": "codex",        "label": "改写方案 D",  "runner": "scodex",       "model": "gpt-5.5-codex"},
+    {"id": "agy",          "label": "改写方案 C",  "runner": "agy",          "model": "gemini-3.5-flash-high"},
+    {"id": "codex",        "label": "改写方案 D",  "runner": "scodex",       "model": "gpt-5.6-terra"},
 ]
 
 
@@ -35,7 +34,7 @@ def _check_model_available(cand: dict[str, str]) -> tuple[bool, str]:
     if runner == "opus":
         return (is_opus_available(), "本机未安装 opus 启动器")
     if runner == "scodex":
-        return (shutil.which("scodex") is not None, "本机未安装 scodex 启动器")
+        return (is_scodex_available(), "本机未安装 scodex 启动器")
     if runner == "gemini_local":
         p = Path.home() / ".gemini" / "g.sh"
         return (p.is_file(), "~/.gemini/g.sh 未安装")
@@ -108,52 +107,12 @@ def _call_opus_for_rw(user_prompt: str, system_prompt: str, model_id: str) -> st
 
 
 def _call_scodex_for_rw(prompt: str, model_id: str) -> str:
-    """走本机 scodex 启动器 → codex CLI。"""
-    args = [
-        "scodex", "launch", "--no-resume", "--",
-        "exec",
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "-s", "read-only",
-        "-m", model_id,
-        "--json",
+    """走本机 scodex 启动器 -> codex CLI。"""
+    return call_scodex(
         prompt,
-    ]
-    proc = subprocess.run(  # noqa: S603
-        args,
-        capture_output=True,
-        text=True,
-        timeout=RW_LLM_TIMEOUT_SEC,
-        stdin=subprocess.DEVNULL,
+        model=model_id,
+        timeout_seconds=RW_LLM_TIMEOUT_SEC,
     )
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
-        raise RuntimeError(f"scodex launcher exited {proc.returncode}: {tail}")
-
-    final = ""
-    for raw_line in proc.stdout.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if payload.get("type") != "item.completed":
-            continue
-        item = payload.get("item") or {}
-        text = item.get("text")
-        if not isinstance(text, str) and isinstance(item.get("content"), list):
-            text = "".join(
-                p.get("text", "")
-                for p in item["content"]
-                if isinstance(p, dict) and isinstance(p.get("text"), str)
-            )
-        if isinstance(text, str) and text.strip():
-            final = text.strip()
-    if not final:
-        raise RuntimeError(f"scodex empty result; stdout tail={proc.stdout[-300:]}")
-    return final
 
 
 def _build_codex_user_prompt(

@@ -34,8 +34,8 @@ _JUDGE_MODEL_ALIASES: dict[str, str] = {
 # 每个 judge 对应的 runner 类型和实际模型名
 _JUDGE_MODEL_MAP: dict[str, str] = {
     "opus":     "claude-opus-4-8",
-    "codex":    "gpt-5.5-codex",
-    "agy":      "gemini-3.5-flash",
+    "codex":    "gpt-5.6-terra",
+    "agy":      "gemini-3.5-flash-high",
     "deepseek": "deepseek-v4-pro",
 }
 
