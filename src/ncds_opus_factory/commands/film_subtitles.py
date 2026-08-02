@@ -2,8 +2,8 @@
 
 The film domain treats burned-in subtitles as the source of truth. Existing
 Shenkuo download and ASR artifacts are reused, while OCR is performed from the
-cached video at a fixed 2 fps. ASR remains an optional alignment aid for the
-semantic Guiguzi stage.
+cached video at a fixed 2 fps. ASR remains optional alignment context for the
+collector's own Chinese script correction.
 """
 
 from __future__ import annotations
@@ -36,16 +36,28 @@ CleanScriptAgentFn = Callable[
 ]
 
 CORRECTION_BATCH_SIZE = 60
+CORRECTION_BATCH_RETRIES = 1
+CORRECTION_MIN_BATCH_SIZE = 12
 CORRECTION_TIMEOUT_SECONDS = 1_800
 CORRECTION_BACKENDS: tuple[dict[str, str], ...] = (
-    {"id": "agy", "model": "gemini-3.5-flash-high"},
     {"id": "scodex", "model": DEFAULT_CODEX_MODEL},
+    {"id": "agy", "model": "gemini-3.5-flash-high"},
     {"id": "opus", "model": DEFAULT_OPUS_MODEL},
 )
 
 _ROOT = Path(__file__).resolve().parents[3]
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+class _CleanerBatchError(RuntimeError):
+    """A safe, batch-scoped cleaner failure that can trigger backend fallback."""
+
+    def __init__(self, *, batch_label: str, attempts: int, cause: Exception) -> None:
+        self.reason = (
+            f"{type(cause).__name__}:cleaner_batch={batch_label}:attempts={attempts}"
+        )
+        super().__init__(self.reason)
 
 
 def _noop(_text: str) -> None:
@@ -225,6 +237,18 @@ def _same_subtitle(left: str, right: str) -> bool:
     return SequenceMatcher(None, a, b).ratio() >= 0.72
 
 
+def _same_baseline_subtitle(left: str, right: str) -> bool:
+    """Looser local-only match for OCR variants when every cleaner failed."""
+    a = _text_key(left)
+    b = _text_key(right)
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+    # Real OCR variants can score 0.714/0.667/0.625 despite being one line.
+    return SequenceMatcher(None, a, b).ratio() >= 0.62
+
+
 def _parse_json_array(text: str) -> list[dict[str, Any]]:
     """Accept the narrow JSON-array contract shared by script cleaners."""
     value = str(text or "").strip()
@@ -287,7 +311,7 @@ def _call_cleaner_backend(backend: str, prompt: str, model: str) -> str:
 
 
 def _validate_cleaner_rows(
-    rows: list[dict[str, Any]], batch: list[dict[str, Any]], *, batch_no: int
+    rows: list[dict[str, Any]], batch: list[dict[str, Any]], *, batch_no: str | int
 ) -> dict[str, dict[str, Any]]:
     expected = [str(cue["cue_id"]) for cue in batch]
     result: dict[str, dict[str, Any]] = {}
@@ -309,6 +333,96 @@ def _validate_cleaner_rows(
     return result
 
 
+def _clean_batch_with_retry(
+    batch: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    on_progress: ProgressFn,
+    *,
+    backend: str,
+    model: str,
+    batch_label: str,
+) -> dict[str, dict[str, Any]]:
+    """Keep a backend on a bounded retry before reducing prompt size."""
+    last_error: Exception | None = None
+    for attempt in range(1, CORRECTION_BATCH_RETRIES + 2):
+        cancel.checkpoint()
+        on_progress(
+            "Film script cleaner: "
+            f"backend={backend} batch={batch_label} size={len(batch)} attempt={attempt}"
+        )
+        try:
+            raw = _call_cleaner_backend(
+                backend,
+                _cleaner_prompt(batch, timeline),
+                model,
+            )
+            rows = _parse_json_array(raw)
+            return _validate_cleaner_rows(rows, batch, batch_no=batch_label)
+        except cancel.TaskCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - retry boundary is intentional.
+            last_error = exc
+            if attempt <= CORRECTION_BATCH_RETRIES:
+                on_progress(
+                    "Film script cleaner: "
+                    f"backend={backend} batch={batch_label} retrying"
+                )
+    if last_error is None:
+        last_error = RuntimeError("cleaner did not produce an attempt result")
+    raise _CleanerBatchError(
+        batch_label=batch_label,
+        attempts=CORRECTION_BATCH_RETRIES + 1,
+        cause=last_error,
+    )
+
+
+def _clean_batch_tree(
+    batch: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    on_progress: ProgressFn,
+    *,
+    backend: str,
+    model: str,
+    batch_label: str,
+) -> dict[str, dict[str, Any]]:
+    """Retry a batch, then split it until the safe minimum is reached."""
+    try:
+        return _clean_batch_with_retry(
+            batch,
+            timeline,
+            on_progress,
+            backend=backend,
+            model=model,
+            batch_label=batch_label,
+        )
+    except _CleanerBatchError:
+        if len(batch) <= CORRECTION_MIN_BATCH_SIZE:
+            raise
+        midpoint = len(batch) // 2
+        on_progress(
+            "Film script cleaner: "
+            f"backend={backend} batch={batch_label} splitting size={len(batch)}"
+        )
+        return {
+            **_clean_batch_tree(
+                batch[:midpoint],
+                timeline,
+                on_progress,
+                backend=backend,
+                model=model,
+                batch_label=f"{batch_label}.1",
+            ),
+            **_clean_batch_tree(
+                batch[midpoint:],
+                timeline,
+                on_progress,
+                backend=backend,
+                model=model,
+                batch_label=f"{batch_label}.2",
+            ),
+        }
+
+
 def _clean_with_backend(
     raw_cues: list[dict[str, Any]], timeline: list[dict[str, Any]], on_progress: ProgressFn,
     *, backend: str, model: str,
@@ -316,12 +430,16 @@ def _clean_with_backend(
     corrected: dict[str, dict[str, Any]] = {}
     total = (len(raw_cues) + CORRECTION_BATCH_SIZE - 1) // CORRECTION_BATCH_SIZE
     for offset in range(0, len(raw_cues), CORRECTION_BATCH_SIZE):
-        cancel.checkpoint()
         batch = raw_cues[offset:offset + CORRECTION_BATCH_SIZE]
         batch_no = offset // CORRECTION_BATCH_SIZE + 1
-        on_progress(f"Film script cleaner: backend={backend} batch={batch_no}/{total}")
-        rows = _parse_json_array(_call_cleaner_backend(backend, _cleaner_prompt(batch, timeline), model))
-        corrected.update(_validate_cleaner_rows(rows, batch, batch_no=batch_no))
+        corrected.update(_clean_batch_tree(
+            batch,
+            timeline,
+            on_progress,
+            backend=backend,
+            model=model,
+            batch_label=f"{batch_no}/{total}",
+        ))
     if set(corrected) != {str(cue["cue_id"]) for cue in raw_cues}:
         raise RuntimeError("film script cleaner did not cover all OCR cues")
     return corrected
@@ -340,7 +458,12 @@ def _clean_script_with_fallback(
         except cancel.TaskCancelled:
             raise
         except Exception as exc:  # noqa: BLE001 - bounded backend fallback.
-            failures.append(f"{backend}:{type(exc).__name__}")
+            reason = (
+                exc.reason
+                if isinstance(exc, _CleanerBatchError)
+                else f"{type(exc).__name__}:cleaner_run"
+            )
+            failures.append(f"{backend}:{reason}")
             on_progress(f"Film script cleaner: {backend} unavailable; trying next backend")
     return {}, None, failures
 
@@ -456,6 +579,7 @@ def _temporal_merge_clean_cues(
     cues: list[dict[str, Any]],
     *,
     frame_sampling_fps: int = FRAME_SAMPLING_FPS,
+    fuzzy_baseline: bool = False,
 ) -> list[dict[str, Any]]:
     """Merge post-correction adjacent repeats without mutating raw OCR cues."""
     max_gap_ms = int(round(2_000 / max(1, frame_sampling_fps)))
@@ -463,10 +587,29 @@ def _temporal_merge_clean_cues(
     for cue in cues:
         if (
             merged
-            and _text_key(str(merged[-1]["text"])) == _text_key(str(cue["text"]))
+            and (
+                _text_key(str(merged[-1]["text"])) == _text_key(str(cue["text"]))
+                or (
+                    fuzzy_baseline
+                    and _same_baseline_subtitle(
+                        str(merged[-1]["text"]),
+                        str(cue["text"]),
+                    )
+                )
+            )
             and int(cue["start_ms"]) - int(merged[-1]["end_ms"]) <= max_gap_ms
         ):
             previous = merged[-1]
+            previous_text = str(previous["text"])
+            cue_text = str(cue["text"])
+            if fuzzy_baseline and (
+                len(_text_key(cue_text)) > len(_text_key(previous_text))
+                or (
+                    len(_text_key(cue_text)) == len(_text_key(previous_text))
+                    and float(cue["confidence"]) > float(previous["confidence"])
+                )
+            ):
+                previous["text"] = cue_text
             previous["end_ms"] = max(int(previous["end_ms"]), int(cue["end_ms"]))
             previous["source_cue_ids"].extend(cue["source_cue_ids"])
             previous["confidence"] = round(
@@ -513,7 +656,10 @@ def _build_clean_cues(
             "confidence": round(max(0.0, min(1.0, confidence)), 4),
             "needs_review": needs_review or invalid_correction or confidence < 0.75,
         })
-    return _temporal_merge_clean_cues(provisional), backend, failures
+    return _temporal_merge_clean_cues(
+        provisional,
+        fuzzy_baseline=backend is None,
+    ), backend, failures
 
 
 def _resolve_optional_timeline(value: str | Path | None) -> Path | None:
@@ -521,6 +667,46 @@ def _resolve_optional_timeline(value: str | Path | None) -> Path | None:
         return None
     path = Path(value)
     return path if path.is_file() else None
+
+
+def _load_reusable_raw_ocr(
+    raw_path: Path,
+    raw_report_path: Path,
+    *,
+    video: Path,
+    work_id: str,
+    platform: str,
+    duration_ms: int,
+) -> list[dict[str, Any]] | None:
+    """Reuse raw OCR only when it is bound to this exact collection input."""
+    if not raw_path.is_file() or not raw_report_path.is_file():
+        return None
+    try:
+        raw_doc = json.loads(raw_path.read_text(encoding="utf-8"))
+        report = json.loads(raw_report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw_doc, dict) or not isinstance(report, dict):
+        return None
+    try:
+        report_duration_ms = int(report.get("duration_ms") or -1)
+    except (TypeError, ValueError):
+        return None
+    if (
+        raw_doc.get("video") != _artifact_ref(video)
+        or raw_doc.get("source_work_id") != work_id
+        or raw_doc.get("platform") != platform
+        or raw_doc.get("backend") != OCR_BACKEND
+        or raw_doc.get("frame_sampling_fps") != FRAME_SAMPLING_FPS
+        or report.get("backend") != OCR_BACKEND
+        or report.get("frame_sampling_fps") != FRAME_SAMPLING_FPS
+        or report_duration_ms != duration_ms
+    ):
+        return None
+    cues = raw_doc.get("cues")
+    if not isinstance(cues, list) or not cues or not all(isinstance(cue, dict) for cue in cues):
+        return None
+    return [dict(cue) for cue in cues]
 
 
 def extract_video_subtitles(
@@ -550,72 +736,88 @@ def extract_video_subtitles(
 
     on_progress("Film OCR: probing video")
     duration_ms = _video_duration_ms(video)
-    with tempfile.TemporaryDirectory(prefix="nof-film-ocr-") as tmp:
-        frame_dir = Path(tmp)
-        on_progress(f"Film OCR: extracting frames at {FRAME_SAMPLING_FPS} fps")
-        frames = _extract_subtitle_frames(video, frame_dir)
-        if not frames:
-            raise RuntimeError("film subtitle frame extraction produced no frames")
-        engine = OCR_ENGINE_FACTORY()
-        observations: list[dict[str, Any]] = []
-        for index, frame_path in enumerate(frames):
-            cancel.checkpoint()
-            text, confidence = _ocr_frame(engine, frame_path)
-            observations.append({
-                "time_ms": int(round(index * 1000 / FRAME_SAMPLING_FPS)),
-                "text": text,
-                "confidence": round(confidence, 4),
-            })
-            if index == 0 or (index + 1) % 50 == 0 or index + 1 == len(frames):
-                on_progress(
-                    f"Film OCR: frames {index + 1}/{len(frames)}"
-                )
+    cues = _load_reusable_raw_ocr(
+        raw_path,
+        raw_report_path,
+        video=video,
+        work_id=work_id,
+        platform=platform,
+        duration_ms=duration_ms,
+    )
+    if cues is not None:
+        on_progress(f"Film OCR: reusing raw OCR cues={len(cues)}")
+        if not raw_srt_path.is_file():
+            raw_srt_path.write_text(_render_srt(cues), encoding="utf-8")
+        if not raw_txt_path.is_file():
+            raw_txt_path.write_text(
+                "\n".join(str(cue["text"]) for cue in cues) + "\n",
+                encoding="utf-8",
+            )
+    else:
+        with tempfile.TemporaryDirectory(prefix="nof-film-ocr-") as tmp:
+            frame_dir = Path(tmp)
+            on_progress(f"Film OCR: extracting frames at {FRAME_SAMPLING_FPS} fps")
+            frames = _extract_subtitle_frames(video, frame_dir)
+            if not frames:
+                raise RuntimeError("film subtitle frame extraction produced no frames")
+            engine = OCR_ENGINE_FACTORY()
+            observations: list[dict[str, Any]] = []
+            for index, frame_path in enumerate(frames):
+                cancel.checkpoint()
+                text, confidence = _ocr_frame(engine, frame_path)
+                observations.append({
+                    "time_ms": int(round(index * 1000 / FRAME_SAMPLING_FPS)),
+                    "text": text,
+                    "confidence": round(confidence, 4),
+                })
+                if index == 0 or (index + 1) % 50 == 0 or index + 1 == len(frames):
+                    on_progress(f"Film OCR: frames {index + 1}/{len(frames)}")
 
-    cues = _consensus_cues(observations, duration_ms=duration_ms)
-    if not cues:
-        raise RuntimeError("film subtitle OCR found no Chinese subtitle cues")
-    raw_doc = {
-        "version": 1,
-        "source_work_id": work_id,
-        "platform": platform,
-        "video": _artifact_ref(video),
-        "backend": OCR_BACKEND,
-        "frame_sampling_fps": FRAME_SAMPLING_FPS,
-        "cues": cues,
-    }
-    raw_report = {
-        "version": 1,
-        "backend": OCR_BACKEND,
-        "frame_sampling_fps": FRAME_SAMPLING_FPS,
-        "crop": {
-            "x": 0.0,
-            "y": 0.48,
-            "width": 1.0,
-            "height": 0.45,
-        },
-        "duration_ms": duration_ms,
-        "sampled_frames": len(observations),
-        "frames_with_chinese_text": sum(
-            1 for observation in observations if observation["text"]
-        ),
-        "cue_count": len(cues),
-        "low_confidence_cues": sum(
-            1 for cue in cues if float(cue["confidence"]) < 0.75
-        ),
-    }
-    raw_path.write_text(
-        json.dumps(raw_doc, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    raw_srt_path.write_text(_render_srt(cues), encoding="utf-8")
-    raw_txt_path.write_text(
-        "\n".join(str(cue["text"]) for cue in cues) + "\n",
-        encoding="utf-8",
-    )
-    raw_report_path.write_text(
-        json.dumps(raw_report, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+        cues = _consensus_cues(observations, duration_ms=duration_ms)
+        if not cues:
+            raise RuntimeError("film subtitle OCR found no Chinese subtitle cues")
+        raw_doc = {
+            "version": 1,
+            "source_work_id": work_id,
+            "platform": platform,
+            "video": _artifact_ref(video),
+            "backend": OCR_BACKEND,
+            "frame_sampling_fps": FRAME_SAMPLING_FPS,
+            "cues": cues,
+        }
+        raw_report = {
+            "version": 1,
+            "backend": OCR_BACKEND,
+            "frame_sampling_fps": FRAME_SAMPLING_FPS,
+            "crop": {
+                "x": 0.0,
+                "y": 0.48,
+                "width": 1.0,
+                "height": 0.45,
+            },
+            "duration_ms": duration_ms,
+            "sampled_frames": len(observations),
+            "frames_with_chinese_text": sum(
+                1 for observation in observations if observation["text"]
+            ),
+            "cue_count": len(cues),
+            "low_confidence_cues": sum(
+                1 for cue in cues if float(cue["confidence"]) < 0.75
+            ),
+        }
+        raw_path.write_text(
+            json.dumps(raw_doc, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        raw_srt_path.write_text(_render_srt(cues), encoding="utf-8")
+        raw_txt_path.write_text(
+            "\n".join(str(cue["text"]) for cue in cues) + "\n",
+            encoding="utf-8",
+        )
+        raw_report_path.write_text(
+            json.dumps(raw_report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     timeline = []
     if timeline_path is not None:
