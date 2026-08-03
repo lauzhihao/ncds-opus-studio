@@ -140,6 +140,7 @@ def fake_color(_frame, bbox):
 
 film_script_v3.OCR_ENGINE_FACTORY = FakeOcr
 film_script_v3.OCR_WORKERS = 1
+film_script_v3.FRAME_SAMPLING_FPS = 1
 film_script_v3._color_signature = fake_color
 
 # v2 names can coexist in this exact source work directory, but they are not a
@@ -259,7 +260,7 @@ def test_film_script_source_v3_asr_first_multimodal_reviewable_workflow(tmp_path
     assert "哈哈" not in cue_text and "呃啊" not in cue_text and "我们要go now" not in cue_text
     assert "电影台词" not in cue_text and "双语电影台词" not in cue_text
     assert "OCR独有文字绝不进稿" not in cue_text
-    assert "索降突击开始" in cue_text  # high-confidence OCR corrects ASR's 锁降.
+    assert "锁降突击开始" in cue_text  # OCR cannot silently overwrite the ASR draft.
     assert "白色解说保留" in cue_text
     assert "缺少画面证据仍要保留" in cue_text
     assert txt_path.read_text(encoding="utf-8") == source["draft_text"]
@@ -269,8 +270,10 @@ def test_film_script_source_v3_asr_first_multimodal_reviewable_workflow(tmp_path
     assert merged["source_asr_segment_ids"] == ["asr_white_one", "asr_white_two"]
     assert all(cue["source_asr_segment_ids"] for cue in cues)
     assert all(cue["review_reasons"] is not None for cue in cues)
-    corrected = next(cue for cue in cues if cue["text"] == "索降突击开始")
-    assert corrected["decision"] == "edit" and corrected["source_observation_ids"]
+    suggested = next(cue for cue in cues if cue["text"] == "锁降突击开始")
+    assert suggested["decision"] == "review" and suggested["source_observation_ids"]
+    assert suggested["ocr_suggestions"] == ["索降突击开始"]
+    assert "ocr_text_conflict" in suggested["review_reasons"]
     review_cue = next(cue for cue in cues if cue["text"] == "缺少画面证据仍要保留")
     assert review_cue["source_observation_ids"] == []
     assert review_cue["review_reasons"] == ["ocr_support_missing_context_kept"]

@@ -2,8 +2,8 @@
 
 Version 3 intentionally replaces the OCR-first contract.  Speech recognition
 produces candidate narration segments.  OCR is restricted to validating the
-stable commentary subtitle track and correcting high-confidence character
-errors; OCR-only text is never promoted into the commentary script.
+stable commentary subtitle track and attaching review suggestions for textual
+conflicts; OCR-only text is never promoted into the commentary script.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ ProgressFn = Callable[[str], None]
 
 VERSION = 3
 PROFILE = "commentary_only"
-FRAME_SAMPLING_FPS = 1
+FRAME_SAMPLING_FPS = 0.5
 OCR_BACKEND = "rapidocr-onnxruntime-ppocrv6-tiny"
 TRACK_CLASSIFIER_VERSION = 1
 LAYOUT_DISCOVERY_FRAMES = 12
@@ -135,6 +135,14 @@ OCR_ENGINE_FACTORY: Callable[[], Any] = _new_ocr_engine
 
 
 def _result_rows(result: Any) -> list[dict[str, Any]]:
+    def serializable_polygon(value: Any) -> list[list[float]]:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        try:
+            return [[float(point[0]), float(point[1])] for point in value]
+        except (TypeError, ValueError, IndexError):
+            return []
+
     txts = getattr(result, "txts", None)
     scores = getattr(result, "scores", None)
     boxes = getattr(result, "boxes", None)
@@ -144,19 +152,23 @@ def _result_rows(result: Any) -> list[dict[str, Any]]:
             {
                 "text": str(row[1] or "").strip(),
                 "confidence": float(row[2]) if len(row) >= 3 else 0.0,
-                "polygon": row[0] if row else [],
+                "polygon": serializable_polygon(row[0] if row else []),
             }
             for row in source_rows
             if isinstance(row, (list, tuple)) and len(row) >= 2
         ]
-    texts = [str(value or "").strip() for value in (txts or [])]
-    score_values = [float(value) for value in (scores or [])]
-    box_values = list(boxes or [])
+    texts = [str(value or "").strip() for value in (txts if txts is not None else [])]
+    score_values = [
+        float(value) for value in (scores if scores is not None else [])
+    ]
+    box_values = list(boxes if boxes is not None else [])
     return [
         {
             "text": text,
             "confidence": score_values[index] if index < len(score_values) else 0.0,
-            "polygon": box_values[index] if index < len(box_values) else [],
+            "polygon": serializable_polygon(
+                box_values[index] if index < len(box_values) else []
+            ),
         }
         for index, text in enumerate(texts)
         if text
@@ -247,23 +259,31 @@ def _extract_discovery_frames(
     duration_ms: int,
 ) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    interval_seconds = max(1.0, duration_ms / 1000 / LAYOUT_DISCOVERY_FRAMES)
-    subprocess.run(  # noqa: S603 - argv uses a resolved executable.
-        [
-            _required_binary("ffmpeg"),
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(video),
-            "-vf",
-            f"fps=1/{interval_seconds:.6f},scale=960:-2",
-            "-frames:v",
-            str(LAYOUT_DISCOVERY_FRAMES),
-            str(output_dir / "layout_%04d.jpg"),
-        ],
-        check=True,
-    )
+    duration_seconds = max(1.0, duration_ms / 1000)
+    # Putting -ss before -i seeks to a nearby keyframe.  A sparse fps filter
+    # would still decode every 4K60 frame and made twelve discovery samples
+    # take minutes on the reference video.
+    for index in range(LAYOUT_DISCOVERY_FRAMES):
+        cancel.checkpoint()
+        timestamp = duration_seconds * (index + 0.5) / LAYOUT_DISCOVERY_FRAMES
+        subprocess.run(  # noqa: S603 - argv uses a resolved executable.
+            [
+                _required_binary("ffmpeg"),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                f"{timestamp:.3f}",
+                "-i",
+                str(video),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=960:-2",
+                str(output_dir / f"layout_{index + 1:04d}.jpg"),
+            ],
+            check=True,
+        )
     return sorted(output_dir.glob("layout_*.jpg"))
 
 
@@ -512,18 +532,6 @@ def _candidate_reason(segment: dict[str, Any]) -> str | None:
     return None
 
 
-def _transplant_cjk(asr_text: str, ocr_text: str, *, confidence: float, similarity: float) -> tuple[str, bool]:
-    if confidence < 0.86 or similarity < 0.78:
-        return asr_text, False
-    asr_chars = _normalize_text(asr_text)
-    ocr_chars = _normalize_text(ocr_text)
-    if len(asr_chars) != len(ocr_chars) or asr_chars == ocr_chars:
-        return asr_text, False
-    iterator = iter(ocr_chars)
-    corrected = "".join(next(iterator) if _CJK_RE.fullmatch(char) else char for char in asr_text)
-    return corrected, corrected != asr_text
-
-
 def _build_script(
     segments: list[dict[str, Any]],
     observations: list[dict[str, Any]],
@@ -604,19 +612,23 @@ def _build_script(
             continue
         best = record["best_observation"]
         text = str(record["asr_text"])
-        corrected = False
         source_observation_ids: list[str] = []
+        ocr_suggestions: list[str] = []
         confidence = 0.64
         review_reasons: list[str] = []
         if best is not None:
             source_observation_ids = [str(best["observation_id"])]
             confidence = min(0.99, 0.55 * float(record["support_score"]) + 0.45 * float(best["confidence"]))
-            text, corrected = _transplant_cjk(
-                text,
-                str(best["text"]),
-                confidence=float(best["confidence"]),
-                similarity=float(record["support_score"]),
-            )
+            suggestion = str(best["text"]).strip()
+            if (
+                float(best["confidence"]) >= 0.86
+                and float(record["support_score"]) >= 0.78
+                and _normalize_text(suggestion) != _normalize_text(text)
+            ):
+                # OCR is supporting evidence, never an authority that silently rewrites ASR.
+                # A visually plausible conflict remains attached to the cue for human review.
+                ocr_suggestions.append(suggestion)
+                review_reasons.append("ocr_text_conflict")
         else:
             review_reasons.append("ocr_support_missing_context_kept")
         provisional.append({
@@ -626,8 +638,9 @@ def _build_script(
             "text": text,
             "source_asr_segment_ids": [str(record["source_asr_segment_id"])],
             "source_observation_ids": source_observation_ids,
+            "ocr_suggestions": ocr_suggestions,
             "confidence": round(confidence, 4),
-            "decision": "edit" if corrected else "keep",
+            "decision": "review" if review_reasons else "keep",
             "review_reasons": review_reasons,
         })
 
@@ -643,6 +656,7 @@ def _build_script(
                 previous["end_ms"] = max(int(previous["end_ms"]), int(cue["end_ms"]))
                 previous["source_asr_segment_ids"].extend(cue["source_asr_segment_ids"])
                 previous["source_observation_ids"].extend(cue["source_observation_ids"])
+                previous["ocr_suggestions"] = sorted(set(previous["ocr_suggestions"] + cue["ocr_suggestions"]))
                 previous["review_reasons"] = sorted(set(previous["review_reasons"] + cue["review_reasons"]))
                 previous["confidence"] = round(min(float(previous["confidence"]), float(cue["confidence"])), 4)
                 previous["decision"] = "merge"

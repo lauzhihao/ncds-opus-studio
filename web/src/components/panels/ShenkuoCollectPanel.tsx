@@ -415,10 +415,17 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
 
 function FilmScriptCard({ source, text }: { source: NonNullable<ShenkuoEntry['film_source']>; text: string }) {
   const [open, setOpen] = useState(false);
-  const clean = source.clean_script;
+  const script = source.commentary_script;
+  const draftText = text || source.draft_text;
+  const statusLabel = source.quality_status === 'pass'
+    ? '已通过'
+    : source.quality_status === 'review'
+      ? '待人工复核'
+      : '质量未通过';
+  const trackCounts = source.tracks.counts;
   async function copyText() {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(draftText);
     } catch {
       // 浏览器权限不足时仍保留全文供用户手动复制。
     }
@@ -427,16 +434,37 @@ function FilmScriptCard({ source, text }: { source: NonNullable<ShenkuoEntry['fi
     <article className="shenkuo-card" style={cardStyle}>
       <SectionHead
         icon={<Quote size={13} />}
-        label={`干净中文字幕/解说稿 · ${clean.cue_count} 条${clean.needs_review ? ' · 待复核' : ''}`}
+        label={`解说旁白稿 v3 · ${script.cue_count} 条 · ${statusLabel}`}
         right={<CardToggle open={open} onToggle={() => setOpen((value) => !value)} openText="收起" closedText="展开全文" />}
       />
+      {!source.publishable && (
+        <div
+          style={{
+            marginBottom: 8,
+            padding: '7px 9px',
+            borderLeft: '3px solid var(--danger, #e5484d)',
+            background: 'color-mix(in srgb, var(--danger, #e5484d) 8%, transparent)',
+            color: 'var(--ink-2)',
+            fontSize: 'var(--text-2xs)',
+          }}
+        >
+          当前仅为可审核草稿，不可直接进入发布流程。请结合原片复核后再使用。
+        </div>
+      )}
+      <div className="dim-mono" style={{ marginBottom: 8, fontSize: 'var(--text-2xs)' }}>
+        ASR 候选 + 下方字幕 OCR 校准
+        {' · '}旁白证据 {trackCounts.commentary ?? 0}
+        {' · '}原片对白 {trackCounts.film_dialogue ?? 0}
+        {' · '}未确定 {trackCounts.unknown ?? 0}
+      </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, fontSize: 'var(--text-2xs)' }}>
-        <a href={fileUrl(clean.txt)} download>下载 TXT</a>
-        <a href={fileUrl(clean.srt)} download>下载 SRT</a>
-        <a href={fileUrl(clean.json)} download>下载 JSON</a>
+        <a href={fileUrl(script.txt)} download>下载 TXT</a>
+        <a href={fileUrl(script.srt)} download>下载 SRT</a>
+        <a href={fileUrl(script.json)} download>下载 JSON</a>
+        <a href={fileUrl(script.report)} download>质量报告</a>
         <button className="link-btn" onClick={copyText}>复制全文</button>
       </div>
-      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7, ...(open ? {} : clamp12) }}>{text}</div>
+      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7, ...(open ? {} : clamp12) }}>{draftText}</div>
     </article>
   );
 }

@@ -258,7 +258,7 @@ export interface ShenkuoEntry {
   cover?: string; // 封面相对路径
   video?: string; // 本地下载视频相对路径（state/works/.../video.mp4），经 /artifacts/files/ 访问
   duration?: number; // 视频时长（秒），缺失/0 -> 前端不渲染时长徽标
-  text?: string; // 提取文案（清洗稿，内嵌）
+  text?: string; // 提取文案；film 为 commentary_script 的可审核草稿
   timeline?: string; // 标准 ASR timeline 相对路径（完整内容不进入 pipeline_state）
   segment_count?: number;
   top_comments?: ShenkuoComment[]; // 高赞评论（>10 赞，按赞排序）
@@ -272,27 +272,34 @@ export interface ShenkuoEntry {
 
 export interface FilmScriptSource {
   mode: 'film_script_source';
-  version: 2;
+  version: 3;
+  profile: 'commentary_only';
   language: 'zh-CN';
   video: string;
-  raw_ocr: {
+  video_sha256: string;
+  asr_timeline: string;
+  raw_observations: {
+    json: string;
+    count: number;
     backend: string;
+    roi: { x: number; y: number; width: number; height: number };
+  };
+  tracks: {
+    json: string;
+    counts: Record<string, number>;
+  };
+  commentary_script: {
     json: string;
     srt: string;
     txt: string;
-    report?: string;
+    report: string;
     cue_count: number;
-    frame_sampling_fps: 2;
+    quality_status: 'pass' | 'review' | 'reject';
+    publishable: boolean;
   };
-  clean_script: {
-    json: string;
-    srt: string;
-    txt: string;
-    report?: string;
-    cue_count: number;
-    needs_review: boolean;
-  };
-  asr_timeline?: string | null;
+  quality_status: 'pass' | 'review' | 'reject';
+  publishable: boolean;
+  draft_text: string;
 }
 
 // 鬼谷子选题种子：一条评论 + 它所属作品的提取文案（前端从沈括面板选出，传给后端逐条锚定）。

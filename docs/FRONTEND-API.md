@@ -48,18 +48,25 @@
 
 ### film domain 契约
 
-film 的默认路径在沈括结束：`asr` 节点对视频做 2fps 底部字幕 OCR、中文语义校正和校正后的时序去重，不进入鬼谷子或柳永。每个成功的 `outputs.collected[]` entry 都使用 `film_script_source.v2`，并且 `text` 与 `clean_script.txt` 完全一致。
+film 的默认路径在沈括结束：`asr` 节点先生成 ASR 候选，再通过稀疏全画面采样定位字幕区域，以 0.5fps（每 2 秒 1 帧）对画面下方 ROI 做 OCR。OCR 只负责排除原片对白、验证旁白和附加文本冲突复核建议，不能静默覆盖 ASR，也不能独立新增稿件，不进入鬼谷子或柳永。每个成功的 `outputs.collected[]` entry 都使用 `film_script_source.v3`，并且 `text` 与 `commentary_script.txt` 完全一致。
 
 `film_source` 固定为：
 
 ```json
 {
   "mode": "film_script_source",
-  "version": 2,
+  "version": 3,
+  "profile": "commentary_only",
   "language": "zh-CN",
   "video": "state/works/douyin/123/video.mp4",
-  "raw_ocr": {"json": ".../raw.json", "srt": ".../raw.srt", "txt": ".../raw.txt", "report": ".../raw.report.json", "cue_count": 476, "backend": "rapidocr-onnxruntime-ppocrv6-small", "frame_sampling_fps": 2},
-  "clean_script": {"json": ".../clean.json", "srt": ".../clean.srt", "txt": ".../clean.txt", "report": ".../clean.report.json", "cue_count": 420, "needs_review": false}
+  "video_sha256": "...",
+  "asr_timeline": "state/works/douyin/123/asr_timeline.json",
+  "raw_observations": {"json": ".../v3.raw_observations.json", "count": 702, "backend": "rapidocr-onnxruntime-ppocrv6-tiny", "roi": {"x": 0, "y": 0.7, "width": 1, "height": 0.29}},
+  "tracks": {"json": ".../v3.tracks.json", "counts": {"commentary": 420, "film_dialogue": 95, "watermark": 12, "unknown": 175}},
+  "commentary_script": {"json": ".../v3.commentary.json", "srt": ".../v3.commentary.srt", "txt": ".../v3.commentary.txt", "report": ".../v3.commentary.report.json", "cue_count": 310, "quality_status": "review", "publishable": false},
+  "quality_status": "review",
+  "publishable": false,
+  "draft_text": "可审核草稿全文..."
 }
 ```
 

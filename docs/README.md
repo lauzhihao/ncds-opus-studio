@@ -53,12 +53,12 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
 - **P1 抽 core 已完成**（`packages/core`，6 primitive + `build_full_registry()`）。
 - **生产引擎后端已存在**：`src/ncds_opus_factory/server/engine/`、`routes/instances.py`、`pipeline_performers_final.py` 已落地；`RECIPE_REGISTRY` 当前只注册 `final_preview`。
 - **web 当前主路径仍是 `/jobs/*`**：`/studio` React 画布调用 `/jobs`、`/pipelines`、`/preview`；`PipelineRunner` 作为 facade 保存 `JobState`，命中节点再转到 engine performer。默认未设 `NOF_ENGINE_NODES` 时，`lines/storyboard/tts/image/render` 走 engine；`asr` 因步内增量与后台 enrich 仍固定走 legacy，`rw` 因逐模型实时 `model_progress/drafts` 面板仍固定走 legacy。
-- **film domain 已切到 `film_script_source.v2`**：沈括复用下载/ASR sidecar，但以 2fps
-  底部 RapidOCR 观测为真源，在 collector 内完成中文语义校正与校正后的时序去重。产物落
-  `state/works/{platform}/{id}/film_subtitles/{raw.*,clean.*}`；`raw_ocr` 永不覆盖，
-  `clean_script` 提供 txt/srt/json/report，且 `collected[].text` 等于 clean.txt 完整内容。
-  校正按 `AGY -> Codex/SCodex -> Opus` 整批 fallback；全部不可用时交付确定性 baseline 并
-  标记 `needs_review`。film 默认在沈括结束，不再调用鬼谷子或柳永。
+- **film domain 已切到 `film_script_source.v3`**：沈括复用下载与 ASR timeline，以 ASR 片段作为
+  唯一脚本候选；先用 12 个稀疏全画面样本发现字幕带，再固定裁剪画面下方 ROI，以 0.5fps
+  RapidOCR 观测辅助区分白色旁白字幕、黄色/双语原片对白，并为高置信文本冲突附加复核建议。OCR-only
+  文本不得进入稿件。产物落 `state/works/{platform}/{id}/film_subtitles/v3.*`，交付
+  `commentary_script` txt/srt/json/report、`tracks` 与不可变 `raw_observations`。质量为
+  `review/reject` 时草稿仍可见，但 `publishable=false`。film 默认在沈括结束，不再调用鬼谷子或柳永。
 - **app 当前主路径仍是 `/tasks`**：Flutter 决策视角通过 `TaskRunner` / `nof-worker` 消费任务，还没有切到 `/instances`。
 - **`/instances` 是可用的后端 driver API**，目前主要由测试与内部迁移使用，尚未替代 web/app 前端主路径。
 - 测试基线不要沿用历史文档里的 passed 数字；执行任务当天以 `pytest --collect-only` / `pytest` 的真实结果为准。
