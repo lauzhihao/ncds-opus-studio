@@ -116,7 +116,9 @@ export function ShenkuoCollectPanel({ jobId, nodeState, onAdvanced }: Props) {
   const status = nodeState.status;
   const ok = collected.filter((e) => !e.error);
   const selection = useCommentSelection(jobId);
-  const hasFilmScript = collected.some((entry) => entry.film_source?.mode === 'film_script_source');
+  const hasFilmScript = collected.some(
+    (entry) => entry.film_source?.mode === 'film_script_source' && Number(entry.film_source.version) === 3,
+  );
 
   let hint: { tone: 'info' | 'error'; text: string } | null = null;
   if (collected.length === 0 && status === 'idle') {
@@ -205,7 +207,9 @@ function EntryCard({ entry, selection }: { entry: ShenkuoEntry; selection: Comme
   ].filter((r) => audio[r.key]);
   const comments = entry.top_comments ?? [];
   const cutouts = (entry.cutouts ?? []).map(fileUrl).filter(Boolean) as string[];
-  const filmSource = entry.film_source?.mode === 'film_script_source' ? entry.film_source : undefined;
+  const filmSource = entry.film_source?.mode === 'film_script_source' && Number(entry.film_source.version) === 3
+    ? entry.film_source
+    : undefined;
 
   return (
     // 一条作品 = 一组独立卡片：作品信息 / 本地下载视频 / 提取文案 / 声音素材 / 高赞评论 / 抠图
