@@ -57,7 +57,7 @@ def _video_duration_ms(path: Path) -> int:
 
     proc = subprocess.run(  # noqa: S603 - argv uses a resolved executable.
         [
-            film_ocr_executor._required_binary("ffprobe"),
+            film_ocr_executor.required_binary("ffprobe"),
             "-v",
             "error",
             "-show_entries",
@@ -454,6 +454,13 @@ def extract_video_subtitles_v3(
                 and raw_doc.get("algorithm_signature") == _algorithm_signature(roi)
                 and isinstance(raw_doc.get("observations"), list)
             )
+            cached_observations_sha256 = raw_doc.get("observations_sha256")
+            if cached_observations_sha256 is not None:
+                reusable = reusable and (
+                    isinstance(cached_observations_sha256, str)
+                    and cached_observations_sha256
+                    == film_ocr_executor.canonical_observations_sha256(raw_doc["observations"])
+                )
             if reusable:
                 observations = [dict(row) for row in raw_doc["observations"]]
                 ocr_backend = str(raw_doc.get("backend") or OCR_BACKEND)

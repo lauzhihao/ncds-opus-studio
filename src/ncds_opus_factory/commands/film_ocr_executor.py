@@ -184,11 +184,63 @@ def media_type_for_video(path: Path) -> str:
     }.get(path.suffix.lower(), "application/octet-stream")
 
 
-def _required_binary(name: str) -> str:
+def required_binary(name: str) -> str:
     binary = shutil.which(name)
     if not binary:
         raise RuntimeError(f"required executable is unavailable: {name}")
     return binary
+
+
+def _required_binary(name: str) -> str:
+    """Backward-compatible private alias for the local executor internals."""
+    return required_binary(name)
+
+
+def _validated_observations(observations: list[Any]) -> list[dict[str, Any]]:
+    """Reject malformed remote rows before they become a durable artifact."""
+    validated: list[dict[str, Any]] = []
+    observation_ids: set[str] = set()
+    for row in observations:
+        if not isinstance(row, Mapping):
+            raise RuntimeError("film OCR middleware observations contain an invalid row")
+        observation_id = row.get("observation_id")
+        if not isinstance(observation_id, str) or not observation_id or observation_id in observation_ids:
+            raise RuntimeError("film OCR middleware observation identity is invalid")
+        observation_ids.add(observation_id)
+        integer_values: dict[str, int] = {}
+        for key in ("frame_index", "time_ms", "line_order"):
+            value = row.get(key)
+            if isinstance(value, bool):
+                raise RuntimeError(f"film OCR middleware observation {key} is invalid")
+            try:
+                integer_values[key] = int(value)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(f"film OCR middleware observation {key} is invalid") from exc
+            if integer_values[key] < 0:
+                raise RuntimeError(f"film OCR middleware observation {key} is invalid")
+        if not isinstance(row.get("text"), str):
+            raise RuntimeError("film OCR middleware observation text is invalid")
+        try:
+            confidence = float(row.get("confidence"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("film OCR middleware observation confidence is invalid") from exc
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise RuntimeError("film OCR middleware observation confidence is invalid")
+        bbox = row.get("bbox_norm")
+        if not isinstance(bbox, Mapping):
+            raise RuntimeError("film OCR middleware observation bbox is invalid")
+        try:
+            normalized_bbox = {key: float(bbox[key]) for key in ("x", "y", "width", "height")}
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("film OCR middleware observation bbox is invalid") from exc
+        if any(not math.isfinite(value) or value < 0.0 or value > 1.0 for value in normalized_bbox.values()):
+            raise RuntimeError("film OCR middleware observation bbox is invalid")
+        if normalized_bbox["x"] + normalized_bbox["width"] > 1.0 or normalized_bbox["y"] + normalized_bbox["height"] > 1.0:
+            raise RuntimeError("film OCR middleware observation bbox exceeds normalized bounds")
+        if not isinstance(row.get("color_signature"), Mapping):
+            raise RuntimeError("film OCR middleware observation colour signature is invalid")
+        validated.append(dict(row))
+    return validated
 
 
 def _new_ocr_engine() -> Any:
@@ -517,9 +569,11 @@ class RemoteFilmOcrExecutor:
             raise RuntimeError("film OCR middleware result operation mismatch")
         if response.get("request_id") != request["request_id"]:
             raise RuntimeError("film OCR middleware request identity mismatch")
+        if response.get("idempotency_key") != request["idempotency_key"]:
+            raise RuntimeError("film OCR middleware idempotency identity mismatch")
         source = response.get("source")
         expected_source = request["source"]
-        if not isinstance(source, Mapping) or any(source.get(key) != expected_source[key] for key in ("sha256", "byte_size", "media_type")):
+        if not isinstance(source, Mapping) or dict(source) != dict(expected_source):
             raise RuntimeError("film OCR middleware source identity mismatch")
         roi = response.get("roi")
         observations = response.get("observations")
@@ -539,8 +593,7 @@ class RemoteFilmOcrExecutor:
             raise RuntimeError("film OCR middleware ROI has no area")
         if normalized_roi["x"] + normalized_roi["width"] > 1.0 or normalized_roi["y"] + normalized_roi["height"] > 1.0:
             raise RuntimeError("film OCR middleware ROI exceeds normalized bounds")
-        if any(not isinstance(row, Mapping) for row in observations):
-            raise RuntimeError("film OCR middleware observations contain an invalid row")
+        validated_observations = _validated_observations(observations)
         expected_signature = algorithm_signature(
             normalized_roi,
             backend=str(self._settings["backend"]),
@@ -552,7 +605,7 @@ class RemoteFilmOcrExecutor:
             raise RuntimeError("film OCR middleware algorithm signature mismatch")
         if backend != str(signature.get("backend")):
             raise RuntimeError("film OCR middleware backend identity mismatch")
-        expected_digest = canonical_observations_sha256(observations)
+        expected_digest = canonical_observations_sha256(validated_observations)
         if response.get("observations_sha256") != expected_digest:
             raise RuntimeError("film OCR middleware observations checksum mismatch")
         execution = response.get("execution")
@@ -560,10 +613,10 @@ class RemoteFilmOcrExecutor:
             raise RuntimeError("film OCR middleware execution metadata is invalid")
         return FilmOcrResult(
             roi=normalized_roi,
-            observations=[dict(row) for row in observations],
+            observations=validated_observations,
             backend=backend,
             algorithm_signature=dict(signature),
-            execution={"executor": "remote", "request_id": request["request_id"], **dict(execution or {})},
+            execution={**dict(execution or {}), "executor": "remote", "request_id": request["request_id"]},
             request=dict(request),
             observations_sha256=expected_digest,
         )
