@@ -298,17 +298,8 @@ function nodeAgentName(node: string): string {
 // > 首个未完成真实节点所属 agent(绿) > 全 idle 则首个 agent(绿)。
 export function jobProgress(
   nodeStatus: Record<string, NodeStatus> | undefined,
-  domain?: string | null,
 ): JobProgress {
   const ns = nodeStatus ?? {};
-  if (String(domain ?? '').trim().toLowerCase() === 'film') {
-    if (ns.asr === 'failed') return { light: 'red', agentName: '沈括' };
-    if (ns.asr === 'running' || ns.asr === 'queued') {
-      return { light: 'yellow', agentName: '沈括' };
-    }
-    if (ns.asr === 'done') return { light: 'green', agentName: '解说稿已提取' };
-    return { light: 'green', agentName: '沈括' };
-  }
   if (ns.render === 'done') return { light: 'green', agentName: '已出片' };
   const failed = NODE_ORDER.find((n) => n !== 'preview' && ns[n] === 'failed');
   if (failed) return { light: 'red', agentName: nodeAgentName(failed) };

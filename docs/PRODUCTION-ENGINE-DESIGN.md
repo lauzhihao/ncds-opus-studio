@@ -76,7 +76,8 @@
 `*` default，保持既有生产行为。`film` 的沈括 strategy 复用下载与 ASR timeline，以 ASR 片段作为
 脚本候选；RapidOCR 只扫描自动发现的画面下方字幕 ROI，用于区分旁白字幕与原片对白、验证候选和附加冲突复核建议，直接产出
 `film_script_source.v3`。`raw_observations` immutable，`commentary_script` 提供可审核的 zh-CN txt/srt/json；
-默认 film 不进入鬼谷子或柳永。旧 artifact 不兼容，必须从沈括重跑。新增 domain
+这只完成沈括的原料提取，普通画布仍沿鬼谷子→柳永→吴道子→伯牙→卧龙的可见生产链逐节点推进，
+不会因 film 的即时 ASR 自动续跑下游。旧 artifact 不兼容，必须从沈括重跑。新增 domain
 只需实现并注册 strategy/processor，不改节点核心分发代码；source/quality 等没有 domain
 strategy 的 technical step 安全回退 recipe performer，无 performer 的 input/output/人工 preview
 闸门仍按 recipe 状态机处理。该派发不再只限于 `final_preview`，film recipe 的
@@ -222,7 +223,7 @@ input -> source -> highlight_plan -> storyboard -> edl_review
 
 - `source` 只注册调用方依法提供的对标视频和 clean master，做真实 ffprobe/hash；系统不搜索或下载电影原片。
   多音轨 master 由可选 `master_audio_stream` 选择 audio ordinal，codec/language 与 ordinal 一起固化进 artifact。
-- 沈括的 `film_script_source.v3` 可作为独立的中文解说旁白草稿输入；只有 `publishable=true` 才可无人工确认进入 highlight，且不依赖鬼谷子、柳永或翻译。
+- 沈括的 `film_script_source.v3` 是可审核的中文解说旁白草稿输入，供普通画布的鬼谷子→柳永→…生产链继续消费；只有 `publishable=true` 才可无人工确认进入 `film_highlight_v1` 的 highlight 步。
 - `storyboard` v1 不做自动视觉匹配，只消费调用方/人工确认的 ms EDL 或 frame EDL，统一输出
   `film_frame_edl.v1` 半开 frame ranges 与 backward/overlap/low-confidence review 诊断。
 - `tts` v1 不调用在线 TTS/voice cloning，只把已生成 voice 规范化成 48 kHz stereo PCM stem，
@@ -306,7 +307,7 @@ web  订 ?level=meta,step,detail   → 看到逐字进度 + 草稿变更，支�
 |---|---|---|
 | **对标账号** | 爬取采集（下载+转写+截帧抠图，落共享池） | →鬼谷子(选题)→柳永→… |
 | **普通作品链接** | 单链 ASR（只转写这一条） | →柳永(改写/编剧)→… |
-| **film 原片/作品链接** | 下载/缓存 + ASR；稀疏全画面定位后以 0.5fps 扫描底部字幕 ROI | 沈括内用 OCR 排除原片对白、验证和纠正 ASR，交付 commentary script |
+| **film 原片/作品链接** | 下载/缓存 + ASR；稀疏全画面定位后以 0.5fps 扫描底部字幕 ROI | 沈括内用 OCR 排除原片对白、验证 ASR 并附加冲突复核建议，交付 commentary script；随后仍可沿鬼谷子→柳永→…普通生产链逐节点推进 |
 | **选题/一句话想法** | 无（没有外部原料可采，跳过沈括） | 直接 →柳永(或先鬼谷子提炼) |
 
 > 即"链接→asr"这个裸节点不再独立存在，它是**沈括的单链模式**。film 是这一模式的

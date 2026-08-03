@@ -136,7 +136,7 @@ export function JobCard({
     const m = /(\d{2,})/.exec(job.pipeline_id);
     return m ? m[1] : job.job_id.slice(0, 2).toUpperCase();
   })();
-  const progress = jobProgress(job.node_status, job.domain);
+  const progress = jobProgress(job.node_status);
   // 「作品 + 话题标签」：JobSummary 只有 title 字符串，话题从中正则提取（60 字后被截断的标签提取不到）
   const { title, tags } = parseTitleTags(job.title);
   const coverSrc = `/jobs/${job.job_id}/cover?v=${encodeURIComponent(String(job.updated_at || 0))}`;

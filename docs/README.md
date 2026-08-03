@@ -60,7 +60,8 @@ Redis 连不上 → nof-server `POST /tasks` 返 503、nof-worker fail-fast 退�
   只在显式注入 middleware transport 时可用，绝不静默回退 local。OCR-only 文本不得进入稿件。产物落
   `state/works/{platform}/{id}/film_subtitles/v3.*`，交付 `commentary_script` txt/srt/json/report、
   `tracks` 与含 executor/request/digest/execution 审计信息的不可变 `raw_observations`。质量为
-  `review/reject` 时草稿仍可见，但 `publishable=false`。film 默认在沈括结束，不再调用鬼谷子或柳永。
+  `review/reject` 时草稿仍可见，但 `publishable=false`。film 创建时会立即触发沈括 `asr` 采集，
+  但这只完成原料提取；普通画布生产链仍保留鬼谷子→柳永→吴道子→伯牙→卧龙，后续节点不自动运行。
 - **app 当前主路径仍是 `/tasks`**：Flutter 决策视角通过 `TaskRunner` / `nof-worker` 消费任务，还没有切到 `/instances`。
 - **`/instances` 是可用的后端 driver API**，目前主要由测试与内部迁移使用，尚未替代 web/app 前端主路径。
 - 测试基线不要沿用历史文档里的 passed 数字；执行任务当天以 `pytest --collect-only` / `pytest` 的真实结果为准。

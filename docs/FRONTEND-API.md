@@ -48,7 +48,7 @@
 
 ### film domain 契约
 
-film 的默认路径在沈括结束：`asr` 节点先生成 ASR 候选，再通过稀疏全画面采样定位字幕区域，以 0.5fps（每 2 秒 1 帧）对画面下方 ROI 做 OCR。OCR 只负责排除原片对白、验证旁白和附加文本冲突复核建议，不能静默覆盖 ASR，也不能独立新增稿件，不进入鬼谷子或柳永。每个成功的 `outputs.collected[]` entry 都使用 `film_script_source.v3`，并且 `text` 与 `commentary_script.txt` 完全一致。
+film 先由沈括的 `asr` 节点生成 ASR 候选，再通过稀疏全画面采样定位字幕区域，以 0.5fps（每 2 秒 1 帧）对画面下方 ROI 做 OCR。OCR 只负责排除原片对白、验证旁白和附加文本冲突复核建议，不能静默覆盖 ASR，也不能独立新增稿件。每个成功的 `outputs.collected[]` entry 都使用 `film_script_source.v3`，并且 `text` 与 `commentary_script.txt` 完全一致；这只完成沈括的原料提取，画布仍展示并保留鬼谷子、柳永、吴道子、伯牙和卧龙的普通后续生产链，需逐节点操作而不会自动续跑。
 
 `film_source` 固定为：
 

@@ -800,7 +800,7 @@ function AddTempTaskModal({
         inputs: domain ? { domain } : {},
       });
       await api.updateInputs(state.job_id, { shares });
-      // 影视只复用既有 final_preview 的沈括节点；创建后立即开始采集原片、转写和音轨。
+      // 影视创建后立即启动沈括采集（原片、转写和字幕证据/解说稿）；下游 agent 仍由画布按普通生产链逐步操作，不自动续跑。
       if (domain === 'film') await api.runNode(state.job_id, 'asr');
       void followMarkedAuthors(); // 关注跟随提交异步触发（不阻塞导航）
       onCreated(state.job_id);

@@ -74,14 +74,8 @@ export function JobCanvasPage() {
   // 选题确认的本地脉冲：解耦后选定选题不再触发 rw 的 SSE，靠它让 angleConfirmed 立即重算翻鬼谷子 DONE。
   const [angleTick, setAngleTick] = useState(0);
   const { job, connected, reconnect } = useJobStream(jobId);
-  const visibleAgents = useMemo(
-    () => String(job?.inputs.domain ?? '').trim().toLowerCase() === 'film'
-      ? AGENTS.filter((agent) => agent.id === 'shenkuo')
-      : AGENTS,
-    [job?.inputs.domain],
-  );
   const openAgentDef = openAgent
-    ? visibleAgents.find((agent) => agent.id === openAgent)
+    ? AGENTS.find((agent) => agent.id === openAgent)
     : undefined;
 
   const [nodes, setNodes, onNodesChange] = useNodesState<AgentCardData>([]);
@@ -118,7 +112,8 @@ export function JobCanvasPage() {
   }, [job?.pipeline_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 进画布即自动采集：无论从哪个入口（账号作品 / 临时任务 / 历史作品）进来，只要采集源已就位
-  // 且沈括(asr) 还没起步，就自动触发一次 collect。后端有采集缓存，已采过的作品直接返回结果。
+  // 且沈括(asr) 还没起步，就自动触发一次 collect。film 创建时的即时采集同样只启动沈括，
+  // 不代表整条生产链已完成，也不会自动运行下游 agent。后端有采集缓存，已采过的作品直接返回结果。
   const autoCollectFired = useRef(false);
   useEffect(() => {
     if (!job || !jobId || autoCollectFired.current) return;
@@ -169,13 +164,13 @@ export function JobCanvasPage() {
     if (!job || initialized.current) return;
     initialized.current = true;
 
-    const layout = computeAgentLayout(visibleAgents);
+    const layout = computeAgentLayout(AGENTS);
     let saved: Record<string, { x: number; y: number }> = {};
     try {
       saved = JSON.parse(localStorage.getItem(agentPosKey(jobId!)) || '{}');
     } catch { /* ignore */ }
 
-    const newNodes: Node<AgentCardData>[] = visibleAgents.map((a, i) => ({
+    const newNodes: Node<AgentCardData>[] = AGENTS.map((a, i) => ({
       id: a.id,
       type: 'card',
       position: saved[a.id] ?? layout[a.id] ?? { x: 0, y: i * ROW },
@@ -185,18 +180,18 @@ export function JobCanvasPage() {
         progress: agentProgressText(a, job.nodes),
         index: i,
         isFirst: i === 0,
-        isLast: i === visibleAgents.length - 1,
+        isLast: i === AGENTS.length - 1,
         onOpen: () => setOpenAgent(a.id),
       },
       draggable: true,
     }));
 
     const newEdges: Edge[] = [];
-    for (let i = 1; i < visibleAgents.length; i++) {
+    for (let i = 1; i < AGENTS.length; i++) {
       newEdges.push({
-        id: `${visibleAgents[i - 1].id}__${visibleAgents[i].id}`,
-        source: visibleAgents[i - 1].id,
-        target: visibleAgents[i].id,
+        id: `${AGENTS[i - 1].id}__${AGENTS[i].id}`,
+        source: AGENTS[i - 1].id,
+        target: AGENTS[i].id,
         type: 'pulse',
         animated: false,
         style: { stroke: 'url(#opus-gradient)' },
@@ -204,7 +199,7 @@ export function JobCanvasPage() {
     }
     setNodes(newNodes);
     requestAnimationFrame(() => setEdges(newEdges));
-  }, [job, jobId, angleConfirmed, visibleAgents, setNodes, setEdges]);
+  }, [job, jobId, angleConfirmed, setNodes, setEdges]);
 
   // —— fitView 收进视口
   useEffect(() => {
@@ -220,7 +215,7 @@ export function JobCanvasPage() {
     if (!job || !initialized.current) return;
     setNodes((cur) =>
       cur.map((n) => {
-        const a = visibleAgents.find((x) => x.id === n.id);
+        const a = AGENTS.find((x) => x.id === n.id);
         if (!a) return n;
         return {
           ...n,
@@ -234,12 +229,12 @@ export function JobCanvasPage() {
     );
     setEdges((cur) =>
       cur.map((e) => {
-        const a = visibleAgents.find((x) => x.id === e.target);
+        const a = AGENTS.find((x) => x.id === e.target);
         const st = a ? agentStatus(a, job.nodes, { angleConfirmed }) : 'idle';
         return { ...e, animated: st === 'running' || st === 'queued', style: { stroke: 'url(#opus-gradient)' } };
       }),
     );
-  }, [job, angleConfirmed, visibleAgents, setNodes, setEdges]);
+  }, [job, angleConfirmed, setNodes, setEdges]);
 
   // —— 拖动写 localStorage（agent id 不是 engine 节点，不走后端 position 接口）
   const onNodeDragStop: NodeMouseHandler = useCallback(
