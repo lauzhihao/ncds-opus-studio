@@ -10,23 +10,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import re
-import shutil
-import subprocess
-import tempfile
 from collections import Counter
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
-from statistics import median
 from typing import Any
 
-from ncds_opus_core.common import cancel
-
-from ncds_opus_factory.commands import shenkuo
+from ncds_opus_factory.commands import film_ocr_executor, shenkuo
 from ncds_opus_factory.common import capabilities, works_repo
 
 ProgressFn = Callable[[str], None]
@@ -34,10 +26,10 @@ ProgressFn = Callable[[str], None]
 VERSION = 3
 PROFILE = "commentary_only"
 FRAME_SAMPLING_FPS = 0.5
-OCR_BACKEND = "rapidocr-onnxruntime-ppocrv6-tiny"
+OCR_BACKEND = film_ocr_executor.OCR_BACKEND
 TRACK_CLASSIFIER_VERSION = 1
 LAYOUT_DISCOVERY_FRAMES = 12
-DEFAULT_ROI = {"x": 0.0, "y": 0.70, "width": 1.0, "height": 0.29}
+DEFAULT_ROI = film_ocr_executor.DEFAULT_ROI
 OCR_SCALE_WIDTH = 1280
 OCR_WORKERS = max(1, int(os.environ.get("NOF_FILM_OCR_WORKERS", "4")))
 
@@ -60,17 +52,12 @@ def _artifact_ref(path: Path) -> str:
         return str(path)
 
 
-def _required_binary(name: str) -> str:
-    binary = shutil.which(name)
-    if not binary:
-        raise RuntimeError(f"required executable is unavailable: {name}")
-    return binary
-
-
 def _video_duration_ms(path: Path) -> int:
+    import subprocess
+
     proc = subprocess.run(  # noqa: S603 - argv uses a resolved executable.
         [
-            _required_binary("ffprobe"),
+            film_ocr_executor._required_binary("ffprobe"),
             "-v",
             "error",
             "-show_entries",
@@ -95,145 +82,34 @@ def _video_sha256(path: Path) -> str:
 
 
 def _algorithm_signature(roi: dict[str, float]) -> dict[str, Any]:
-    return {
-        "version": VERSION,
-        "profile": PROFILE,
-        "backend": OCR_BACKEND,
-        "frame_sampling_fps": FRAME_SAMPLING_FPS,
-        "layout_discovery_frames": LAYOUT_DISCOVERY_FRAMES,
-        "roi": {key: round(float(value), 4) for key, value in roi.items()},
-        "scale_width": OCR_SCALE_WIDTH,
-        "track_classifier_version": TRACK_CLASSIFIER_VERSION,
-    }
-
-
-def _new_ocr_engine() -> Any:
-    try:
-        from rapidocr import RapidOCR
-        from rapidocr.utils.typings import EngineType, ModelType, OCRVersion
-    except ImportError as exc:
-        raise RuntimeError(
-            "film commentary OCR requires rapidocr>=3.9.0 and onnxruntime"
-        ) from exc
-    return RapidOCR(
-        params={
-            "EngineConfig.onnxruntime.intra_op_num_threads": 1,
-            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
-            "Det.engine_type": EngineType.ONNXRUNTIME,
-            "Det.lang_type": "ch",
-            "Det.model_type": ModelType.TINY,
-            "Det.ocr_version": OCRVersion.PPOCRV6,
-            "Rec.engine_type": EngineType.ONNXRUNTIME,
-            "Rec.lang_type": "ch",
-            "Rec.model_type": ModelType.TINY,
-            "Rec.ocr_version": OCRVersion.PPOCRV6,
-        }
+    return film_ocr_executor.algorithm_signature(
+        roi,
+        backend=OCR_BACKEND,
+        frame_sampling_fps=FRAME_SAMPLING_FPS,
+        layout_discovery_frames=LAYOUT_DISCOVERY_FRAMES,
+        scale_width=OCR_SCALE_WIDTH,
     )
 
 
-OCR_ENGINE_FACTORY: Callable[[], Any] = _new_ocr_engine
+OCR_ENGINE_FACTORY: Callable[[], Any] = film_ocr_executor._new_ocr_engine
+# Compatibility hook for callers that customize local colour classification.
+_color_signature = film_ocr_executor.color_signature
 
 
-def _result_rows(result: Any) -> list[dict[str, Any]]:
-    def serializable_polygon(value: Any) -> list[list[float]]:
-        if hasattr(value, "tolist"):
-            value = value.tolist()
-        try:
-            return [[float(point[0]), float(point[1])] for point in value]
-        except (TypeError, ValueError, IndexError):
-            return []
-
-    txts = getattr(result, "txts", None)
-    scores = getattr(result, "scores", None)
-    boxes = getattr(result, "boxes", None)
-    if txts is None and isinstance(result, tuple) and result:
-        source_rows = result[0] if isinstance(result[0], list) else []
-        return [
-            {
-                "text": str(row[1] or "").strip(),
-                "confidence": float(row[2]) if len(row) >= 3 else 0.0,
-                "polygon": serializable_polygon(row[0] if row else []),
-            }
-            for row in source_rows
-            if isinstance(row, (list, tuple)) and len(row) >= 2
-        ]
-    texts = [str(value or "").strip() for value in (txts if txts is not None else [])]
-    score_values = [
-        float(value) for value in (scores if scores is not None else [])
-    ]
-    box_values = list(boxes if boxes is not None else [])
-    return [
-        {
-            "text": text,
-            "confidence": score_values[index] if index < len(score_values) else 0.0,
-            "polygon": serializable_polygon(
-                box_values[index] if index < len(box_values) else []
-            ),
-        }
-        for index, text in enumerate(texts)
-        if text
-    ]
+def _default_ocr_executor_factory() -> film_ocr_executor.FilmOcrExecutor:
+    return film_ocr_executor.build_configured_film_ocr_executor(
+        local_ocr_engine_factory=OCR_ENGINE_FACTORY,
+        local_color_signature_fn=_color_signature,
+        frame_sampling_fps=FRAME_SAMPLING_FPS,
+        workers=OCR_WORKERS,
+        backend=OCR_BACKEND,
+        layout_discovery_frames=LAYOUT_DISCOVERY_FRAMES,
+        scale_width=OCR_SCALE_WIDTH,
+    )
 
 
-def _bbox_from_polygon(polygon: Any) -> tuple[float, float, float, float] | None:
-    try:
-        xs = [float(point[0]) for point in polygon]
-        ys = [float(point[1]) for point in polygon]
-    except (TypeError, ValueError, IndexError):
-        return None
-    if not xs or not ys:
-        return None
-    return min(xs), min(ys), max(xs), max(ys)
+OCR_EXECUTOR_FACTORY: Callable[[], film_ocr_executor.FilmOcrExecutor] = _default_ocr_executor_factory
 
-
-def _image_size(path: Path) -> tuple[int, int]:
-    try:
-        from PIL import Image
-
-        with Image.open(path) as image:
-            return image.size
-    except (ImportError, OSError) as exc:
-        raise RuntimeError(f"cannot inspect OCR frame: {path.name}") from exc
-
-
-def _color_signature(
-    path: Path,
-    bbox_px: tuple[float, float, float, float],
-) -> dict[str, Any]:
-    try:
-        from PIL import Image
-
-        with Image.open(path) as source:
-            image = source.convert("RGB")
-            left, top, right, bottom = bbox_px
-            crop = image.crop(
-                (
-                    max(0, int(math.floor(left))),
-                    max(0, int(math.floor(top))),
-                    min(image.width, int(math.ceil(right))),
-                    min(image.height, int(math.ceil(bottom))),
-                )
-            )
-            pixels = list(crop.getdata())
-    except (ImportError, OSError):
-        return {"label": "unknown", "yellow_ratio": 0.0, "white_ratio": 0.0}
-    bright = [pixel for pixel in pixels if max(pixel) >= 140]
-    if not bright:
-        return {"label": "unknown", "yellow_ratio": 0.0, "white_ratio": 0.0}
-    yellow = sum(1 for red, green, blue in bright if red >= 150 and green >= 95 and blue <= 125)
-    white = sum(1 for red, green, blue in bright if min(red, green, blue) >= 165 and max(red, green, blue) - min(red, green, blue) <= 55)
-    yellow_ratio = yellow / len(bright)
-    white_ratio = white / len(bright)
-    label = "unknown"
-    if yellow_ratio >= 0.12 and yellow_ratio > white_ratio * 1.15:
-        label = "yellow"
-    elif white_ratio >= 0.12:
-        label = "white"
-    return {
-        "label": label,
-        "yellow_ratio": round(yellow_ratio, 4),
-        "white_ratio": round(white_ratio, 4),
-    }
 
 
 def _normalize_text(text: str) -> str:
@@ -250,199 +126,6 @@ def _similarity(left: str, right: str) -> float:
     if a in b or b in a:
         return min(len(a), len(b)) / max(len(a), len(b))
     return SequenceMatcher(None, a, b).ratio()
-
-
-def _extract_discovery_frames(
-    video: Path,
-    output_dir: Path,
-    *,
-    duration_ms: int,
-) -> list[Path]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    duration_seconds = max(1.0, duration_ms / 1000)
-    # Putting -ss before -i seeks to a nearby keyframe.  A sparse fps filter
-    # would still decode every 4K60 frame and made twelve discovery samples
-    # take minutes on the reference video.
-    for index in range(LAYOUT_DISCOVERY_FRAMES):
-        cancel.checkpoint()
-        timestamp = duration_seconds * (index + 0.5) / LAYOUT_DISCOVERY_FRAMES
-        subprocess.run(  # noqa: S603 - argv uses a resolved executable.
-            [
-                _required_binary("ffmpeg"),
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-ss",
-                f"{timestamp:.3f}",
-                "-i",
-                str(video),
-                "-frames:v",
-                "1",
-                "-vf",
-                "scale=960:-2",
-                str(output_dir / f"layout_{index + 1:04d}.jpg"),
-            ],
-            check=True,
-        )
-    return sorted(output_dir.glob("layout_*.jpg"))
-
-
-def _discover_roi(video: Path, *, duration_ms: int, on_progress: ProgressFn) -> dict[str, float]:
-    on_progress("Film v3 layout: discovering subtitle band")
-    centers: list[float] = []
-    heights: list[float] = []
-    with tempfile.TemporaryDirectory(prefix="nof-film-layout-") as temp:
-        frames = _extract_discovery_frames(video, Path(temp), duration_ms=duration_ms)
-        engine = OCR_ENGINE_FACTORY()
-        for frame in frames:
-            cancel.checkpoint()
-            width, height = _image_size(frame)
-            for row in _result_rows(engine(str(frame), use_cls=False)):
-                text = re.sub(r"\s+", "", str(row["text"]))
-                if len(_normalize_text(text)) < 3:
-                    continue
-                bbox = _bbox_from_polygon(row["polygon"])
-                if bbox is None:
-                    continue
-                _left, top, _right, bottom = bbox
-                center = ((top + bottom) / 2) / height
-                line_height = max(0.0, bottom - top) / height
-                if center >= 0.58 and line_height <= 0.16:
-                    centers.append(center)
-                    heights.append(line_height)
-    if not centers:
-        return dict(DEFAULT_ROI)
-    subtitle_center = float(median(centers))
-    typical_height = float(median(heights)) if heights else 0.04
-    y_min = max(0.62, subtitle_center - max(0.12, typical_height * 3.0))
-    # Keep the companion English line below film dialogue for track classification.
-    y_max = min(0.99, subtitle_center + max(0.14, typical_height * 3.5))
-    if y_max - y_min < 0.20:
-        y_min = max(0.62, y_max - 0.20)
-    return {"x": 0.0, "y": round(y_min, 4), "width": 1.0, "height": round(y_max - y_min, 4)}
-
-
-def _extract_ocr_frames(video: Path, output_dir: Path, roi: dict[str, float]) -> list[Path]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    x = float(roi["x"])
-    y = float(roi["y"])
-    width = float(roi["width"])
-    height = float(roi["height"])
-    video_filter = (
-        f"fps={FRAME_SAMPLING_FPS},"
-        f"crop=floor(iw*{width}):floor(ih*{height}):floor(iw*{x}):floor(ih*{y}),"
-        f"scale={OCR_SCALE_WIDTH}:-2"
-    )
-    subprocess.run(  # noqa: S603 - argv uses a resolved executable.
-        [
-            _required_binary("ffmpeg"),
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(video),
-            "-vf",
-            video_filter,
-            "-q:v",
-            "3",
-            str(output_dir / "frame_%08d.jpg"),
-        ],
-        check=True,
-    )
-    return sorted(output_dir.glob("frame_*.jpg"))
-
-
-def _frame_observations(
-    engine: Any,
-    frame: Path,
-    *,
-    frame_index: int,
-    roi: dict[str, float],
-) -> list[dict[str, Any]]:
-    width, height = _image_size(frame)
-    rows = _result_rows(engine(str(frame), use_cls=False))
-    observations: list[dict[str, Any]] = []
-    for line_order, row in enumerate(rows):
-        text = re.sub(r"\s+", "", str(row["text"]))
-        if not text or not (_CJK_RE.search(text) or _LATIN_RE.search(text)):
-            continue
-        bbox = _bbox_from_polygon(row["polygon"])
-        if bbox is None:
-            continue
-        left, top, right, bottom = bbox
-        x_norm = float(roi["x"]) + (left / width) * float(roi["width"])
-        y_norm = float(roi["y"]) + (top / height) * float(roi["height"])
-        right_norm = float(roi["x"]) + (right / width) * float(roi["width"])
-        bottom_norm = float(roi["y"]) + (bottom / height) * float(roi["height"])
-        observations.append({
-            "observation_id": "",
-            "frame_index": frame_index,
-            "time_ms": int(round((frame_index - 1) * 1000 / FRAME_SAMPLING_FPS)),
-            "line_order": line_order,
-            "text": text,
-            "confidence": round(max(0.0, min(1.0, float(row["confidence"]))), 4),
-            "bbox_norm": {
-                "x": round(x_norm, 5),
-                "y": round(y_norm, 5),
-                "width": round(max(0.0, right_norm - x_norm), 5),
-                "height": round(max(0.0, bottom_norm - y_norm), 5),
-            },
-            "polygon_crop_px": row["polygon"],
-            "color_signature": _color_signature(frame, bbox),
-        })
-    for observation in observations:
-        if not _CJK_RE.search(str(observation["text"])):
-            continue
-        box = observation["bbox_norm"]
-        bottom = float(box["y"]) + float(box["height"])
-        observation["has_latin_companion"] = any(
-            _LATIN_RE.search(str(other["text"]))
-            and not _CJK_RE.search(str(other["text"]))
-            and float(other["bbox_norm"]["y"]) >= bottom - 0.01
-            and float(other["bbox_norm"]["y"]) - bottom <= 0.10
-            for other in observations
-        )
-    return observations
-
-
-def _ocr_video(
-    video: Path,
-    *,
-    roi: dict[str, float],
-    on_progress: ProgressFn,
-) -> list[dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="nof-film-v3-ocr-") as temp:
-        frames = _extract_ocr_frames(video, Path(temp), roi)
-        if not frames:
-            raise RuntimeError("film v3 OCR frame extraction produced no frames")
-
-        def process(worker_number: int) -> list[dict[str, Any]]:
-            engine = OCR_ENGINE_FACTORY()
-            output: list[dict[str, Any]] = []
-            for index in range(worker_number, len(frames), min(OCR_WORKERS, len(frames))):
-                cancel.checkpoint()
-                output.extend(
-                    _frame_observations(
-                        engine,
-                        frames[index],
-                        frame_index=index + 1,
-                        roi=roi,
-                    )
-                )
-            return output
-
-        worker_count = min(OCR_WORKERS, len(frames))
-        observations: list[dict[str, Any]] = []
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            for rows in executor.map(process, range(worker_count)):
-                observations.extend(rows)
-        observations.sort(key=lambda row: (int(row["frame_index"]), int(row["line_order"])))
-        for index, observation in enumerate(observations, start=1):
-            observation["observation_id"] = f"obs_{index:06d}"
-        on_progress(
-            f"Film v3 OCR: frames={len(frames)} observations={len(observations)}"
-        )
-        return observations
 
 
 def _load_timeline(path: Path) -> list[dict[str, Any]]:
@@ -756,6 +439,11 @@ def extract_video_subtitles_v3(
     reusable = False
     observations: list[dict[str, Any]] = []
     roi: dict[str, float]
+    ocr_backend = OCR_BACKEND
+    algorithm_signature: dict[str, Any] = {}
+    execution: dict[str, Any] = {}
+    executor_name = "unknown"
+    request: dict[str, Any] | None = None
     if raw_path.is_file():
         try:
             raw_doc = json.loads(raw_path.read_text(encoding="utf-8"))
@@ -768,22 +456,59 @@ def extract_video_subtitles_v3(
             )
             if reusable:
                 observations = [dict(row) for row in raw_doc["observations"]]
+                ocr_backend = str(raw_doc.get("backend") or OCR_BACKEND)
+                algorithm_signature = dict(raw_doc["algorithm_signature"])
+                cached_execution = raw_doc.get("execution")
+                execution = (
+                    dict(cached_execution)
+                    if isinstance(cached_execution, dict)
+                    else {"executor": "legacy_local_cache"}
+                )
+                executor_name = str(execution.get("executor") or "unknown")
+                cached_request = raw_doc.get("request")
+                request = dict(cached_request) if isinstance(cached_request, dict) else None
         except (OSError, KeyError, TypeError, json.JSONDecodeError):
             reusable = False
     if reusable:
-        on_progress(f"Film v3 OCR: reusing observations={len(observations)}")
+        on_progress(
+            "Film v3 OCR: "
+            f"reusing observations={len(observations)} executor={execution.get('executor', 'unknown')}"
+        )
     else:
-        roi = _discover_roi(video, duration_ms=duration_ms, on_progress=on_progress)
-        observations = _ocr_video(video, roi=roi, on_progress=on_progress)
+        job = film_ocr_executor.FilmOcrJob(
+            video_path=video,
+            video_sha256=video_sha256,
+            duration_ms=duration_ms,
+            source_size_bytes=video.stat().st_size,
+            source_media_type=film_ocr_executor.media_type_for_video(video),
+        )
+        ocr_result = OCR_EXECUTOR_FACTORY().execute(job, on_progress=on_progress)
+        roi = dict(ocr_result.roi)
+        observations = [dict(row) for row in ocr_result.observations]
+        ocr_backend = ocr_result.backend
+        algorithm_signature = dict(ocr_result.algorithm_signature)
+        execution = dict(ocr_result.execution)
+        executor_name = str(execution.get("executor") or "unknown")
+        request = dict(ocr_result.request) if isinstance(ocr_result.request, dict) else None
+        observations_sha256 = (
+            ocr_result.observations_sha256
+            or film_ocr_executor.canonical_observations_sha256(observations)
+        )
         raw_doc = {
             "version": VERSION,
             "profile": PROFILE,
             "video": _artifact_ref(video),
             "video_sha256": video_sha256,
-            "backend": OCR_BACKEND,
-            "algorithm_signature": _algorithm_signature(roi),
+            "backend": ocr_backend,
+            "executor": executor_name,
+            "algorithm_signature": algorithm_signature,
+            "execution": execution,
+            "observations_sha256": observations_sha256,
+            "integrity": {"observations_sha256": observations_sha256},
             "observations": observations,
         }
+        if request is not None:
+            raw_doc["request"] = request
         raw_path.write_text(json.dumps(raw_doc, ensure_ascii=False, indent=2), encoding="utf-8")
 
     track_audit, assignments = _classify_observations(observations)
@@ -822,8 +547,11 @@ def extract_video_subtitles_v3(
         "raw_observations": {
             "json": _artifact_ref(raw_path),
             "count": len(observations),
-            "backend": OCR_BACKEND,
+            "backend": ocr_backend,
+            "executor": executor_name,
             "roi": roi,
+            "algorithm_signature": algorithm_signature,
+            "execution": execution,
         },
         "tracks": {
             "json": _artifact_ref(tracks_path),
