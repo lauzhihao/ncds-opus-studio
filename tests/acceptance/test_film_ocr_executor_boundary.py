@@ -410,6 +410,211 @@ result_path.write_text(json.dumps({
     return json.loads(result_path.read_text(encoding="utf-8"))
 
 
+def _run_remote_boundary_hardening_subprocess(
+    repo_root: Path,
+    run_root: Path,
+    video: Path,
+    timeline: Path,
+) -> dict[str, Any]:
+    result_path = run_root / "hardening.json"
+    script = r"""
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+from ncds_opus_factory.commands import film_script_v3
+from ncds_opus_factory.commands.film_ocr_executor import (
+    FILM_OCR_RESULT_SCHEMA_VERSION,
+    RemoteFilmOcrExecutor,
+    algorithm_signature,
+    canonical_observations_sha256,
+)
+from ncds_opus_factory.common import works_repo
+
+
+video = Path(sys.argv[1])
+timeline = Path(sys.argv[2])
+result_path = Path(sys.argv[3])
+
+
+def row(observation_id="remote_001", text="锁降突击开始"):
+    return {
+        "observation_id": observation_id,
+        "frame_index": 3,
+        "time_ms": 1000,
+        "line_order": 0,
+        "text": text,
+        "confidence": 0.98,
+        "bbox_norm": {"x": 0.1, "y": 0.76, "width": 0.8, "height": 0.08},
+        "polygon_crop_px": [[0, 0], [20, 0], [20, 10], [0, 10]],
+        "color_signature": {"label": "white", "yellow_ratio": 0.0, "white_ratio": 0.9},
+        "has_latin_companion": False,
+    }
+
+
+def response(request, rows=None, *, execution=None):
+    observations = [row()] if rows is None else rows
+    roi = {"x": 0.0, "y": 0.70, "width": 1.0, "height": 0.29}
+    return {
+        "schema_version": FILM_OCR_RESULT_SCHEMA_VERSION,
+        "operation": request["operation"],
+        "request_id": request["request_id"],
+        "idempotency_key": request["idempotency_key"],
+        "source": dict(request["source"]),
+        "roi": roi,
+        "observations": observations,
+        "backend": request["algorithm_signature"]["backend"],
+        "algorithm_signature": algorithm_signature(
+            roi,
+            backend=request["algorithm_signature"]["backend"],
+            frame_sampling_fps=request["algorithm_signature"]["frame_sampling_fps"],
+            layout_discovery_frames=request["algorithm_signature"]["layout_discovery_frames"],
+            scale_width=request["algorithm_signature"]["scale_width"],
+        ),
+        "execution": {} if execution is None else execution,
+        "observations_sha256": canonical_observations_sha256(observations),
+    }
+
+
+def raw_path_for(work_id):
+    return works_repo.work_dir("local", work_id) / "film_subtitles" / "v3.raw_observations.json"
+
+
+def must_reject(case):
+    work_id = "hardening-" + case
+    raw_path = raw_path_for(work_id)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text("sentinel-must-not-be-overwritten", encoding="utf-8")
+
+    class BadTransport:
+        def submit(self, *, request, source_path, on_progress=None):
+            if case == "idempotency-mismatch":
+                value = response(request)
+                value["idempotency_key"] = "evil-idempotency-key"
+                return value
+            malformed = [{"text": "missing mandatory observation fields"}]
+            return response(request, malformed)
+
+    film_script_v3.OCR_EXECUTOR_FACTORY = lambda: RemoteFilmOcrExecutor(BadTransport())
+    try:
+        film_script_v3.extract_video_subtitles_v3(
+            video,
+            platform="local",
+            work_id=work_id,
+            asr_timeline=timeline,
+        )
+    except (RuntimeError, ValueError) as exc:
+        message = str(exc)
+    else:
+        raise AssertionError(case + " remote result was accepted")
+    assert raw_path.read_text(encoding="utf-8") == "sentinel-must-not-be-overwritten"
+    assert not raw_path.with_name("v3.tracks.json").exists()
+    assert not raw_path.with_name("v3.commentary.json").exists()
+    return message
+
+
+def authoritative_execution_case():
+    work_id = "hardening-execution-authority"
+
+    class HostileTransport:
+        def submit(self, *, request, source_path, on_progress=None):
+            return response(
+                request,
+                execution={"executor": "local", "request_id": "evil-request-id", "transport": "fake"},
+            )
+
+    film_script_v3.OCR_EXECUTOR_FACTORY = lambda: RemoteFilmOcrExecutor(HostileTransport())
+    source = film_script_v3.extract_video_subtitles_v3(
+        video,
+        platform="local",
+        work_id=work_id,
+        asr_timeline=timeline,
+    )
+    raw = json.loads(raw_path_for(work_id).read_text(encoding="utf-8"))
+    assert raw["executor"] == "remote"
+    assert raw["execution"]["executor"] == "remote"
+    assert raw["execution"]["request_id"] == raw["request"]["request_id"]
+    assert raw["execution"]["request_id"] != "evil-request-id"
+    assert source["raw_observations"]["executor"] == "remote"
+    return raw
+
+
+def stale_cache_case():
+    work_id = "hardening-stale-observation-digest"
+    raw_path = raw_path_for(work_id)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    roi = {"x": 0.0, "y": 0.70, "width": 1.0, "height": 0.29}
+    stale_rows = [row("stale_001", "过期缓存绝不能复用")]
+    raw_path.write_text(json.dumps({
+        "version": film_script_v3.VERSION,
+        "profile": film_script_v3.PROFILE,
+        "video_sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+        "backend": film_script_v3.OCR_BACKEND,
+        "executor": "remote",
+        "algorithm_signature": film_script_v3._algorithm_signature(roi),
+        "execution": {"executor": "remote"},
+        "observations": stale_rows,
+        "observations_sha256": "0" * 64,
+        "integrity": {"observations_sha256": "0" * 64},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    class FreshTransport:
+        calls = 0
+
+        def submit(self, *, request, source_path, on_progress=None):
+            FreshTransport.calls += 1
+            return response(request, [row("fresh_001", "锁降突击开始")])
+
+    film_script_v3.OCR_EXECUTOR_FACTORY = lambda: RemoteFilmOcrExecutor(FreshTransport())
+    film_script_v3.extract_video_subtitles_v3(
+        video,
+        platform="local",
+        work_id=work_id,
+        asr_timeline=timeline,
+    )
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    assert FreshTransport.calls == 1
+    assert raw["observations"][0]["observation_id"] == "fresh_001"
+    assert raw["observations_sha256"] == canonical_observations_sha256(raw["observations"])
+    return raw
+
+
+result_path.write_text(json.dumps({
+    "idempotency_mismatch": must_reject("idempotency-mismatch"),
+    "malformed_observation": must_reject("malformed-observation"),
+    "authoritative_execution": authoritative_execution_case(),
+    "stale_cache": stale_cache_case(),
+}, ensure_ascii=False, indent=2), encoding="utf-8")
+"""
+    env = os.environ.copy()
+    env["NOF_STATE_DIR"] = str(run_root / "state" / "tasks")
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(repo_root / "src"), str(repo_root / "packages" / "core" / "src")]
+        + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
+    )
+    completed = subprocess.run(  # noqa: S603 - fixed child code and pytest paths.
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(video),
+            str(timeline),
+            str(result_path),
+        ],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"film OCR hardening subprocess failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+    )
+    return json.loads(result_path.read_text(encoding="utf-8"))
+
+
 def test_remote_film_ocr_executor_preserves_asr_first_artifacts(tmp_path: Path) -> None:
     """Remote results are auditable evidence, never commentary-script authority."""
     ffmpeg = _require_ffmpeg()
@@ -468,3 +673,25 @@ def test_remote_film_ocr_rejects_bad_integrity_before_artifacts(tmp_path: Path) 
     )
     assert rejected["bad_digest"]
     assert rejected["source_mismatch"]
+
+
+def test_remote_film_ocr_hardens_identity_execution_and_cached_evidence(
+    tmp_path: Path,
+) -> None:
+    """Remote metadata cannot override authority and corrupt raw cache is never reused."""
+    ffmpeg = _require_ffmpeg()
+    repo_root = _repo_root()
+    video = tmp_path / "film.mp4"
+    _make_video(ffmpeg, video)
+    timeline = _write_asr_timeline(video)
+
+    result = _run_remote_boundary_hardening_subprocess(
+        repo_root,
+        tmp_path / "hardening",
+        video,
+        timeline,
+    )
+    assert result["idempotency_mismatch"]
+    assert result["malformed_observation"]
+    assert result["authoritative_execution"]["executor"] == "remote"
+    assert result["stale_cache"]["observations"][0]["observation_id"] == "fresh_001"
