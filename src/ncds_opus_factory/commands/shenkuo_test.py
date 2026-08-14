@@ -472,3 +472,310 @@ def test_cutout_filters_solid_frames(tmp_path):
     names = [c.name for c in cuts]
     assert "content.png" in names
     assert "black.png" not in names  # 纯色过场被过滤
+
+
+# --------------------------------------------------------------------------- #
+# 说话人分离(diarize):domain 开关 + branch 编排(打桩,不碰真模型)
+# --------------------------------------------------------------------------- #
+from pathlib import Path  # noqa: E402
+
+from ncds_opus_factory.common.capabilities import diarize as diarize_mod  # noqa: E402
+
+
+def _mk_diarize_run(tmp_path: Path) -> shenkuo._CollectRun:
+    paths = shenkuo._CollectPaths(
+        wdir=tmp_path,
+        video=tmp_path / "video.mp4",
+        para=tmp_path / "asr.paraformer.json",
+        timeline=tmp_path / "asr.timeline.json",
+        txt=tmp_path / "asr.txt",
+        clean=tmp_path / "asr.clean.txt",
+        speakers=tmp_path / "asr.speakers.json",
+        dialogue=tmp_path / "dialogue.txt",
+        cover=tmp_path / "cover.jpg",
+        comments_path=tmp_path / "comments.json",
+        audio_dir=tmp_path / "audio",
+        frames_dir=tmp_path / "frames",
+        cut_dir=tmp_path / "cutouts",
+    )
+    return shenkuo._CollectRun(
+        aweme_id="w1", platform="douyin", source_url=None,
+        entry={"status": {}}, paths=paths, max_frames=1, engine="threshold",
+        top_comments=0, on_progress=lambda _s: None, check=lambda: False,
+    )
+
+
+def _two_speaker_result() -> diarize_mod.DiarizeResult:
+    return diarize_mod.DiarizeResult(
+        sentences=[
+            diarize_mod.DiarizedSentence(text="你怎么又迟到?", start_ms=0, end_ms=1500, speaker=0),
+            diarize_mod.DiarizedSentence(text="堵车了。", start_ms=1600, end_ms=2600, speaker=1),
+        ],
+        speaker_count=2,
+    )
+
+
+def test_needs_diarization_domain_switch(monkeypatch):
+    monkeypatch.delenv("NOF_DIARIZE_DOMAINS", raising=False)
+    assert shenkuo._needs_diarization("comedy") is True
+    assert shenkuo._needs_diarization(" Comedy ") is True
+    assert shenkuo._needs_diarization("finance") is False
+    assert shenkuo._needs_diarization(None) is False
+    assert shenkuo._needs_diarization("") is False
+    monkeypatch.setenv("NOF_DIARIZE_DOMAINS", "comedy,film")
+    assert shenkuo._needs_diarization("film") is True
+    monkeypatch.setenv("NOF_DIARIZE_DOMAINS", "")
+    assert shenkuo._needs_diarization("comedy") is False
+
+
+def test_branch_diarize_prefers_vocals_and_writes_products(monkeypatch, tmp_path):
+    run = _mk_diarize_run(tmp_path)
+    run.paths.audio_dir.mkdir()
+    (run.paths.audio_dir / "vocals.mp3").write_bytes(b"x")
+    (run.paths.audio_dir / "original.mp3").write_bytes(b"x")
+    seen: dict[str, Path] = {}
+
+    def fake_diarize(source, on_progress):
+        seen["source"] = source
+        return _two_speaker_result()
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", fake_diarize)
+    run.branch_diarize()
+
+    assert seen["source"] == run.paths.audio_dir / "vocals.mp3"
+    assert run.entry["status"]["diarize"] == "ok"
+    doc = json.loads(run.paths.speakers.read_text(encoding="utf-8"))
+    assert doc["speakerCount"] == 2
+    assert doc["sentences"][0]["speakerLabel"] == "A"
+    lines = run.paths.dialogue.read_text(encoding="utf-8").splitlines()
+    assert lines == ["说话人A: 你怎么又迟到?", "说话人B: 堵车了。"]
+    assert run.entry["speaker_count"] == 2
+    assert run.entry["speakers"]
+    assert run.entry["dialogue"]
+
+
+def test_branch_diarize_falls_back_to_video_without_audio(monkeypatch, tmp_path):
+    run = _mk_diarize_run(tmp_path)
+    run.paths.video.write_bytes(b"x")
+    seen: dict[str, Path] = {}
+
+    def fake_diarize(source, on_progress):
+        seen["source"] = source
+        return _two_speaker_result()
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", fake_diarize)
+    run.branch_diarize()
+    assert seen["source"] == run.paths.video
+    assert run.entry["status"]["diarize"] == "ok"
+
+
+def test_branch_diarize_cached_skips_model(monkeypatch, tmp_path):
+    run = _mk_diarize_run(tmp_path)
+    run.paths.speakers.write_text(json.dumps({"speakerCount": 3, "sentences": []}), encoding="utf-8")
+
+    def boom(source, on_progress):
+        raise AssertionError("cached branch must not call diarize")
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", boom)
+    run.branch_diarize()
+    assert run.entry["status"]["diarize"] == "cached"
+    assert run.entry["speaker_count"] == 3
+
+
+def test_branch_diarize_unavailable_degrades(monkeypatch, tmp_path):
+    run = _mk_diarize_run(tmp_path)
+    run.paths.video.write_bytes(b"x")
+
+    def unavailable(source, on_progress):
+        raise diarize_mod.DiarizeUnavailableError("funasr not installed")
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", unavailable)
+    run.branch_diarize()
+    assert run.entry["status"]["diarize"] == "unavailable"
+    assert not run.paths.speakers.exists()
+
+
+def test_branch_diarize_no_media_skips(tmp_path):
+    run = _mk_diarize_run(tmp_path)
+    run.branch_diarize()
+    assert run.entry["status"]["diarize"] == "skipped:no-audio"
+
+
+def _cached_work(shenkuo_mod, aid: str):
+    """铺满全套已采产物(下载/转写/音轨/帧/抠图/评论全 cached),只留 diarize 未做。"""
+    wdir = shenkuo_mod.works_repo.work_dir("douyin", aid)
+    (wdir / "video.mp4").write_bytes(b"x")
+    (wdir / "asr.paraformer.json").write_text("{}", encoding="utf-8")
+    (wdir / "asr.txt").write_text("t", encoding="utf-8")
+    (wdir / "asr.clean.txt").write_text("clean", encoding="utf-8")
+    adir = wdir / "audio"
+    adir.mkdir()
+    for n in ("original.mp3", "vocals.mp3", "bgm.mp3"):
+        (adir / n).write_bytes(b"a")
+    (wdir / "frames").mkdir()
+    (wdir / "frames" / "frame_001.jpg").write_bytes(b"x")
+    (wdir / "cutouts").mkdir()
+    (wdir / "cutouts" / "frame_001.png").write_bytes(b"x")
+    (wdir / "comments.json").write_text(json.dumps({"items": []}), encoding="utf-8")
+    return wdir
+
+
+def test_collect_one_comedy_domain_triggers_diarize(tmp_path, monkeypatch):
+    """comedy domain 的采集在音轨就绪后自动做说话人分离,产物进 manifest。"""
+    _works_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("NOF_DIARIZE_DOMAINS", raising=False)
+    aid = "8001"
+    wdir = _cached_work(shenkuo, aid)
+    seen: dict[str, object] = {}
+
+    def fake_diarize(source, on_progress):
+        seen["source"] = source
+        return _two_speaker_result()
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", fake_diarize)
+    author_dir = tmp_path / "author_c"
+    author_dir.mkdir()
+    entry = shenkuo.collect_one(aid, author_dir, author_domain="comedy")
+
+    assert seen["source"] == wdir / "audio" / "vocals.mp3"
+    assert entry["status"]["diarize"] == "ok"
+    assert entry["speaker_count"] == 2
+    m = shenkuo.works_repo.load_manifest("douyin", aid)
+    assert m["products"]["speakers"]["json"].endswith("asr.speakers.json")
+    assert m["products"]["speakers"]["dialogue"].endswith("dialogue.txt")
+    assert m["products"]["speakers"]["count"] == 2
+
+
+def test_collect_one_other_domain_skips_diarize(tmp_path, monkeypatch):
+    """非多人对白 domain 不做说话人分离(重步骤不白跑)。"""
+    _works_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("NOF_DIARIZE_DOMAINS", raising=False)
+    aid = "8002"
+    _cached_work(shenkuo, aid)
+
+    def boom(source, on_progress):
+        raise AssertionError("finance domain 不该触发 diarize")
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", boom)
+    author_dir = tmp_path / "author_f"
+    author_dir.mkdir()
+    entry = shenkuo.collect_one(aid, author_dir, author_domain="finance")
+    assert "diarize" not in entry["status"]
+
+
+def test_collect_one_diarize_falls_back_to_manifest_domain(tmp_path, monkeypatch):
+    """第二趟补采不带 author_domain 时,从作品 manifest 已有 domain 兜底触发。"""
+    _works_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("NOF_DIARIZE_DOMAINS", raising=False)
+    aid = "8003"
+    _cached_work(shenkuo, aid)
+    shenkuo.works_repo.merge("douyin", aid, domain="comedy")
+
+    monkeypatch.setattr(
+        shenkuo.diarize_cap, "diarize", lambda source, on_progress: _two_speaker_result())
+    author_dir = tmp_path / "author_m"
+    author_dir.mkdir()
+    entry = shenkuo.collect_one(aid, author_dir)
+    assert entry["status"]["diarize"] == "ok"
+
+
+def test_branch_diarize_corrupt_cache_reruns(monkeypatch, tmp_path):
+    """半截 JSON(写一半被杀)不算缓存,应重跑并原子重写。"""
+    run = _mk_diarize_run(tmp_path)
+    run.paths.speakers.write_text('{"speakerCount": 2, "sent', encoding="utf-8")
+    run.paths.video.write_bytes(b"x")
+
+    monkeypatch.setattr(
+        shenkuo.diarize_cap, "diarize", lambda source, on_progress: _two_speaker_result())
+    run.branch_diarize()
+    assert run.entry["status"]["diarize"] == "ok"
+    assert json.loads(run.paths.speakers.read_text(encoding="utf-8"))["speakerCount"] == 2
+
+
+def test_branch_diarize_upgrades_mix_source_to_vocals(monkeypatch, tmp_path):
+    """当年跑在混音源(video)上,如今人声轨就绪 -> 缓存作废,改吃 vocals 重算。"""
+    run = _mk_diarize_run(tmp_path)
+    doc = {"speakerCount": 1, "sentences": [], "source": "video.mp4"}
+    run.paths.speakers.write_text(json.dumps(doc), encoding="utf-8")
+    run.paths.audio_dir.mkdir()
+    (run.paths.audio_dir / "vocals.mp3").write_bytes(b"x")
+    seen: dict[str, Path] = {}
+
+    def fake_diarize(source, on_progress):
+        seen["source"] = source
+        return _two_speaker_result()
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", fake_diarize)
+    run.branch_diarize()
+    assert seen["source"] == run.paths.audio_dir / "vocals.mp3"
+    new_doc = json.loads(run.paths.speakers.read_text(encoding="utf-8"))
+    assert new_doc["source"] == "vocals.mp3"
+
+
+def test_branch_diarize_vocals_cache_stays(monkeypatch, tmp_path):
+    """vocals 结果是终态缓存,人声轨在也不重算。"""
+    run = _mk_diarize_run(tmp_path)
+    doc = {"speakerCount": 2, "sentences": [], "source": "vocals.mp3"}
+    run.paths.speakers.write_text(json.dumps(doc), encoding="utf-8")
+    run.paths.audio_dir.mkdir()
+    (run.paths.audio_dir / "vocals.mp3").write_bytes(b"x")
+
+    def boom(source, on_progress):
+        raise AssertionError("vocals 缓存不该重算")
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", boom)
+    run.branch_diarize()
+    assert run.entry["status"]["diarize"] == "cached"
+
+
+def test_branch_diarize_rebuilds_missing_dialogue_from_cache(monkeypatch, tmp_path):
+    """上次死在 dialogue 落盘前:从 speakers.json 重建对话体,不调模型。"""
+    run = _mk_diarize_run(tmp_path)
+    cached = shenkuo.diarize_cap.result_to_dict(_two_speaker_result())
+    cached["source"] = "vocals.mp3"
+    run.paths.speakers.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+
+    def boom(source, on_progress):
+        raise AssertionError("缓存自愈不该调模型")
+
+    monkeypatch.setattr(shenkuo.diarize_cap, "diarize", boom)
+    run.branch_diarize()
+    assert run.entry["status"]["diarize"] == "cached"
+    lines = run.paths.dialogue.read_text(encoding="utf-8").splitlines()
+    assert lines == ["说话人A: 你怎么又迟到?", "说话人B: 堵车了。"]
+    assert run.entry["dialogue"]
+
+
+def test_branch_diarize_write_failure_degrades(monkeypatch, tmp_path):
+    """产物落盘失败也只记 status,不把异常抛出去砸掉整趟采集。"""
+    run = _mk_diarize_run(tmp_path)
+    run.paths.video.write_bytes(b"x")
+    monkeypatch.setattr(
+        shenkuo.diarize_cap, "diarize", lambda source, on_progress: _two_speaker_result())
+
+    def broken_write(path, text):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(shenkuo, "_write_text_atomic", broken_write)
+    run.branch_diarize()
+    assert run.entry["status"]["diarize"] == "error:OSError"
+
+
+def test_collect_one_later_pass_keeps_speaker_count(tmp_path, monkeypatch):
+    """后续非 comedy 采集趟跳过 diarize 分支,manifest 里已有的 count 不被清空。"""
+    _works_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("NOF_DIARIZE_DOMAINS", raising=False)
+    aid = "8004"
+    wdir = _cached_work(shenkuo, aid)
+    cached = shenkuo.diarize_cap.result_to_dict(_two_speaker_result())
+    cached["source"] = "vocals.mp3"
+    (wdir / "asr.speakers.json").write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        shenkuo.diarize_cap, "diarize",
+        lambda source, on_progress: (_ for _ in ()).throw(AssertionError("不该触发")))
+    author_dir = tmp_path / "author_k"
+    author_dir.mkdir()
+    shenkuo.collect_one(aid, author_dir, author_domain="finance")
+    m = shenkuo.works_repo.load_manifest("douyin", aid)
+    assert m["products"]["speakers"]["count"] == 2

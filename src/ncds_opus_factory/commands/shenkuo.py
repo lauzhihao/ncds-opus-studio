@@ -36,6 +36,7 @@ from typing import Any
 from ncds_opus_core.common import cancel
 
 from ncds_opus_factory.common import benchmark_store, capabilities, tikhub_client, works_repo
+from ncds_opus_factory.common.capabilities import diarize as diarize_cap
 
 ROOT = Path(__file__).resolve().parents[3]
 BENCH = ROOT / "state" / "benchmark"
@@ -150,6 +151,8 @@ class _CollectPaths:
     timeline: Path
     txt: Path
     clean: Path
+    speakers: Path
+    dialogue: Path
     cover: Path
     comments_path: Path
     audio_dir: Path
@@ -167,6 +170,8 @@ def _collect_paths(platform: str, aweme_id: str) -> _CollectPaths:
         timeline=wdir / "asr.timeline.json",
         txt=wdir / "asr.txt",
         clean=wdir / "asr.clean.txt",
+        speakers=wdir / "asr.speakers.json",
+        dialogue=wdir / "dialogue.txt",
         cover=wdir / "cover.jpg",
         comments_path=wdir / "comments.json",
         audio_dir=wdir / "audio",
@@ -177,6 +182,22 @@ def _collect_paths(platform: str, aweme_id: str) -> _CollectPaths:
 
 def _asr_engine_for_platform(platform: str) -> str | None:
     return "whisper" if _platform(platform) in {"tiktok", "youtube"} else None
+
+
+# 说话人分离默认只对多人对白 domain 开(重 CPU 步骤,别的 domain 用不上);
+# NOF_DIARIZE_DOMAINS 逗号分隔可覆盖(留空 = 全关)。
+_DIARIZE_DOMAINS_DEFAULT = frozenset({"comedy"})
+
+
+def _diarize_domains() -> frozenset[str]:
+    raw = os.getenv("NOF_DIARIZE_DOMAINS")
+    if raw is None:
+        return _DIARIZE_DOMAINS_DEFAULT
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+def _needs_diarization(domain: str | None) -> bool:
+    return bool(domain) and domain.strip().lower() in _diarize_domains()
 
 
 def _transcript_backend(path: Path) -> str:
@@ -198,6 +219,43 @@ def _transcript_cache_usable(paths: _CollectPaths, platform: str) -> bool:
 
 def _transcript_result_empty(result: dict[str, Any] | None) -> bool:
     return isinstance(result, dict) and result.get("empty") is True
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    """tmp + os.replace 原子落盘:worker 被 launchd 杀在写一半时,不留半截文件毒化缓存。"""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _load_speakers_doc(path: Path) -> dict[str, Any] | None:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _speakers_cache_usable(paths: _CollectPaths) -> dict[str, Any] | None:
+    """speakers 缓存可用则返回解析后的 doc,否则 None(触发重跑)。
+
+    不可用的情形:文件损坏(半截 JSON);或当年跑在混音源(original/video)上、
+    而现在 Demucs 人声轨已就绪 —— 人声轨结果更准,值得重算一次。
+    """
+    if not paths.speakers.exists():
+        return None
+    doc = _load_speakers_doc(paths.speakers)
+    if doc is None:
+        return None
+    if str(doc.get("source") or "") != "vocals.mp3" and (paths.audio_dir / "vocals.mp3").exists():
+        return None
+    return doc
+
+
+def _speaker_count_from_file(path: Path) -> int | None:
+    doc = _load_speakers_doc(path)
+    count = doc.get("speakerCount") if doc else None
+    return count if isinstance(count, int) else None
 
 
 def _timestamp_ms(value: Any, *, seconds: bool = False) -> int:
@@ -382,6 +440,12 @@ def _merge_collect_manifest(
                 "clean": _rel(paths.clean) if paths.clean.exists() else None,
                 "text": entry.get("text"),
             },
+            "speakers": {
+                "json": _rel(paths.speakers) if paths.speakers.exists() else None,
+                "dialogue": _rel(paths.dialogue) if paths.dialogue.exists() else None,
+                # count 从文件推导而非 entry:后续跳过 diarize 分支的采集趟不清空已有值
+                "count": _speaker_count_from_file(paths.speakers),
+            },
             "cover": entry.get("cover"),
             "comments": entry.get("comments"),
             "audio": entry.get("audio"),
@@ -519,6 +583,70 @@ class _CollectRun:
             self.report(f"声音素材异常: {type(e).__name__}: {e}")
             self.entry["status"]["audio"] = f"error:{type(e).__name__}"
 
+    def branch_diarize(self) -> None:
+        """说话人分离(多人对白 domain 专用):优先吃 Demucs 人声轨,BGM 干扰最小。
+
+        排在 branch_audio 之后串行跑;失败/不可用只记状态,不拖垮采集主链路。
+        """
+        p = self.paths
+        self.guard()
+        cached_doc = _speakers_cache_usable(p)
+        if cached_doc is not None:
+            self.report(f"[{self.aweme_id}] 说话人分离已存在,跳过")
+            self.entry["status"]["diarize"] = "cached"
+            # 缓存自愈:上次死在 dialogue 落盘前时,从 speakers.json 重建对话体
+            if not p.dialogue.exists():
+                try:
+                    dialogue = diarize_cap.format_dialogue(diarize_cap.sentences_from_dict(cached_doc))
+                    if dialogue:
+                        _write_text_atomic(p.dialogue, dialogue)
+                except (OSError, ValueError) as e:
+                    self.report(f"[{self.aweme_id}] 对话体重建失败: {type(e).__name__}: {e}")
+        else:
+            source = p.audio_dir / "vocals.mp3"
+            if not source.exists():
+                source = p.audio_dir / "original.mp3"
+            if not source.exists():
+                source = p.video
+            if not source.exists():
+                self.entry["status"]["diarize"] = "skipped:no-audio"
+                return
+            try:
+                result = diarize_cap.diarize(source, self.report)
+                doc = diarize_cap.result_to_dict(result)
+                doc["source"] = source.name  # 溯源:混音源结果在人声轨就绪后可判定重算
+                dialogue = diarize_cap.format_dialogue(result.sentences)
+                if dialogue:
+                    _write_text_atomic(p.dialogue, dialogue)
+                # speakers.json 最后写,作为本分支的"提交标记":它在即产物全在
+                _write_text_atomic(
+                    p.speakers, json.dumps(doc, ensure_ascii=False, indent=2))
+            except cancel.TaskCancelled:
+                raise
+            except diarize_cap.DiarizeUnavailableError as e:
+                self.report(f"[{self.aweme_id}] 说话人分离不可用: {e}")
+                self.entry["status"]["diarize"] = "unavailable"
+                return
+            except Exception as e:  # noqa: BLE001 — 分离/落盘失败不拖垮整批
+                self.report(f"[{self.aweme_id}] 说话人分离异常: {type(e).__name__}: {e}")
+                self.entry["status"]["diarize"] = f"error:{type(e).__name__}"
+                return
+            if dialogue:
+                self.entry["status"]["diarize"] = "ok"
+                self.report(
+                    f"[{self.aweme_id}] 说话人分离完成: {result.speaker_count} 人 / {len(result.sentences)} 句"
+                )
+            else:
+                self.entry["status"]["diarize"] = "empty"
+                self.report(f"[{self.aweme_id}] 说话人分离空稿")
+        if p.speakers.exists():
+            self.entry["speakers"] = _rel(p.speakers)
+            count = _speaker_count_from_file(p.speakers)
+            if count is not None:
+                self.entry["speaker_count"] = count
+        if p.dialogue.exists():
+            self.entry["dialogue"] = _rel(p.dialogue)
+
     def branch_frames(self) -> None:
         p = self.paths
         self.guard()
@@ -630,7 +758,16 @@ def collect_one(
             # 音轨分离(Demucs)/抠图重活由后台第二趟补 —— collect_one 幂等,已采支线自动跳过。
             futures = [ex.submit(run_ctx.branch_transcribe)]
             if do_audio:
-                futures.append(ex.submit(run_ctx.branch_audio))
+                # 多人对白 domain(comedy)在人声轨就绪后串行做说话人分离;
+                # domain 取参数,首趟没传时回退 manifest 已有值(第二趟补采场景)。
+                effective_domain = (author_domain or "").strip() or works_repo.load_domain(platform, aweme_id)
+                if _needs_diarization(effective_domain):
+                    def _audio_then_diarize() -> None:
+                        run_ctx.branch_audio()
+                        run_ctx.branch_diarize()
+                    futures.append(ex.submit(_audio_then_diarize))
+                else:
+                    futures.append(ex.submit(run_ctx.branch_audio))
             if do_frames:
                 futures.append(ex.submit(run_ctx.branch_frames))
             for f in futures:

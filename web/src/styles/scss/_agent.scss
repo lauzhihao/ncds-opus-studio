@@ -95,6 +95,7 @@
   &.finance { color: #c0871e; background: rgba(192, 135, 30, 0.10); }
   &.emotion { color: #d6336c; background: rgba(214, 51, 108, 0.10); }
   &.film { color: #6d57c9; background: rgba(109, 87, 201, 0.10); }
+  &.comedy { color: #2f9e44; background: rgba(47, 158, 68, 0.10); }
 }
 
 /* 作品卡：四项数据（赞/评论/转发/收藏）带图标一行 */
@@ -960,6 +961,7 @@
     &.finance { --domain-c: #c0871e; }
     &.emotion { --domain-c: #d6336c; }
     &.film { --domain-c: #6d57c9; }
+    &.comedy { --domain-c: #2f9e44; }
 
     &:hover { color: var(--domain-c); border-color: var(--domain-c); }
     &.is-on {

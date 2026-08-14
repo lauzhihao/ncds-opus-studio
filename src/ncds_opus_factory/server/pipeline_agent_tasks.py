@@ -81,6 +81,7 @@ class PipelineAgentTasksMixin:
                     do_audio=True, do_frames=True,
                     platform=entry.get("platform") or "douyin",
                     source_url=entry.get("url") if isinstance(entry.get("url"), str) else None,
+                    author_domain=state.inputs.get("domain"),
                 )
             except asyncio.CancelledError:
                 raise
@@ -94,6 +95,10 @@ class PipelineAgentTasksMixin:
             entry["audio"] = full.get("audio")
             entry["frames"] = full.get("frames")
             entry["cutouts"] = full.get("cutouts")
+            # 说话人分离产物(comedy 等 domain 二趟才有,无则保持 None 不覆盖已有值)
+            for key in ("speakers", "dialogue", "speaker_count"):
+                if full.get(key) is not None:
+                    entry[key] = full.get(key)
             entry["status"] = {**entry.get("status", {}), **full.get("status", {})}
             self._push_outputs_patch(job_id, "asr", "collected", collected)
             on_progress(f"[{entry.get('index')}] 音轨/抠图已补齐")

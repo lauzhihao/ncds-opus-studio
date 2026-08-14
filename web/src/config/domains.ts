@@ -7,19 +7,20 @@
 // 存储用稳定英文 key（finance/emotion），与展示文案/配色解耦——
 // 后续改 label 或加领域不影响已存数据。
 
-export type DomainKey = 'finance' | 'emotion' | 'film';
+export type DomainKey = 'finance' | 'emotion' | 'film' | 'comedy';
 
 export interface DomainDef {
   key: DomainKey;
   label: string; // 中文展示名
   // 颜色类名后缀：对应 SCSS .domain-badge.<colorClass> / .domain-pill.<colorClass>
-  colorClass: 'finance' | 'emotion' | 'film';
+  colorClass: 'finance' | 'emotion' | 'film' | 'comedy';
 }
 
 export const DOMAINS: DomainDef[] = [
   { key: 'finance', label: '财经', colorClass: 'finance' },
   { key: 'emotion', label: '情感', colorClass: 'emotion' },
   { key: 'film', label: '影视', colorClass: 'film' },
+  { key: 'comedy', label: '搞笑', colorClass: 'comedy' },
 ];
 
 // key -> 定义，卡片徽标按 author.domain 查 label/配色；未知 key 返回 undefined（不渲染）。

@@ -112,6 +112,9 @@ class PipelineAsrCollectRun:
                     do_audio=policy.do_audio,
                     do_frames=policy.do_frames,
                     platform=ref.platform, source_url=ref.url,
+                    # domain 透传:comedy 等多人对白 domain 靠它触发说话人分离,
+                    # 且首趟就写进作品 manifest,enrich 二趟兜底可查。
+                    author_domain=self.inputs.get("domain"),
                 )
                 entry["index"] = idx
                 entry["url"] = url

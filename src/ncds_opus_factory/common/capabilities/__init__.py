@@ -6,6 +6,7 @@
     from ncds_opus_factory.common import capabilities
     txt = capabilities.transcribe(video)          # 转写(Bcut 首选，听悟/Paraformer fallback)
     capabilities.separate_audio(video, out_dir)   # 抽原声 + Demucs 分离
+    capabilities.diarize_speakers(audio)          # 说话人分离(FunASR 本地免费,多人对白拆角色)
     capabilities.extract_frames(video, out_dir)   # 静止帧检测
     capabilities.cutout(frames, out_dir)          # 裁舞台区 + 阈值抠图
     capabilities.fetch_and_download               # 下载(DouK sidecar -> yt-dlp -> TikHub 兜底)
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 from ._base import ProgressFn, noop
 from .audio import separate_audio
+from .diarize import DiarizeResult, DiarizeUnavailableError, diarize as diarize_speakers
 from .comments import fetch_top_comments
 from .cutout import crop_stage, cutout, rembg_cutout, threshold_cutout
 from .download import download_cover, download_video, fetch_and_download, fetch_video_url
@@ -33,6 +35,9 @@ __all__ = [
     "clean_transcript",
     "read_dashscope_key",
     "separate_audio",
+    "diarize_speakers",
+    "DiarizeResult",
+    "DiarizeUnavailableError",
     "extract_frames",
     "cutout",
     "crop_stage",

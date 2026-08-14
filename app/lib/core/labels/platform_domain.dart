@@ -24,6 +24,10 @@ String? domainDisplayName(String? domain) {
       return '财经';
     case 'emotion':
       return '情感';
+    case 'film':
+      return '影视';
+    case 'comedy':
+      return '搞笑';
     case '':
       return null;
     default:
@@ -35,4 +39,6 @@ String? domainDisplayName(String? domain) {
 const List<({String key, String label})> kDomainOptions = <({String key, String label})>[
   (key: 'finance', label: '财经'),
   (key: 'emotion', label: '情感'),
+  (key: 'film', label: '影视'),
+  (key: 'comedy', label: '搞笑'),
 ];

@@ -14,6 +14,10 @@ dependencies = [
     # 缺它时报 "no impersonate target available"、抖音加强反爬后下载可能失效。
     "curl_cffi>=0.7",
     "openai-whisper>=20231117",
+    # 说话人分离（comedy domain 多人对白）：本地 FunASR paraformer + CAM++ 声纹聚类，
+    # modelscope 负责首次运行时从 ModelScope hub 免费拉模型（约 1GB，落 ~/.cache/modelscope）。
+    "funasr>=1.4",
+    "modelscope>=1.20",
     "dashscope>=1.20",
     "Pillow>=10",
     # Film Shenkuo: Mac/Linux 共用 ONNX Runtime + PP-OCRv6 small 做烧录字幕 OCR。
