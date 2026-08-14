@@ -107,6 +107,12 @@ if ! "$PY" -c 'import torch' >/dev/null 2>&1; then
   log "装 CPU 版 torch"
   "$UV" pip install --python "$PY" torch --index-url https://download.pytorch.org/whl/cpu
 fi
+# funasr(说话人分离)运行时硬 import torchaudio 但未在其包元数据里声明;
+# 必须和 torch 同源(CPU index)装,混 PyPI 版会 ABI 不匹配报 undefined symbol。
+if ! "$PY" -c 'import torchaudio' >/dev/null 2>&1; then
+  log "装 CPU 版 torchaudio(funasr 运行时需要)"
+  "$UV" pip install --python "$PY" torchaudio --index-url https://download.pytorch.org/whl/cpu
+fi
 log "装/更新 core + factory(editable)"
 "$UV" pip install --python "$PY" -e packages/core
 "$UV" pip install --python "$PY" -e .
